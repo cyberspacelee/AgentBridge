@@ -1,0 +1,10 @@
+packages:
+  - web
+
+onlyBuiltDependencies:
+  - esbuild
+  - opencode-ai
+
+ignoredBuiltDependencies:
+  - '@google/genai'
+  - protobufjs

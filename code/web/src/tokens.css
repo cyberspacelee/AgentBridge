@@ -1,0 +1,80 @@
+/* Hallmark: modern-minimal / Workbench / design.md / designed-as-app */
+:root {
+  color-scheme: light;
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #ffffff;
+  --popover: var(--card);
+  --muted: #f5f5f5;
+  --secondary: var(--muted);
+  --muted-foreground: #525252;
+  --border: #e5e5e5;
+  --input: #737373;
+  --primary: #047857;
+  --primary-foreground: #ffffff;
+  --primary-hover: #065f46;
+  --accent: #ecfdf5;
+  --accent-foreground: #065f46;
+  --info: #1d4ed8;
+  --info-soft: #eff6ff;
+  --success: #166534;
+  --success-soft: #f0fdf4;
+  --warning: #92400e;
+  --warning-soft: #fffbeb;
+  --destructive: #be123c;
+  --destructive-soft: #fff1f2;
+  --destructive-foreground: #ffffff;
+  --overlay: #00000040;
+  --ring: var(--primary);
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --chart-1: var(--info);
+  --chart-2: var(--success);
+  --chart-3: var(--warning);
+  --chart-4: var(--destructive);
+  --chart-5: var(--muted-foreground);
+  --font-body:
+    "Geist Variable", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    system-ui, sans-serif;
+  --font-code:
+    ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  --radius: 0.5rem;
+  --radius-control: 0.375rem;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #141414;
+  --foreground: #f5f5f5;
+  --card: #1c1c1c;
+  --muted: #262626;
+  --muted-foreground: #b3b3b3;
+  --border: #383838;
+  --input: #858585;
+  --primary: #34d399;
+  --primary-foreground: #10251c;
+  --primary-hover: #6ee7b7;
+  --accent: #17382b;
+  --accent-foreground: #6ee7b7;
+  --info: #93c5fd;
+  --info-soft: #172554;
+  --success: #86efac;
+  --success-soft: #142b20;
+  --warning: #fcd34d;
+  --warning-soft: #302411;
+  --destructive: #fda4af;
+  --destructive-soft: #351820;
+  --destructive-foreground: #351820;
+}

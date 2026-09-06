@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.agentbridge/
+.env
+*.log
+test-results/
+tools/.venv/
+.venv/
+playwright-report/
+.env.*
+!.env.example
+tools/__pycache__/

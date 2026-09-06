@@ -1,0 +1,468 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
+import { readConfig } from "../src/config.js";
+import { Store } from "../src/storage/sqlite.js";
+import { SessionRuntime, within } from "../src/runtime/sessions.js";
+import type {
+  EngineAdapter,
+  EngineResult,
+  EngineUpdate,
+} from "../src/engines/adapter.js";
+import type {
+  InteractionReply,
+  Message,
+  Run,
+  Session,
+} from "../shared/contracts.js";
+import { createTaskSchema } from "../shared/contracts.js";
+import { transitionRun } from "../src/domain/transitions.js";
+import { createServer } from "../src/gateway/server.js";
+
+class ControlledEngine implements EngineAdapter {
+  id = "test";
+  sessions = new Set<string>();
+  starts: string[] = [];
+  replies: InteractionReply[] = [];
+  stopDelay = 0;
+  failures = new Set<string>();
+  recovered: string[] = [];
+  unavailableSessions() {
+    return [...this.failures];
+  }
+  async recoverSession(id: string) {
+    if (!this.sessions.has(id)) return null;
+    this.failures.delete(id);
+    this.recovered.push(id);
+    return { nativeSessionId: randomUUID(), processGeneration: 2 };
+  }
+  executions = new Map<
+    string,
+    {
+      run: Run;
+      emit: (event: EngineUpdate) => void;
+      resolve: (result: EngineResult) => void;
+    }
+  >();
+  health() {
+    return {
+      status: "ready" as const,
+      version: "test",
+      message: null,
+      processes: this.sessions.size,
+      restarts: 0,
+    };
+  }
+  async start() {}
+  async createSession(s: Session) {
+    this.sessions.add(s.id);
+    return { nativeSessionId: randomUUID(), processGeneration: 1 };
+  }
+  run(
+    s: Session,
+    run: Run,
+    emit: (event: EngineUpdate) => void,
+  ): Promise<EngineResult> {
+    assert.ok(!this.executions.has(s.id), "same-session execution overlapped");
+    this.starts.push(run.id);
+    return new Promise((resolve) =>
+      this.executions.set(s.id, { run, emit, resolve }),
+    );
+  }
+  complete(sessionId: string) {
+    const entry = this.executions.get(sessionId)!;
+    const msg: Message = {
+      id: randomUUID(),
+      sessionId,
+      runId: entry.run.id,
+      role: "assistant",
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      finishReason: "stop",
+      parts: [{ id: randomUUID(), type: "text", text: "finished" }],
+    };
+    entry.emit({ type: "message", message: msg });
+    this.executions.delete(sessionId);
+    entry.resolve({ outcome: "completed" });
+  }
+  async abort(id: string) {
+    const entry = this.executions.get(id);
+    this.executions.delete(id);
+    entry?.resolve({ outcome: "aborted" });
+    await delay(this.stopDelay);
+  }
+  async forceStop(id: string) {
+    await this.abort(id);
+    return [id];
+  }
+  async reply(_id: string, reply: InteractionReply) {
+    this.replies.push(reply);
+    await delay(10);
+  }
+  async disposeSession(id: string) {
+    await this.abort(id);
+    this.sessions.delete(id);
+  }
+  async stop() {
+    for (const id of this.sessions) await this.disposeSession(id);
+  }
+}
+async function fixture(timeout = 5000) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-test-"));
+  const config = readConfig([], {
+    AGENT_LIMITS: JSON.stringify({ runTimeoutMs: timeout }),
+    AGENT_DATA_DIR: directory,
+  });
+  const store = new Store(":memory:");
+  const adapter = new ControlledEngine();
+  const runtime = new SessionRuntime(store, adapter, config);
+  await runtime.start();
+  return {
+    directory,
+    config,
+    store,
+    adapter,
+    runtime,
+    close: async () => {
+      await runtime.stop();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+async function until(check: () => boolean) {
+  await within(
+    (async () => {
+      while (!check()) await delay(10);
+    })(),
+    3000,
+  );
+}
+const input = (directory: string, id = randomUUID()) =>
+  createTaskSchema.parse({
+    submissionId: id,
+    directory,
+    parts: [{ type: "text", text: "work" }],
+  });
+
+test("pnpm workspace configuration and engine precedence", () => {
+  assert.equal(
+    readConfig(["--engine", "pi"], { AGENT_ENGINE: "opencode" }).engine,
+    "pi",
+  );
+  assert.throws(() => readConfig(["--engine", "invalid"], {}));
+  assert.throws(() =>
+    createTaskSchema.parse({ ...input("/tmp"), extra: true }),
+  );
+});
+test("transaction rollback publishes no events and does not notify completion observers", () => {
+  const store = new Store(":memory:");
+  let notifications = 0;
+  store.subscribe(() => notifications++);
+  assert.throws(() =>
+    store.transaction(() => {
+      store.emit({ type: "test", data: {} });
+      store.afterCommit(() => notifications++);
+      throw new Error("rollback");
+    }),
+  );
+  assert.equal(notifications, 0);
+  assert.equal(store.snapshot().revision, 0);
+  assert.deepEqual(store.replay(`${store.storeId}:0`), []);
+  store.close();
+});
+test("event replay storage is bounded by bytes as well as record count", () => {
+  const store = new Store(":memory:", 2000);
+  for (let index = 0; index < 10; index++)
+    store.transaction(() =>
+      store.emit({ type: "test", data: { text: "x".repeat(800) } }),
+    );
+  assert.ok(Number(store.meta("eventBytes")) <= 2000);
+  assert.equal(store.replay(`${store.storeId}:0`), null);
+  assert.ok(
+    (store.db.prepare("SELECT COUNT(*) AS n FROM events").get()!.n as number) <
+      10,
+  );
+  store.close();
+});
+test("SQLite lock excludes another gateway and committed history survives reopen", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "agentbridge-db-"));
+  const filename = path.join(dir, "test.sqlite");
+  const store = new Store(filename);
+  const id = store.storeId;
+  store.transaction(() =>
+    store.emit({ type: "test", data: { durable: true } }),
+  );
+  assert.throws(() => new Store(filename));
+  store.close();
+  const reopened = new Store(filename);
+  assert.equal(reopened.storeId, id);
+  assert.equal(reopened.replay(`${id}:0`)?.length, 1);
+  reopened.close();
+  await rm(dir, { recursive: true, force: true });
+});
+test("idempotent concurrent creates produce one session/run; a changed payload conflicts", async () => {
+  const f = await fixture();
+  try {
+    const request = input(f.directory);
+    const [a, b] = await Promise.all([
+      f.runtime.submit(request),
+      f.runtime.submit(request),
+    ]);
+    assert.deepEqual(a, b);
+    assert.equal(f.store.list("sessions").length, 1);
+    assert.equal(f.store.list("runs").length, 1);
+    await assert.rejects(
+      f.runtime.submit({ ...request, title: "changed" }),
+      /different input/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+test("same session runs serially and successful snapshots have a final assistant step", async () => {
+  const f = await fixture();
+  try {
+    const a = await f.runtime.submit(input(f.directory));
+    const b = await f.runtime.submit(
+      { submissionId: randomUUID(), parts: [{ type: "text", text: "second" }] },
+      a.sessionId,
+    );
+    await until(() => f.adapter.starts.length === 1);
+    assert.equal(f.runtime.run(b.runId).state, "queued");
+    f.adapter.complete(a.sessionId);
+    assert.equal((await f.runtime.wait(a.runId)).state, "completed");
+    await until(() => f.adapter.starts.length === 2);
+    f.adapter.complete(a.sessionId);
+    await f.runtime.wait(b.runId);
+    const last = f.store.messages(a.sessionId).at(-1)!;
+    assert.equal(last.role, "assistant");
+    assert.equal(last.finishReason, "stop");
+    assert.ok(last.parts.some((p) => p.type === "step-finish"));
+    assert.throws(() =>
+      transitionRun(f.runtime.run(a.runId), "failed", new Date().toISOString()),
+    );
+  } finally {
+    await f.close();
+  }
+});
+test("cancel confirms stopping before resource reuse and cancels queued work", async () => {
+  const f = await fixture();
+  f.adapter.stopDelay = 150;
+  try {
+    const a = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.starts.length === 1);
+    const b = await f.runtime.submit(
+      { submissionId: randomUUID(), parts: [{ type: "text", text: "queued" }] },
+      a.sessionId,
+    );
+    const stopping = f.runtime.cancel(a.sessionId);
+    assert.equal(f.runtime.run(a.runId).state, "stopping");
+    await delay(120);
+    assert.equal(f.adapter.starts.length, 1);
+    assert.equal(f.runtime.run(b.runId).state, "cancelled");
+    await stopping;
+    assert.equal(f.runtime.run(a.runId).state, "cancelled");
+    assert.ok(f.store.healthy);
+  } finally {
+    await f.close();
+  }
+});
+test("deadline times out an execution without reporting success", async () => {
+  const f = await fixture(250);
+  try {
+    const a = await f.runtime.submit(input(f.directory));
+    const result = await within(f.runtime.wait(a.runId), 2000);
+    assert.equal(result.state, "timed_out");
+  } finally {
+    await f.close();
+  }
+});
+test("delete removes replayed content, keeps submission tombstone and user directory", async () => {
+  const f = await fixture();
+  try {
+    const request = input(f.directory);
+    const a = await f.runtime.submit(request);
+    await until(() => f.adapter.starts.length === 1);
+    f.adapter.complete(a.sessionId);
+    await f.runtime.wait(a.runId);
+    const cursor = `${f.store.storeId}:0`;
+    await f.runtime.deleteSession(a.sessionId);
+    assert.equal(f.store.list("sessions").length, 0);
+    assert.equal(f.store.replay(cursor), null);
+    await assert.rejects(f.runtime.submit(request), /deleted/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("HTTP contract, SSE completion, metrics and graceful stream shutdown", async () => {
+  const f = await fixture();
+  const server = createServer(f.runtime);
+  await server.listen({ host: "127.0.0.1", port: 0 });
+  const address = server.server.address();
+  assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const invalid = await server.inject({
+      method: "POST",
+      url: "/session",
+      headers: { "content-type": "application/json" },
+      payload: "{",
+    });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(
+      (
+        await server.inject({
+          method: "POST",
+          url: "/session",
+          headers: { origin: "https://untrusted.example" },
+          payload: { directory: f.directory },
+        })
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await server.inject({
+          url: "/api/runtime",
+          headers: { host: "untrusted.example" },
+        })
+      ).statusCode,
+      403,
+    );
+    assert.equal(invalid.json().code, "VALIDATION_ERROR");
+    const unsupported = await server.inject({
+      method: "POST",
+      url: "/session",
+      headers: { "content-type": "application/octet-stream" },
+      payload: Buffer.from("invalid"),
+    });
+    assert.equal(unsupported.statusCode, 415);
+    assert.equal(unsupported.json().code, "VALIDATION_ERROR");
+    const stream = await fetch(`${base}/event`);
+    const reader = stream.body!.getReader();
+    const decoder = new TextDecoder();
+    let events = "";
+    const reading = (async () => {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) return;
+        events += decoder.decode(chunk.value, { stream: true });
+      }
+    })();
+    await until(() => events.includes("server.connected"));
+    const session = await server.inject({
+      method: "POST",
+      url: "/session",
+      payload: { directory: f.directory, title: "contract" },
+    });
+    assert.equal(session.statusCode, 200);
+    const id = session.json().id;
+    const statuses = await server.inject("/session/status");
+    assert.equal(statuses.json()[id].type, "idle");
+    const prompting = server.inject({
+      method: "POST",
+      url: `/session/${id}/prompt_async`,
+      payload: { parts: [{ type: "text", text: "work" }] },
+    });
+    await until(() => f.adapter.executions.has(id));
+    const filename = path.join(f.directory, "report.md");
+    await writeFile(filename, "original report");
+    f.adapter.complete(id);
+    assert.equal((await prompting).statusCode, 204);
+    await until(
+      () => events.includes("step-finish") && events.includes("session.idle"),
+    );
+    const messages = (await server.inject(`/session/${id}/message`)).json();
+    assert.equal(messages.at(-1).info.finish, "stop");
+    assert.ok(
+      messages
+        .at(-1)
+        .parts.some((p: { type: string }) => p.type === "step-finish"),
+    );
+    const overview = (
+      await server.inject("/api/observability/overview")
+    ).json();
+    assert.equal(overview.completed, 1);
+    assert.equal(overview.usage.input, null);
+    const artifact = f.store.list("artifacts")[0]!;
+    const download = `/api/artifacts/${artifact.id}/content`;
+    assert.equal((await server.inject(download)).body, "original report");
+    await writeFile(filename, "modified report");
+    assert.equal((await server.inject(download)).statusCode, 409);
+    await rm(filename);
+    assert.equal((await server.inject(download)).statusCode, 404);
+    const metrics = await server.inject("/metrics");
+    assert.match(
+      metrics.body,
+      /agentbridge_runs_finished_total\{outcome="completed"\} 1/,
+    );
+    assert.equal(
+      (await server.inject({ method: "DELETE", url: `/session/${id}` }))
+        .statusCode,
+      200,
+    );
+    assert.equal((await server.inject(`/session/${id}`)).statusCode, 404);
+    await within(server.close(), 2000);
+    await within(reading, 2000);
+  } finally {
+    await server.close();
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("message snapshots cannot overwrite another run's parts", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(first.sessionId));
+    f.adapter.complete(first.sessionId);
+    await f.runtime.wait(first.runId);
+    const message = f.store.messages(first.sessionId).at(-1)!;
+    assert.throws(
+      () =>
+        f.store.transaction(() =>
+          f.store.saveMessage({ ...message, id: randomUUID() }),
+        ),
+      /ownership/,
+    );
+    f.store.transaction(() => f.store.saveMessage({ ...message, parts: [] }));
+    assert.equal(f.store.messages(first.sessionId).at(-1)!.parts.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("native failure recovery never replays a previously accepted execution", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(first.sessionId));
+    f.adapter.failures.add(first.sessionId);
+    assert.equal(
+      (await within(f.runtime.wait(first.runId), 3000)).state,
+      "failed",
+    );
+    await until(() => f.adapter.recovered.length === 1);
+    assert.equal(f.runtime.session(first.sessionId).availability, "ready");
+    assert.deepEqual(f.adapter.starts, [first.runId]);
+    const next = await f.runtime.submit(
+      {
+        submissionId: randomUUID(),
+        parts: [{ type: "text", text: "new instruction" }],
+      },
+      first.sessionId,
+    );
+    await until(() => f.adapter.executions.has(first.sessionId));
+    f.adapter.complete(first.sessionId);
+    assert.equal((await f.runtime.wait(next.runId)).state, "completed");
+    assert.equal(f.runtime.run(first.runId).state, "failed");
+  } finally {
+    await f.close();
+  }
+});

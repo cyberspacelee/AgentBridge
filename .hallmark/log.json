@@ -1,0 +1,11 @@
+[
+  {
+    "date": "2026-09-06",
+    "scope": "app",
+    "macrostructure": "Workbench",
+    "theme": "AgentBridge design.md",
+    "enrichment": "none",
+    "brief": "Unified enterprise Agent gateway UI, safe messages, tool results, inline interactions and observability",
+    "evidence": "code/artifacts/ui/README.md"
+  }
+]
