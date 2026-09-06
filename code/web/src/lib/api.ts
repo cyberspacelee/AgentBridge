@@ -94,7 +94,13 @@ export async function submit(
   if (!record || record.fingerprint !== fingerprint)
     record = {
       fingerprint,
-      body: { ...input, submissionId: crypto.randomUUID() },
+      body: {
+        ...input,
+        submissionId: Array.from(
+          crypto.getRandomValues(new Uint8Array(16)),
+          (byte) => byte.toString(16).padStart(2, "0")
+        ).join(""),
+      },
     }
   sessionStorage.setItem(key, JSON.stringify(record))
   try {

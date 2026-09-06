@@ -9,7 +9,7 @@ import {
   Search,
   Send,
 } from "lucide-react"
-import type { Page, TaskSummary } from "../../../shared/contracts"
+import type { ModelOption, Page, TaskSummary } from "../../../shared/contracts"
 import { createTaskSchema } from "../../../shared/contracts"
 import { useGateway } from "@/lib/gateway"
 import { submit, useQuery } from "@/lib/api"
@@ -53,7 +53,15 @@ export function Tasks() {
   const { revision, runtime } = useGateway()
   const [params, setParams] = useSearchParams()
   const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState(params.get("q") ?? "")
+  const searchQuery = params.get("q") ?? ""
+  const [searchDraft, setSearchDraft] = useState({
+    query: searchQuery,
+    text: searchQuery,
+  })
+  const search =
+    searchDraft.query === searchQuery ? searchDraft.text : searchQuery
+  if (searchDraft.query !== searchQuery)
+    setSearchDraft({ query: searchQuery, text: searchQuery })
   const query = useQuery<Page<TaskSummary>>(`/api/tasks?${params}`, revision)
   const [pinned, setPinned] = useState<{ key: string; items: TaskSummary[] }>()
   const items =
@@ -73,14 +81,16 @@ export function Tasks() {
       return next
     })
   return (
-    <div className="page">
+    <div className="page list-page">
       <div className="page-heading">
         <div>
           <h1>任务工作台</h1>
         </div>
         <Button
           onClick={() => setOpen(true)}
-          disabled={runtime?.health.status !== "ready"}
+          disabled={
+            !runtime?.engines.some((engine) => engine.health.status === "ready")
+          }
         >
           <Plus data-icon="inline-start" />
           分派任务
@@ -94,14 +104,17 @@ export function Tasks() {
         }}
       >
         <div className="search-input">
-          <Search className="size-4" />
           <Input
-            className="pl-9"
             aria-label="搜索任务"
             placeholder="搜索任务名称或 ID"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) =>
+              setSearchDraft({ query: searchQuery, text: e.target.value })
+            }
           />
+          <IconButton label="搜索" type="submit">
+            <Search />
+          </IconButton>
         </div>
         <Choice
           label="任务状态"
@@ -126,109 +139,114 @@ export function Tasks() {
         </IconButton>
       </form>
       <Failure error={query.error} />
-      {query.loading ? (
-        <div className="space-y-4 py-5">
-          {[0, 1, 2, 3].map((n) => (
-            <Skeleton key={n} className="h-14 w-full" />
-          ))}
-        </div>
-      ) : items?.length ? (
-        <Table
-          className="task-list"
-          onPointerEnter={() => setPinned({ key: params.toString(), items })}
-          onPointerLeave={(event) => {
-            if (!event.currentTarget.contains(document.activeElement))
-              setPinned(undefined)
-          }}
-          onFocusCapture={() =>
-            setPinned((previous) =>
-              previous?.key === params.toString()
-                ? previous
-                : { key: params.toString(), items }
-            )
-          }
-          onBlur={(event) => {
-            if (
-              !event.currentTarget.contains(event.relatedTarget) &&
-              !event.currentTarget.matches(":hover")
-            )
-              setPinned(undefined)
-          }}
-        >
-          <TableHeader>
-            <TableRow>
-              <TableHead>任务</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>引擎 / 模型</TableHead>
-              <TableHead>轮次</TableHead>
-              <TableHead>最近更新</TableHead>
-              <TableHead>执行耗时</TableHead>
-              <TableHead>
-                <span className="sr-only">打开</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((task) => (
-              <TableRow key={task.id}>
-                <TableCell className="max-w-96">
-                  <Link to={`/tasks/${task.id}`} className="task-title">
-                    {task.title}
-                  </Link>
-                  <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                    <FolderOpen className="size-3 shrink-0" />
-                    <span className="max-w-80 truncate" title={task.directory}>
-                      {task.directory}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Status state={task.status} />
-                </TableCell>
-                <TableCell>
-                  <div>{task.engineId}</div>
-                  <div className="max-w-52 truncate text-xs text-muted-foreground">
-                    {task.lastRun?.model?.modelID ?? "引擎默认模型"}
-                  </div>
-                </TableCell>
-                <TableCell className="tabular-nums" data-secondary>
-                  {task.lastRun?.sequence ?? 0}
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {date(task.updatedAt)}
-                </TableCell>
-                <TableCell
-                  className="text-xs text-muted-foreground"
-                  data-secondary
-                >
-                  {duration(
-                    task.lastRun?.startedAt && task.lastRun.finishedAt
-                      ? Date.parse(task.lastRun.finishedAt) -
-                          Date.parse(task.lastRun.startedAt)
-                      : null
-                  )}
-                </TableCell>
-                <TableCell data-secondary>
-                  <Link
-                    aria-label={`打开 ${task.title}`}
-                    to={`/tasks/${task.id}`}
-                  >
-                    <ArrowRight className="size-4" />
-                  </Link>
-                </TableCell>
-              </TableRow>
+      <div className="list-body">
+        {query.loading ? (
+          <div className="space-y-4 py-5">
+            {[0, 1, 2, 3].map((n) => (
+              <Skeleton key={n} className="h-14 w-full" />
             ))}
-          </TableBody>
-        </Table>
-      ) : (
-        !query.error && (
-          <Blank>
-            {params.get("q") || params.get("status")
-              ? "没有符合条件的任务"
-              : "暂无任务"}
-          </Blank>
-        )
-      )}
+          </div>
+        ) : items?.length ? (
+          <Table
+            className="task-list"
+            onPointerEnter={() => setPinned({ key: params.toString(), items })}
+            onPointerLeave={(event) => {
+              if (!event.currentTarget.contains(document.activeElement))
+                setPinned(undefined)
+            }}
+            onFocusCapture={() =>
+              setPinned((previous) =>
+                previous?.key === params.toString()
+                  ? previous
+                  : { key: params.toString(), items }
+              )
+            }
+            onBlur={(event) => {
+              if (
+                !event.currentTarget.contains(event.relatedTarget) &&
+                !event.currentTarget.matches(":hover")
+              )
+                setPinned(undefined)
+            }}
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead>任务</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>引擎 / 模型</TableHead>
+                <TableHead>轮次</TableHead>
+                <TableHead>最近更新</TableHead>
+                <TableHead>执行耗时</TableHead>
+                <TableHead>
+                  <span className="sr-only">打开</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((task) => (
+                <TableRow key={task.id}>
+                  <TableCell className="max-w-96">
+                    <Link to={`/tasks/${task.id}`} className="task-title">
+                      {task.title}
+                    </Link>
+                    <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                      <FolderOpen className="size-3 shrink-0" />
+                      <span
+                        className="max-w-80 truncate"
+                        title={task.directory}
+                      >
+                        {task.directory}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Status state={task.status} />
+                  </TableCell>
+                  <TableCell>
+                    <div>{task.engineId}</div>
+                    <div className="max-w-52 truncate text-xs text-muted-foreground">
+                      {task.lastRun?.model?.modelID ?? "引擎默认模型"}
+                    </div>
+                  </TableCell>
+                  <TableCell className="tabular-nums" data-secondary>
+                    {task.lastRun?.sequence ?? 0}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {date(task.updatedAt)}
+                  </TableCell>
+                  <TableCell
+                    className="text-xs text-muted-foreground"
+                    data-secondary
+                  >
+                    {duration(
+                      task.lastRun?.startedAt && task.lastRun.finishedAt
+                        ? Date.parse(task.lastRun.finishedAt) -
+                            Date.parse(task.lastRun.startedAt)
+                        : null
+                    )}
+                  </TableCell>
+                  <TableCell data-secondary>
+                    <Link
+                      aria-label={`打开 ${task.title}`}
+                      to={`/tasks/${task.id}`}
+                    >
+                      <ArrowRight className="size-4" />
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          !query.error && (
+            <Blank>
+              {params.get("q") || params.get("status")
+                ? "没有符合条件的任务"
+                : "暂无任务"}
+            </Blank>
+          )
+        )}
+      </div>
       <div className="pagination">
         <span>
           {query.data ? `本页 ${query.data.items.length} 个任务` : ""}
@@ -277,13 +295,34 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
   const [invalid, setInvalid] = useState<Record<string, string>>({})
   const [manualPermission, setManualPermission] = useState(false)
   const [manualQuestion, setManualQuestion] = useState(false)
+  const [engineId, setEngineId] = useState(runtime?.engine ?? "pi")
+  const [selectedProvider, setSelectedProvider] = useState("")
+  const [selectedModel, setSelectedModel] = useState("")
+  const engine = runtime?.engines.find((item) => item.id === engineId)
+  const catalog = useQuery<{ models: ModelOption[] }>(
+    `/api/engines/${encodeURIComponent(engineId)}/models`
+  )
+  const models = catalog.error ? [] : (catalog.data?.models ?? [])
+  const providers = [...new Set(models.map((model) => model.providerID))]
+  const provider = providers.includes(selectedProvider)
+    ? selectedProvider
+    : (providers[0] ?? "")
+  const providerModels = models.filter((model) => model.providerID === provider)
+  const model = providerModels.some((item) => item.modelID === selectedModel)
+    ? selectedModel
+    : (providerModels[0]?.modelID ?? "")
+  const canSubmit =
+    engine?.health.status === "ready" &&
+    !!provider &&
+    !!model &&
+    !catalog.loading &&
+    !catalog.error
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy) return
+    if (busy || !canSubmit) return
     const fields = new FormData(event.currentTarget)
-    const provider = String(fields.get("provider") ?? "").trim(),
-      model = String(fields.get("model") ?? "").trim()
     const result = createTaskSchema.safeParse({
+      engineId,
       submissionId: "validate",
       title: String(fields.get("title") ?? ""),
       directory: String(fields.get("directory") ?? ""),
@@ -319,9 +358,33 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
     }
   }
   return (
-    <form onSubmit={send}>
+    <form onSubmit={send} className="task-create-form">
       <fieldset disabled={busy} className="min-w-0">
         <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="engine">执行引擎</FieldLabel>
+            <Choice
+              id="engine"
+              label="执行引擎"
+              value={engineId}
+              disabled={busy}
+              options={(runtime?.engines ?? []).map((item) => ({
+                value: item.id,
+                label:
+                  item.id === "pi"
+                    ? "Pi"
+                    : item.id === "opencode"
+                      ? "OpenCode"
+                      : item.id,
+              }))}
+              onChange={(value) => {
+                setEngineId(value)
+                setSelectedProvider("")
+                setSelectedModel("")
+                setError(undefined)
+              }}
+            />
+          </Field>
           <Field>
             <FieldLabel htmlFor="title">任务名称</FieldLabel>
             <Input
@@ -365,28 +428,66 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field>
               <FieldLabel htmlFor="provider">模型供应商</FieldLabel>
-              <Input
+              <Choice
                 id="provider"
-                aria-invalid={!!invalid.model}
-                aria-describedby={invalid.model ? "model-error" : undefined}
-                name="provider"
-                defaultValue={runtime?.models[0]?.providerID}
-                placeholder="引擎默认"
+                label="模型供应商"
+                invalid={!!invalid.model}
+                disabled={busy || !providers.length}
+                value={provider}
+                options={
+                  providers.length
+                    ? providers.map((value) => ({ value, label: value }))
+                    : [
+                        {
+                          value: "",
+                          label: catalog.loading ? "正在加载" : "无可用供应商",
+                        },
+                      ]
+                }
+                onChange={(value) => {
+                  setSelectedProvider(value)
+                  setSelectedModel("")
+                }}
               />
             </Field>
             <Field>
               <FieldLabel htmlFor="model">模型名称</FieldLabel>
-              <Input
+              <Choice
                 id="model"
-                aria-invalid={!!invalid.model}
-                aria-describedby={invalid.model ? "model-error" : undefined}
-                name="model"
-                defaultValue={runtime?.models[0]?.modelID}
-                placeholder="引擎默认"
+                label="模型名称"
+                invalid={!!invalid.model}
+                disabled={busy || !providerModels.length}
+                value={model}
+                options={
+                  providerModels.length
+                    ? providerModels.map((item) => ({
+                        value: item.modelID,
+                        label: item.name,
+                      }))
+                    : [
+                        {
+                          value: "",
+                          label: catalog.loading ? "正在加载" : "无可用模型",
+                        },
+                      ]
+                }
+                onChange={setSelectedModel}
               />
             </Field>
           </div>
           <FieldError id="model-error">{invalid.model}</FieldError>
+          <Failure error={catalog.error} />
+          {!catalog.loading && !catalog.error && !models.length && (
+            <p role="status" className="text-sm text-muted-foreground">
+              此引擎尚未配置可用模型或供应商凭据。
+            </p>
+          )}
+          {catalog.error && (
+            <Button variant="outline" type="button" onClick={catalog.reload}>
+              <RefreshCw data-icon="inline-start" />
+              重新加载模型
+            </Button>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field orientation="horizontal">
               <Switch
@@ -406,11 +507,8 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             </Field>
           </div>
           <Failure error={error} />
-          <div className="flex items-center justify-between border-t pt-4">
-            <span className="text-xs text-muted-foreground">
-              {runtime?.engine}
-            </span>
-            <Button type="submit" disabled={busy}>
+          <div className="flex justify-end border-t pt-4">
+            <Button type="submit" disabled={busy || !canSubmit}>
               <Send data-icon="inline-start" />
               {busy ? "正在提交" : "分派任务"}
             </Button>

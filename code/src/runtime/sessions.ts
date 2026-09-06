@@ -52,9 +52,10 @@ export class SessionRuntime {
   private tick?: NodeJS.Timeout;
   private waiting = new Map<string, Set<(run: Run) => void>>();
   private isolations = new Map<string, Promise<void>>();
-  private recovery?: Promise<void>;
-  private recoveryAttempts = 0;
-  private recoveryAt = 0;
+  private recovery = new Map<
+    string,
+    { pending?: Promise<void>; attempts: number; at: number }
+  >();
   private maintenance?: NodeJS.Timeout;
   private repairs = new Map<string, Promise<void>>();
   private repairAttempts = new Map<string, number>();
@@ -72,7 +73,21 @@ export class SessionRuntime {
     readonly store: Store,
     readonly adapter: EngineAdapter,
     readonly config: Config,
+    private additionalAdapters: EngineAdapter[] = [],
   ) {}
+
+  get adapters() {
+    return [this.adapter, ...this.additionalAdapters];
+  }
+  engine(id = this.adapter.id) {
+    const adapter = this.adapters.find((adapter) => adapter.id === id);
+    if (!adapter)
+      throw new GatewayError("VALIDATION_ERROR", "Unknown engine", 400);
+    return adapter;
+  }
+  private sessionEngine(id: string) {
+    return this.engine(this.session(id).engineId);
+  }
 
   async start() {
     this.store.transaction(() => {
@@ -108,16 +123,20 @@ export class SessionRuntime {
           },
         });
     });
-    try {
-      await within(this.adapter.start(), this.config.limits.startupTimeoutMs);
-    } catch (error) {
-      this.log(
-        "error",
-        "engine",
-        asGatewayError(error).code,
-        "Engine is not ready",
-      );
-    }
+    await Promise.all(
+      this.adapters.map(async (adapter) => {
+        try {
+          await within(adapter.start(), this.config.limits.startupTimeoutMs);
+        } catch (error) {
+          this.log(
+            "error",
+            "engine",
+            asGatewayError(error).code,
+            `${adapter.id} engine is not ready`,
+          );
+        }
+      }),
+    );
     this.tick = setInterval(() => this.schedule(), 100);
     this.tick.unref();
     this.maintenance = setInterval(() => {
@@ -196,26 +215,28 @@ export class SessionRuntime {
         data: { sessionID: id },
       });
   }
-  private ensureAdmission() {
+  private ensureAdmission(adapter: EngineAdapter) {
     if (this.closed || !this.store.healthy)
       throw new GatewayError(
         "SERVICE_UNAVAILABLE",
         "Gateway is not accepting work",
         503,
       );
-    if (this.adapter.health().status !== "ready")
+    if (adapter.health().status !== "ready")
       throw new GatewayError(
         "SERVICE_UNAVAILABLE",
-        "Agent engine is not ready",
+        `${adapter.id} engine is not ready`,
         503,
       );
   }
   async createSession(input: {
+    engineId?: string;
     directory: string;
     title?: string;
     interactionPolicy?: Session["interactionPolicy"];
   }): Promise<Session> {
-    this.ensureAdmission();
+    const adapter = this.engine(input.engineId);
+    this.ensureAdmission(adapter);
     if (
       this.store.list("sessions").length + this.creating >=
       this.config.limits.maxSessions
@@ -236,7 +257,7 @@ export class SessionRuntime {
         id: randomUUID(),
         directory,
         title: input.title?.trim() || "Untitled task",
-        engineId: this.adapter.id,
+        engineId: adapter.id,
         interactionPolicy: input.interactionPolicy ?? {
           permission: "auto",
           question: "auto",
@@ -247,13 +268,13 @@ export class SessionRuntime {
         version: 1,
       };
       const owned = session;
-      const creation = this.adapter.createSession(owned);
+      const creation = adapter.createSession(owned);
       const binding = await within(
         creation,
         this.config.limits.startupTimeoutMs,
       ).catch((error) => {
         void creation
-          .then(() => this.adapter.disposeSession(owned.id))
+          .then(() => adapter.disposeSession(owned.id))
           .catch(() => {});
         throw error;
       });
@@ -279,7 +300,7 @@ export class SessionRuntime {
     } catch (error) {
       if (session)
         await within(
-          this.adapter.disposeSession(session.id),
+          adapter.disposeSession(session.id),
           this.config.limits.abortTimeoutMs,
         ).catch(() =>
           this.log(
@@ -335,7 +356,11 @@ export class SessionRuntime {
         ),
       );
     }
-    this.ensureAdmission();
+    this.ensureAdmission(
+      sessionId
+        ? this.sessionEngine(sessionId)
+        : this.engine((input as CreateTaskInput).engineId),
+    );
     const record: Submission = {
       id: input.submissionId,
       operation,
@@ -393,8 +418,8 @@ export class SessionRuntime {
     input: PromptInput,
     submissionId: string = randomUUID(),
   ): Run {
-    this.ensureAdmission();
     const session = this.session(sessionId);
+    this.ensureAdmission(this.engine(session.engineId));
     if (session.availability !== "ready")
       throw new GatewayError("CONFLICT", "Session cannot accept new work", 409);
     const runs = this.runs(sessionId);
@@ -413,7 +438,10 @@ export class SessionRuntime {
       submissionId,
       sequence: (runs.at(-1)?.sequence ?? 0) + 1,
       inputParts: input.parts,
-      model: input.model ?? this.config.model,
+      model:
+        input.model ??
+        runs.at(-1)?.model ??
+        (session.engineId === this.adapter.id ? this.config.model : null),
       state: "queued",
       acceptedAt: now(),
       deadlineAt: new Date(
@@ -450,113 +478,129 @@ export class SessionRuntime {
   private schedule() {
     if (this.closed || !this.store.healthy) return;
     try {
-      for (const id of this.adapter.unavailableSessions?.() ?? [])
-        if (this.store.get("sessions", id)?.availability === "ready") {
-          void this.isolate(id)
-            .then(() => {
-              for (const r of this.runs(id).filter((r) => !isTerminal(r.state)))
-                this.finish(r.id, "failed", {
-                  code: "BAD_GATEWAY",
-                  message: "Native session became unavailable",
-                  stage: "engine",
-                });
-            })
-            .catch(() => {
-              this.store.healthy = false;
-            });
-        }
-      const health = this.adapter.health().status;
-      if (
-        (health === "unavailable" || health === "degraded") &&
-        !this.active.size &&
-        !this.isolations.size &&
-        !this.recovery &&
-        this.recoveryAttempts < 3 &&
-        Date.now() >= this.recoveryAt
-      ) {
-        this.recoveryAttempts++;
-        this.recoveryAt = Date.now() + 1000 * 2 ** this.recoveryAttempts;
-        this.log(
-          "warn",
-          "engine",
-          "ENGINE_RESTART",
-          "Restarting engine for new sessions; interrupted tasks are not replayed",
-        );
-        this.recovery = this.adapter
-          .stop()
-          .then(() => this.adapter.start())
-          .catch(() =>
-            this.log("error", "engine", "BAD_GATEWAY", "Engine restart failed"),
-          )
-          .finally(() => {
-            this.recovery = undefined;
-          });
-      }
-      if (health === "ready" && this.adapter.recoverSession)
-        for (const session of this.store.list(
-          "sessions",
-          "availability='unavailable'",
-        )) {
-          if (
-            this.active.has(session.id) ||
-            this.isolations.has(session.id) ||
-            this.repairs.has(session.id) ||
-            (this.repairAttempts.get(session.id) ?? 0) >= 2
-          )
-            continue;
-          this.repairAttempts.set(
-            session.id,
-            (this.repairAttempts.get(session.id) ?? 0) + 1,
-          );
-          const repair = this.adapter
-            .recoverSession(session.id)
-            .then((binding) => {
-              const current = this.store.get("sessions", session.id);
-              if (!binding) {
-                this.repairAttempts.set(session.id, 2);
-                return;
-              }
-              if (this.closed || current?.availability !== "unavailable")
-                return;
-              this.store.transaction(() => {
-                this.store.db
-                  .prepare(
-                    "UPDATE engine_bindings SET nativeSessionId=?,processGeneration=?,instanceId=? WHERE sessionId=?",
-                  )
-                  .run(
-                    binding.nativeSessionId,
-                    binding.processGeneration,
-                    this.store.instanceId,
-                    session.id,
-                  );
-                this.store.put("sessions", {
-                  ...current,
-                  availability: "ready",
-                  version: current.version + 1,
-                  updatedAt: now(),
-                });
-                this.publishSession(session.id);
+      for (const adapter of this.adapters) {
+        const recovery = this.recovery.get(adapter.id) ?? {
+          attempts: 0,
+          at: 0,
+        };
+        this.recovery.set(adapter.id, recovery);
+        for (const id of adapter.unavailableSessions?.() ?? [])
+          if (this.store.get("sessions", id)?.availability === "ready") {
+            void this.isolate(id)
+              .then(() => {
+                for (const r of this.runs(id).filter(
+                  (r) => !isTerminal(r.state),
+                ))
+                  this.finish(r.id, "failed", {
+                    code: "BAD_GATEWAY",
+                    message: "Native session became unavailable",
+                    stage: "engine",
+                  });
+              })
+              .catch(() => {
+                this.store.healthy = false;
               });
-              this.log(
-                "info",
-                "recovery",
-                "SESSION_RECOVERED",
-                "Native context recovered; previous runs remain terminal",
-                session.id,
-              );
-            })
+          }
+        const health = adapter.health().status;
+        if (
+          (health === "unavailable" || health === "degraded") &&
+          ![...this.active.keys(), ...this.isolations.keys()].some(
+            (id) => this.session(id).engineId === adapter.id,
+          ) &&
+          !recovery.pending &&
+          recovery.attempts < 3 &&
+          Date.now() >= recovery.at
+        ) {
+          recovery.attempts++;
+          recovery.at = Date.now() + 1000 * 2 ** recovery.attempts;
+          this.log(
+            "warn",
+            "engine",
+            "ENGINE_RESTART",
+            "Restarting engine for new sessions; interrupted tasks are not replayed",
+          );
+          recovery.pending = adapter
+            .stop()
+            .then(() => adapter.start())
             .catch(() =>
               this.log(
                 "error",
-                "recovery",
+                "engine",
                 "BAD_GATEWAY",
-                "Native session recovery failed",
-                session.id,
+                "Engine restart failed",
               ),
             )
-            .finally(() => this.repairs.delete(session.id));
-          this.repairs.set(session.id, repair);
+            .finally(() => {
+              recovery.pending = undefined;
+            });
         }
+        if (health === "ready" && adapter.recoverSession)
+          for (const session of this.store.list(
+            "sessions",
+            "availability='unavailable'",
+          )) {
+            if (
+              session.engineId !== adapter.id ||
+              this.active.has(session.id) ||
+              this.isolations.has(session.id) ||
+              this.repairs.has(session.id) ||
+              (this.repairAttempts.get(session.id) ?? 0) >= 2
+            )
+              continue;
+            this.repairAttempts.set(
+              session.id,
+              (this.repairAttempts.get(session.id) ?? 0) + 1,
+            );
+            const repair = adapter
+              .recoverSession(session.id)
+              .then((binding) => {
+                const current = this.store.get("sessions", session.id);
+                if (!binding) {
+                  this.repairAttempts.set(session.id, 2);
+                  return;
+                }
+                if (this.closed || current?.availability !== "unavailable")
+                  return;
+                this.store.transaction(() => {
+                  this.store.db
+                    .prepare(
+                      "UPDATE engine_bindings SET nativeSessionId=?,processGeneration=?,instanceId=? WHERE sessionId=?",
+                    )
+                    .run(
+                      binding.nativeSessionId,
+                      binding.processGeneration,
+                      this.store.instanceId,
+                      session.id,
+                    );
+                  this.store.put("sessions", {
+                    ...current,
+                    availability: "ready",
+                    version: current.version + 1,
+                    updatedAt: now(),
+                  });
+                  this.publishSession(session.id);
+                });
+                this.log(
+                  "info",
+                  "recovery",
+                  "SESSION_RECOVERED",
+                  "Native context recovered; previous runs remain terminal",
+                  session.id,
+                );
+              })
+              .catch(() =>
+                this.log(
+                  "error",
+                  "recovery",
+                  "BAD_GATEWAY",
+                  "Native session recovery failed",
+                  session.id,
+                ),
+              )
+              .finally(() => this.repairs.delete(session.id));
+            this.repairs.set(session.id, repair);
+          }
+      }
       for (const run of this.store.list(
         "runs",
         "state IN ('queued','running') ORDER BY acceptedAt,sequence",
@@ -652,8 +696,10 @@ export class SessionRuntime {
     }
     if (this.run(runId).state !== "running") return;
     try {
-      const result = await this.adapter.run(session, run, (update) =>
-        this.update(runId, update),
+      const result = await this.engine(session.engineId).run(
+        session,
+        run,
+        (update) => this.update(runId, update),
       );
       if (this.run(runId).state !== "running") return;
       if (result.outcome === "completed") {
@@ -931,7 +977,7 @@ export class SessionRuntime {
     });
     try {
       await within(
-        this.adapter.reply(id, reply),
+        this.sessionEngine(i.sessionId).reply(id, reply),
         this.config.limits.abortTimeoutMs,
       );
       if (this.store.get("interactions", id)?.state !== "replying") return;
@@ -989,13 +1035,13 @@ export class SessionRuntime {
     const stopping = (async () => {
       try {
         await within(
-          this.adapter.abort(run.sessionId, run.id),
+          this.sessionEngine(run.sessionId).abort(run.sessionId, run.id),
           this.config.limits.abortTimeoutMs,
         );
       } catch {
         try {
           const affected = await within(
-            this.adapter.forceStop(run.sessionId),
+            this.sessionEngine(run.sessionId).forceStop(run.sessionId),
             this.config.limits.abortTimeoutMs,
           );
           this.store.transaction(() => {
@@ -1094,7 +1140,7 @@ export class SessionRuntime {
       let affected = [sessionId];
       try {
         await within(
-          this.adapter.abort(
+          this.sessionEngine(sessionId).abort(
             sessionId,
             this.runs(sessionId).find((r) => r.state === "stopping")?.id ?? "",
           ),
@@ -1106,7 +1152,7 @@ export class SessionRuntime {
             ...new Set([
               ...affected,
               ...(await within(
-                this.adapter.forceStop(sessionId),
+                this.sessionEngine(sessionId).forceStop(sessionId),
                 this.config.limits.abortTimeoutMs,
               )),
             ]),
@@ -1158,7 +1204,7 @@ export class SessionRuntime {
             this.config.limits.abortTimeoutMs,
         );
       await within(
-        this.adapter.disposeSession(id),
+        this.sessionEngine(id).disposeSession(id),
         this.config.limits.abortTimeoutMs,
       );
       this.store.transaction(() => this.store.deleteSession(id));
@@ -1201,16 +1247,27 @@ export class SessionRuntime {
     this.closed = true;
     clearInterval(this.tick);
     clearInterval(this.maintenance);
-    if (this.recovery)
-      await within(
-        this.recovery,
-        this.config.limits.startupTimeoutMs + this.config.limits.abortTimeoutMs,
-      );
+    await within(
+      Promise.all(
+        [...this.recovery.values()].map((recovery) => recovery.pending),
+      ),
+      this.config.limits.startupTimeoutMs + this.config.limits.abortTimeoutMs,
+    );
     await Promise.all(this.repairs.values());
     await Promise.allSettled(
       this.store.list("sessions").map((s) => this.cancel(s.id, "shutdown")),
     );
-    await within(this.adapter.stop(), this.config.limits.abortTimeoutMs);
+    await within(
+      Promise.allSettled(this.adapters.map((adapter) => adapter.stop())).then(
+        (results) => {
+          const failure = results.find(
+            (result) => result.status === "rejected",
+          );
+          if (failure?.status === "rejected") throw failure.reason;
+        },
+      ),
+      this.config.limits.abortTimeoutMs,
+    );
     await within(
       Promise.all([...this.active.values()].map((e) => e.done)),
       this.config.limits.abortTimeoutMs,

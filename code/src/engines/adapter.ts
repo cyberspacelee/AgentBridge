@@ -4,6 +4,7 @@ import type {
   Interaction,
   InteractionReply,
   Message,
+  ModelOption,
   Run,
   Session,
   Usage,
@@ -24,6 +25,7 @@ export interface EngineBindingResult {
 export interface EngineAdapter {
   readonly id: string;
   health(): EngineHealth;
+  models?(): Promise<ModelOption[]>;
   unavailableSessions?(): string[];
   start(): Promise<void>;
   createSession(session: Session): Promise<EngineBindingResult>;

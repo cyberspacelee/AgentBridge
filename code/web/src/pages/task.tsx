@@ -86,7 +86,14 @@ export function Task() {
   const detail = query.data?.detail
   const selected =
     detail?.runs.find((r) => r.id === params.get("run")) ?? detail?.runs.at(-1)
-  const tab = params.get("tab") ?? "execution"
+  const tab = [
+    "execution",
+    "artifacts",
+    "interactions",
+    "diagnostics",
+  ].includes(params.get("tab") ?? "")
+    ? params.get("tab")!
+    : "execution"
   const pending =
     detail?.interactions.filter(
       (i) =>
@@ -252,12 +259,16 @@ export function Task() {
                     sessionId={id}
                     disabled={
                       detail.task.availability !== "ready" ||
-                      runtime?.health.status !== "ready"
+                      runtime?.engines.find(
+                        (engine) => engine.id === detail.task.engineId
+                      )?.health.status !== "ready"
                     }
                     disabledReason={
                       detail.task.availability !== "ready"
                         ? "任务不可继续执行"
-                        : runtime?.health.status !== "ready"
+                        : runtime?.engines.find(
+                              (engine) => engine.id === detail.task.engineId
+                            )?.health.status !== "ready"
                           ? "引擎尚未就绪"
                           : undefined
                     }
@@ -276,7 +287,7 @@ export function Task() {
                   />
                 </TabsContent>
                 <TabsContent value="interactions">
-                  <div className="divide-y">
+                  <div className="list-body divide-y">
                     {detail.interactions
                       .filter((i) => i.runId === selected?.id)
                       .map((i) => (
@@ -401,6 +412,7 @@ export function Task() {
       </Dialog>
       <Dialog open={infoOpen} onOpenChange={setInfoOpen}>
         <DialogContent
+          className="max-h-[90svh] overflow-y-auto"
           finalFocus={() =>
             document.querySelector<HTMLButtonElement>(
               'button[aria-label="任务信息"]'
@@ -850,7 +862,7 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
   return (
     <>
       {artifacts.length ? (
-        <Table>
+        <Table className="stacked-table artifact-list">
           <TableHeader>
             <TableRow>
               <TableHead>文件</TableHead>
@@ -877,18 +889,18 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
                     {a.relativePath}
                   </div>
                 </TableCell>
-                <TableCell>{bytes(a.sizeBytes)}</TableCell>
-                <TableCell>
+                <TableCell data-label="大小">{bytes(a.sizeBytes)}</TableCell>
+                <TableCell data-label="可用性">
                   <Status state={a.availability} />
                 </TableCell>
-                <TableCell>
+                <TableCell data-label="校验">
                   {a.validation === "not_checked"
                     ? "未校验"
                     : a.validation === "passed"
                       ? "文件检查通过"
                       : "文件检查失败"}
                 </TableCell>
-                <TableCell>
+                <TableCell data-label="操作">
                   <div className="flex gap-1">
                     <IconButton
                       label={`预览 ${a.displayName}`}
@@ -957,7 +969,7 @@ function Diagnostics({ run, revision }: { run: Run; revision: number }) {
     logs: { id: number; occurredAt: string; code: string; message: string }[]
   }>(`/api/observability/runs/${run.id}`, revision)
   return (
-    <div className="space-y-6">
+    <div className="diagnostics-view">
       <dl className="diagnostic-ids">
         <dt>Run ID</dt>
         <dd>

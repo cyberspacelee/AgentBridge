@@ -34,6 +34,15 @@ export class Telemetry {
     queueDepth: number;
     completed: number;
     failed: number;
+    engines: Record<
+      string,
+      {
+        activeRuns: number;
+        queueDepth: number;
+        completed: number;
+        failed: number;
+      }
+    >;
   }[] = [];
   constructor(private runtime: SessionRuntime) {
     const registers = [this.registry];
@@ -135,11 +144,39 @@ export class Telemetry {
   }
   private sample() {
     const runs = this.runtime.store.list("runs");
+    const sessions = this.runtime.store.list("sessions");
+    const engineBySession = new Map(sessions.map((s) => [s.id, s.engineId]));
+    const engines = Object.fromEntries(
+      [
+        ...new Set([
+          ...this.runtime.adapters.map((adapter) => adapter.id),
+          ...sessions.map((s) => s.engineId),
+        ]),
+      ].map((engine) => {
+        const selected = runs.filter(
+          (r) => engineBySession.get(r.sessionId) === engine,
+        );
+        return [
+          engine,
+          {
+            activeRuns: selected.filter(
+              (r) => r.state === "running" || r.state === "stopping",
+            ).length,
+            queueDepth: selected.filter((r) => r.state === "queued").length,
+            completed: selected.filter((r) => r.state === "completed").length,
+            failed: selected.filter(
+              (r) => r.state === "failed" || r.state === "timed_out",
+            ).length,
+          },
+        ];
+      }),
+    );
     const memory = process.memoryUsage();
     const sample = {
       at: new Date().toISOString(),
       rssBytes: memory.rss,
       heapBytes: memory.heapUsed,
+      engines,
       activeRuns: runs.filter(
         (r) => r.state === "running" || r.state === "stopping",
       ).length,
@@ -151,7 +188,13 @@ export class Telemetry {
     };
     this.active.set(sample.activeRuns);
     this.queued.set(sample.queueDepth);
-    this.ready.set(this.runtime.adapter.health().status === "ready" ? 1 : 0);
+    this.ready.set(
+      this.runtime.adapters.some(
+        (adapter) => adapter.health().status === "ready",
+      )
+        ? 1
+        : 0,
+    );
     for (const table of [
       "sessions",
       "runs",
@@ -170,8 +213,13 @@ export class Telemetry {
     this.samples.push(sample);
     if (this.samples.length > 720) this.samples.shift();
   }
-  async overview(from: string, to: string) {
-    const all = this.runtime.store.list("runs");
+  async overview(from: string, to: string, engine = "") {
+    const sessions = this.runtime.store
+      .list("sessions")
+      .filter((s) => !engine || s.engineId === engine);
+    const sessionIds = new Set(sessions.map((s) => s.id));
+    const allRuns = this.runtime.store.list("runs");
+    const all = allRuns.filter((r) => sessionIds.has(r.sessionId));
     const runs = all.filter(
       (r) => r.finishedAt && r.finishedAt >= from && r.finishedAt <= to,
     );
@@ -191,9 +239,9 @@ export class Telemetry {
         : null;
     const tools = this.runtime.store.db
       .prepare(
-        "SELECT p.content FROM message_parts p JOIN messages m ON m.id=p.messageId JOIN runs r ON r.id=m.runId WHERE p.type='tool' AND r.acceptedAt>=? AND r.acceptedAt<=?",
+        "SELECT p.content FROM message_parts p JOIN messages m ON m.id=p.messageId JOIN runs r ON r.id=m.runId JOIN sessions s ON s.id=r.sessionId WHERE p.type='tool' AND r.acceptedAt>=? AND r.acceptedAt<=? AND (?='' OR s.engineId=?)",
       )
-      .all(from, to)
+      .all(from, to, engine, engine)
       .map(
         (r) =>
           JSON.parse(String(r.content)) as {
@@ -218,7 +266,12 @@ export class Telemetry {
       to,
       capturedAt: new Date().toISOString(),
       instanceId: this.runtime.store.instanceId,
-      health: this.runtime.adapter.health(),
+      engine: engine || null,
+      health:
+        (engine
+          ? this.runtime.adapters.find((adapter) => adapter.id === engine)
+          : this.runtime.adapter
+        )?.health() ?? null,
       limits: this.runtime.config.limits,
       completed,
       failed,
@@ -270,7 +323,11 @@ export class Telemetry {
       },
       pendingInteractions: this.runtime.store
         .list("interactions")
-        .filter((i) => i.state === "pending" || i.state === "replying").length,
+        .filter(
+          (i) =>
+            sessionIds.has(i.sessionId) &&
+            (i.state === "pending" || i.state === "replying"),
+        ).length,
       http: {
         requests: sumValues(http.values),
         errors4xx: sumValues(
@@ -298,11 +355,11 @@ export class Telemetry {
           Number(db.prepare("PRAGMA page_count").get()?.page_count ?? 0) *
           Number(db.prepare("PRAGMA page_size").get()?.page_size ?? 0),
         sessions: this.runtime.store.list("sessions").length,
-        runs: all.length,
+        runs: allRuns.length,
       },
-      unavailableSessions: this.runtime.store
-        .list("sessions")
-        .filter((s) => s.availability === "unavailable").length,
+      unavailableSessions: sessions.filter(
+        (s) => s.availability === "unavailable",
+      ).length,
       oldestQueuedAt:
         all
           .filter((r) => !isTerminal(r.state) && r.state === "queued")
@@ -310,7 +367,7 @@ export class Telemetry {
           ?.acceptedAt ?? null,
     };
   }
-  series(metric: string, from: string, to: string) {
+  series(metric: string, from: string, to: string, engine = "") {
     const allowed = [
       "rssBytes",
       "heapBytes",
@@ -321,16 +378,29 @@ export class Telemetry {
     ] as const;
     if (!allowed.includes(metric as (typeof allowed)[number])) return null;
     const key = metric as (typeof allowed)[number];
+    const samples = this.samples.filter(
+      (s) =>
+        (!engine || Object.hasOwn(s.engines, engine)) &&
+        (!engine ||
+          this.runtime.adapters.some((adapter) => adapter.id === engine) ||
+          !metric.endsWith("Bytes")),
+    );
     return {
       metric,
       unit: metric.endsWith("Bytes") ? "bytes" : "count",
       from,
       to,
-      availableFrom: this.samples[0]?.at ?? null,
-      availableTo: this.samples.at(-1)?.at ?? null,
-      points: this.samples
+      availableFrom: samples[0]?.at ?? null,
+      availableTo: samples.at(-1)?.at ?? null,
+      points: samples
         .filter((s) => s.at >= from && s.at <= to)
-        .map((s) => ({ at: s.at, value: s[key] })),
+        .map((s) => ({
+          at: s.at,
+          value:
+            engine && key !== "rssBytes" && key !== "heapBytes"
+              ? s.engines[engine]![key]
+              : s[key],
+        })),
     };
   }
   close() {

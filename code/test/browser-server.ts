@@ -15,7 +15,16 @@ import type { Message, Run, Session } from "../shared/contracts.js";
 
 // Deterministic engine is confined to the browser test server, never registered in production.
 class BrowserEngine implements EngineAdapter {
-  id = "browser-test";
+  constructor(readonly id: string) {}
+  async models() {
+    return ["primary", "secondary"].flatMap((provider) =>
+      ["fast", "quality"].map((model) => ({
+        providerID: `${this.id}-${provider}`,
+        modelID: model,
+        name: `${this.id} ${provider} ${model}`,
+      })),
+    );
+  }
   private active = new Map<
     string,
     { resolve: (result: EngineResult) => void; timer?: NodeJS.Timeout }
@@ -132,8 +141,9 @@ const config = readConfig([], {
 });
 const runtime = new SessionRuntime(
   new Store(":memory:"),
-  new BrowserEngine(),
+  new BrowserEngine("pi"),
   config,
+  [new BrowserEngine("opencode")],
 );
 await runtime.start();
 const server = createServer(runtime);

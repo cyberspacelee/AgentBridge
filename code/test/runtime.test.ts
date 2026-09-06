@@ -25,6 +25,10 @@ import { createServer } from "../src/gateway/server.js";
 
 class ControlledEngine implements EngineAdapter {
   id = "test";
+  available = true;
+  async models() {
+    return [{ providerID: this.id, modelID: "model", name: "Test model" }];
+  }
   sessions = new Set<string>();
   starts: string[] = [];
   replies: InteractionReply[] = [];
@@ -50,7 +54,7 @@ class ControlledEngine implements EngineAdapter {
   >();
   health() {
     return {
-      status: "ready" as const,
+      status: this.available ? ("ready" as const) : ("unavailable" as const),
       version: "test",
       message: null,
       processes: this.sessions.size,
@@ -111,7 +115,10 @@ class ControlledEngine implements EngineAdapter {
     for (const id of this.sessions) await this.disposeSession(id);
   }
 }
-async function fixture(timeout = 5000) {
+async function fixture(
+  timeout = 5000,
+  additionalAdapters: EngineAdapter[] = [],
+) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-test-"));
   const config = readConfig([], {
     AGENT_LIMITS: JSON.stringify({ runTimeoutMs: timeout }),
@@ -119,7 +126,12 @@ async function fixture(timeout = 5000) {
   });
   const store = new Store(":memory:");
   const adapter = new ControlledEngine();
-  const runtime = new SessionRuntime(store, adapter, config);
+  const runtime = new SessionRuntime(
+    store,
+    adapter,
+    config,
+    additionalAdapters,
+  );
   await runtime.start();
   return {
     directory,
@@ -148,6 +160,245 @@ const input = (directory: string, id = randomUUID()) =>
     directory,
     parts: [{ type: "text", text: "work" }],
   });
+
+test("task engines route models, follow-ups, approvals, cancellation and recovery independently", async () => {
+  const second = new ControlledEngine();
+  second.id = "opencode";
+  const f = await fixture(10000, [second]);
+  f.adapter.id = "pi";
+  const server = createServer(f.runtime);
+  await server.listen({ host: "127.0.0.1", port: 0 });
+  try {
+    const info = (await server.inject("/api/runtime")).json();
+    assert.deepEqual(
+      info.engines.map((engine: { id: string }) => engine.id),
+      ["pi", "opencode"],
+    );
+    for (const engineId of ["pi", "opencode"] as const) {
+      const catalog = (
+        await server.inject(`/api/engines/${engineId}/models`)
+      ).json();
+      assert.equal(catalog.models[0].providerID, engineId);
+    }
+    assert.equal(
+      (await server.inject("/api/engines/unknown/models")).statusCode,
+      400,
+    );
+    assert.ok(
+      (
+        await server.inject("/api/observability/overview?engine=opencode")
+      ).json().health,
+    );
+    assert.ok(
+      (
+        await server.inject(
+          "/api/observability/series?engine=opencode&metric=rssBytes",
+        )
+      ).json().points.length,
+    );
+    const a = await f.runtime.submit({
+      ...input(f.directory),
+      engineId: "pi",
+      model: { providerID: "pi", modelID: "chosen" },
+    });
+    const b = await f.runtime.submit({
+      ...input(f.directory),
+      engineId: "opencode",
+    });
+    await until(
+      () =>
+        f.adapter.executions.has(a.sessionId) &&
+        second.executions.has(b.sessionId),
+    );
+    assert.equal(f.runtime.session(b.sessionId).engineId, "opencode");
+    assert.equal(f.adapter.executions.has(b.sessionId), false);
+    const interactionId = randomUUID();
+    second.executions.get(b.sessionId)!.emit({
+      type: "interaction",
+      interaction: {
+        id: interactionId,
+        sessionId: b.sessionId,
+        runId: b.runId,
+        kind: "permission",
+        title: "Approve",
+        questions: [],
+        state: "pending",
+        policy: "manual",
+        createdAt: new Date().toISOString(),
+        resolvedAt: null,
+        reply: null,
+        error: null,
+      },
+    });
+    await f.runtime.reply(interactionId, { decision: "once" });
+    assert.equal(second.replies.length, 1);
+    assert.equal(f.adapter.replies.length, 0);
+    await f.runtime.cancel(b.sessionId);
+    assert.equal(f.runtime.run(b.runId).state, "cancelled");
+    assert.ok(f.adapter.executions.has(a.sessionId));
+    f.adapter.complete(a.sessionId);
+    await f.runtime.wait(a.runId);
+    const next = await f.runtime.submit(
+      {
+        submissionId: randomUUID(),
+        parts: [{ type: "text", text: "follow up" }],
+      },
+      a.sessionId,
+    );
+    assert.deepEqual(f.runtime.run(next.runId).model, {
+      providerID: "pi",
+      modelID: "chosen",
+    });
+    await until(() => f.adapter.executions.has(a.sessionId));
+    second.failures.add(b.sessionId);
+    await until(() => second.recovered.includes(b.sessionId));
+    assert.equal(f.adapter.recovered.length, 0);
+    assert.equal(f.runtime.run(next.runId).state, "running");
+    second.available = false;
+    assert.equal(
+      (await server.inject("/api/engines/opencode/models")).statusCode,
+      503,
+    );
+    assert.throws(
+      () => f.runtime.submit({ ...input(f.directory), engineId: "opencode" }),
+      /not ready/,
+    );
+    f.adapter.complete(a.sessionId);
+    await f.runtime.wait(next.runId);
+    await f.runtime.deleteSession(b.sessionId);
+    assert.equal(second.sessions.size, 0);
+    assert.equal(f.adapter.sessions.size, 1);
+  } finally {
+    await within(server.close(), 3000);
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("observability isolates engine outcomes, tools, logs and samples", async () => {
+  const f = await fixture();
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    for (const engine of ["pi", "opencode", "opencode"]) {
+      f.adapter.id = engine;
+      const result = await f.runtime.submit(input(f.directory));
+      await until(() => f.adapter.executions.has(result.taskId));
+      f.adapter.complete(result.taskId);
+      await until(() => f.runtime.run(result.runId).state === "completed");
+      const at = new Date().toISOString();
+      f.store.transaction(() =>
+        f.store.saveMessage({
+          id: randomUUID(),
+          sessionId: result.taskId,
+          runId: result.runId,
+          role: "assistant",
+          createdAt: at,
+          completedAt: at,
+          finishReason: "stop",
+          parts: [
+            {
+              id: randomUUID(),
+              type: "tool",
+              toolCallId: randomUUID(),
+              name: `${engine}-tool`,
+              input: {},
+              output: "ok",
+              state: "completed",
+              startedAt: at,
+              finishedAt: at,
+            },
+          ],
+        }),
+      );
+      f.store.db
+        .prepare(
+          "INSERT INTO runtime_logs(occurredAt,level,stage,code,message,runId) VALUES (?,'error','engine','QA',?,?)",
+        )
+        .run(at, engine, result.runId);
+    }
+    f.adapter.id = "pi";
+    f.store.db
+      .prepare(
+        "INSERT INTO runtime_logs(occurredAt,level,stage,code,message) VALUES (?,'error','gateway','QA','global')",
+      )
+      .run(new Date().toISOString());
+    server = createServer(f.runtime);
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      for (const [engine, count] of [
+        ["pi", 1],
+        ["opencode", 2],
+        ["", 3],
+        ["absent", 0],
+      ] as const) {
+        const response = await server.inject(
+          `/api/observability/overview?engine=${engine}`,
+        );
+        assert.equal(response.statusCode, 200);
+        const overview = response.json();
+        assert.equal(overview.completed, count);
+        assert.equal(overview.accepted, count);
+        assert.equal(overview.toolCalls, count);
+        assert.equal(overview.usage.missingRuns, count);
+        assert.equal(overview.storage.runs, 3, "storage is instance-wide");
+        if (engine === "opencode" || engine === "absent")
+          assert.equal(overview.health, null);
+        const errors = (
+          await server.inject(
+            `/api/observability/errors?engine=${engine}&code=QA`,
+          )
+        ).json();
+        assert.equal(errors.items.length, engine ? count : count + 1);
+        if (engine)
+          assert.ok(
+            errors.items.every(
+              (log: { message: string }) => log.message === engine,
+            ),
+          );
+        const series = (
+          await server.inject(
+            `/api/observability/series?engine=${engine}&metric=completed`,
+          )
+        ).json();
+        if (engine === "absent") assert.deepEqual(series.points, []);
+        else assert.equal(series.points.at(-1).value, count);
+      }
+      assert.deepEqual(
+        (
+          await server.inject(
+            "/api/observability/series?engine=constructor&metric=completed",
+          )
+        ).json().points,
+        [],
+      );
+      assert.deepEqual(
+        (
+          await server.inject(
+            "/api/observability/series?engine=opencode&metric=rssBytes",
+          )
+        ).json().points,
+        [],
+      );
+      assert.equal(
+        (await server.inject("/api/observability/overview?engine=%27"))
+          .statusCode,
+        400,
+      );
+      assert.equal(
+        (
+          await server.inject(
+            "/api/observability/series?engine=pi&metric=invalid",
+          )
+        ).statusCode,
+        400,
+      );
+    } finally {
+      await within(server.close(), 2000);
+    }
+  } finally {
+    if (server) await rm(f.directory, { recursive: true, force: true });
+    else await f.close();
+  }
+});
 
 test("pnpm workspace configuration and engine precedence", () => {
   assert.equal(

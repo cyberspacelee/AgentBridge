@@ -2,7 +2,7 @@
 
 AgentBridge 提供统一任务网关、OpenCode/Pi 适配器、任务工作台和网关观测。全部 JavaScript 依赖由 **pnpm 10.33.2 workspace** 管理，安装入口为 `code/`，唯一锁文件为 `code/pnpm-lock.yaml`。
 
-本地已验证 Linux、Node 22.23.0、Python 3.13.5。Windows 10/11、实际模型任务和赛题样本尚未验收。本包为当前实现的可复现候选交付件，不代表已通过全部评测。
+本地已验证 Linux、Node 22.23.0、Python 3.13.5，Pi 和 OpenCode 均完成真实模型最小请求验证。Windows 10/11、完整办公任务和赛题样本尚未验收。当前功能与启动入口见 [README](README.md)，逐页验证记录见 [UI QA 报告](code/artifacts/ui/qa/README.md)。本包为当前实现的可复现候选交付件，不代表已通过全部评测。
 
 ## 1. 环境准备
 
@@ -41,7 +41,7 @@ python3 -m venv .venv
 
 ## 2. 模型配置
 
-模型引用可在每次 HTTP 请求的 `model` 中指定，或通过 `AGENT_MODEL` 配置默认值。模型名称必须存在于所选引擎中。模型凭据使用引擎支持的服务端环境变量，例如供应商的 `OPENAI_API_KEY`；不写入前端、日志或交付包。
+模型引用可在每次 HTTP 请求的 `model` 中指定，或通过 `AGENT_MODEL` 配置默认引擎的兜底值。工作台新建任务支持选择引擎、供应商和模型；后续轮次默认沿用上次的模型。模型名称必须存在于所选引擎中。模型凭据使用引擎支持的服务端环境变量，例如供应商的 `OPENAI_API_KEY`；不写入前端、日志或交付包。
 
 OpenCode 使用其官方 provider 配置和环境变量。Pi 默认隔离个人配置，读取 `AGENT_DATA_DIR/pi/` 下的配置；需要自定义 provider/base URL 时，将准备好的 Pi 配置目录通过 `ENGINE_B_CONFIG_DIR` 指定。Pi 的模型注册格式以锁定版本的 `node_modules/@earendil-works/pi-coding-agent/docs/models.md` 为准。模型配置文件可包含秘密，不应提交到源码或打包。
 
@@ -49,7 +49,7 @@ OpenCode 使用其官方 provider 配置和环境变量。Pi 默认隔离个人�
 
 ## 3. 启动服务
 
-两引擎分别启动评测。**CLI `--engine` 优先于 `AGENT_ENGINE`，默认 opencode**。停止当前实例后再切换；默认一个数据库仅允许一个网关持有写锁。
+服务同时注册 Pi 和 OpenCode，新任务可独立选择引擎，无需重启。**CLI `--engine` 优先于 `AGENT_ENGINE`，默认 opencode**，仅决定未显式选择时的默认引擎。下列启动方式任选其一；默认一个数据库仅允许一个网关持有写锁。
 
 PowerShell，OpenCode：
 
@@ -71,7 +71,8 @@ Linux/macOS：
 
 ```sh
 AGENT_ENGINE=opencode pnpm start
-AGENT_ENGINE=pi pnpm start
+# 或以 Pi 为默认引擎，并复用已有的个人配置
+ENGINE_B_CONFIG_DIR="$HOME/.pi/agent" AGENT_ENGINE=pi pnpm start
 ```
 
 CLI 通道同样有效：
@@ -86,12 +87,12 @@ pnpm start --engine pi --host 127.0.0.1 --port 3000
 
 | 配置 | 默认 / 说明 |
 | --- | --- |
-| `AGENT_ENGINE` | opencode 或 pi |
+| `AGENT_ENGINE` | 默认引擎 opencode 或 pi，新任务可覆盖 |
 | `AGENT_HOST` / `AGENT_PORT` | 127.0.0.1 / 3000 |
 | `AGENT_WEB_ORIGIN` | 开发页面来源，默认 http://127.0.0.1:5173；另允许同源写请求 |
 | `AGENT_DATA_DIR` | 当前目录下 `.agentbridge`；SQLite、日志和引擎内部数据 |
 | `AGENT_STORAGE` | 默认 SQLite；显式 `memory` 时重启丢失网关历史 |
-| `AGENT_MODEL` | JSON：`providerID`、`modelID`；请求值优先 |
+| `AGENT_MODEL` | 默认引擎的兜底模型，JSON：`providerID`、`modelID`；请求值优先 |
 | `AGENT_ALLOWED_DIRECTORIES` | JSON 绝对路径数组；空数组允许任意可访问工作目录 |
 | `AGENT_LIMITS` | JSON，见下方限制；未知字段应避免使用 |
 | `AGENT_QUESTION_ANSWER` | 无选项反问的自动回答文本 |

@@ -17,6 +17,7 @@ import {
 } from "../../shared/contracts.js";
 import type { SessionRuntime } from "../runtime/sessions.js";
 import { asGatewayError, GatewayError } from "../errors.js";
+import { within } from "../async.js";
 import { isTerminal } from "../domain/transitions.js";
 import { artifactPath } from "../runtime/artifacts.js";
 import { Telemetry } from "../observability/metrics.js";
@@ -32,6 +33,11 @@ const pagination = z.object({
 });
 const timeRange = z
   .object({
+    engine: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9_-]*$/)
+      .default(""),
     from: z.iso
       .datetime()
       .default(() => new Date(Date.now() - 3600000).toISOString()),
@@ -173,7 +179,9 @@ export function createServer(runtime: SessionRuntime) {
     instanceId: store.instanceId,
   }));
   server.get("/health/ready", async (_r, reply) => {
-    const ok = store.healthy && runtime.adapter.health().status === "ready";
+    const ok =
+      store.healthy &&
+      runtime.adapters.some((adapter) => adapter.health().status === "ready");
     return reply
       .code(ok ? 200 : 503)
       .send({ ok, engine: runtime.adapter.health() });
@@ -188,6 +196,10 @@ export function createServer(runtime: SessionRuntime) {
     storeId: store.storeId,
     engine: runtime.adapter.id,
     health: runtime.adapter.health(),
+    engines: runtime.adapters.map((adapter) => ({
+      id: adapter.id,
+      health: adapter.health(),
+    })),
     storage: store.filename === ":memory:" ? "memory" : "sqlite",
     models: config.model ? [config.model] : [],
     limits: config.limits,
@@ -202,6 +214,21 @@ export function createServer(runtime: SessionRuntime) {
       processMemory: false,
     },
   }));
+
+  server.get("/api/engines/:id/models", async (request) => {
+    const adapter = runtime.engine(id(request.params));
+    if (adapter.health().status !== "ready")
+      throw new GatewayError(
+        "SERVICE_UNAVAILABLE",
+        `${adapter.id} engine is not ready`,
+        503,
+      );
+    const models = await within(
+      adapter.models?.() ?? Promise.resolve([]),
+      config.limits.startupTimeoutMs,
+    );
+    return { models };
+  });
 
   function page<T extends { id: string }>(
     items: T[],
@@ -641,12 +668,12 @@ export function createServer(runtime: SessionRuntime) {
 
   server.get("/api/observability/overview", async (request) => {
     const range = timeRange.parse(request.query);
-    return telemetry.overview(range.from, range.to);
+    return telemetry.overview(range.from, range.to, range.engine);
   });
   server.get("/api/observability/series", async (request) => {
     const range = timeRange.parse(request.query);
     const metric = z.object({ metric: z.string() }).parse(request.query).metric;
-    const series = telemetry.series(metric, range.from, range.to);
+    const series = telemetry.series(metric, range.from, range.to, range.engine);
     if (!series)
       throw new GatewayError("VALIDATION_ERROR", "Unknown metric", 400);
     return series;
@@ -663,7 +690,7 @@ export function createServer(runtime: SessionRuntime) {
     return {
       items: store.db
         .prepare(
-          "SELECT * FROM runtime_logs WHERE level IN ('error','warn') AND occurredAt>=? AND occurredAt<=? AND (?='' OR stage=?) AND (?='' OR code=?) ORDER BY id DESC LIMIT ?",
+          "SELECT l.* FROM runtime_logs l LEFT JOIN runs r ON r.id=l.runId LEFT JOIN sessions s ON s.id=COALESCE(l.sessionId,r.sessionId) WHERE l.level IN ('error','warn') AND l.occurredAt>=? AND l.occurredAt<=? AND (?='' OR l.stage=?) AND (?='' OR l.code=?) AND (?='' OR s.engineId=?) ORDER BY l.id DESC LIMIT ?",
         )
         .all(
           range.from,
@@ -672,6 +699,8 @@ export function createServer(runtime: SessionRuntime) {
           query.stage,
           query.code,
           query.code,
+          range.engine,
+          range.engine,
           query.limit,
         ),
       from: range.from,
@@ -725,15 +754,26 @@ export function createServer(runtime: SessionRuntime) {
   if (existsSync(root)) {
     void server.register(staticFiles, { root, prefix: "/" });
   }
-  server.setNotFoundHandler((request, reply) =>
-    existsSync(root) &&
-    request.method === "GET" &&
-    (request.url === "/" ||
-      request.url.startsWith("/tasks") ||
-      request.url.startsWith("/observability"))
-      ? reply.sendFile("index.html")
-      : reply.code(404).send({ code: "NOT_FOUND", message: "Route not found" }),
-  );
+  server.setNotFoundHandler((request, reply) => {
+    const pathname = request.url.split("?")[0]!;
+    const appRoute =
+      pathname === "/" || /^\/(tasks|observability)(\/|$)/.test(pathname);
+    const browserPage =
+      request.headers.accept?.includes("text/html") &&
+      !/^\/(api|session|event|permission|question|health|metrics)(\/|$)/.test(
+        pathname,
+      ) &&
+      !path.extname(pathname);
+    if (
+      existsSync(root) &&
+      request.method === "GET" &&
+      (appRoute || browserPage)
+    )
+      return reply.code(appRoute ? 200 : 404).sendFile("index.html");
+    return reply
+      .code(404)
+      .send({ code: "NOT_FOUND", message: "Route not found" });
+  });
   server.addHook("preClose", async () => {
     for (const close of closeStreams) close();
   });

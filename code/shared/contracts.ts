@@ -49,6 +49,7 @@ export const policySchema = z
 export type InteractionPolicy = z.infer<typeof policySchema>;
 export const createSessionSchema = z
   .object({
+    engineId: z.enum(["pi", "opencode"]).optional(),
     directory: z.string().min(1).max(4096),
     title: z.string().max(200).optional(),
     interactionPolicy: policySchema.optional(),
@@ -253,11 +254,19 @@ export interface EngineHealth {
   processes: number;
   restarts: number;
 }
+export interface ModelOption extends ModelRef {
+  name: string;
+}
+export interface EngineInfo {
+  id: string;
+  health: EngineHealth;
+}
 export interface RuntimeInfo {
   instanceId: string;
   storeId: string;
   engine: string;
   health: EngineHealth;
+  engines: EngineInfo[];
   storage: "sqlite" | "memory";
   models: ModelRef[];
   limits: Record<string, number>;

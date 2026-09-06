@@ -67,6 +67,31 @@ export class OpenCodeAdapter implements EngineAdapter {
   health() {
     return { ...this.state };
   }
+  async models() {
+    const catalog = z
+      .object({
+        connected: z.array(z.string()),
+        all: z.array(
+          z.object({
+            id: z.string(),
+            models: z.record(
+              z.string(),
+              z.object({ id: z.string(), name: z.string() }),
+            ),
+          }),
+        ),
+      })
+      .parse(await this.request("/provider"));
+    return catalog.all
+      .filter((provider) => catalog.connected.includes(provider.id))
+      .flatMap((provider) =>
+        Object.values(provider.models).map((model) => ({
+          providerID: provider.id,
+          modelID: model.id,
+          name: model.name,
+        })),
+      );
+  }
   unavailableSessions() {
     return this.state.status === "ready" ? [] : [...this.sessions.keys()];
   }

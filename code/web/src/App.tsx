@@ -6,10 +6,18 @@ import {
   Route,
   Routes,
 } from "react-router-dom"
-import { Activity, ListTodo, Network, RefreshCw, Menu } from "lucide-react"
+import {
+  Activity,
+  ListTodo,
+  Network,
+  RefreshCw,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "lucide-react"
 import type { RuntimeInfo } from "../../shared/contracts"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Choice, Failure, IconButton, Status } from "@/components/workspace-ui"
+import { Choice, Failure, IconButton } from "@/components/workspace-ui"
 import {
   Dialog,
   DialogContent,
@@ -40,6 +48,14 @@ export default function App() {
   const { theme, setTheme } = useTheme()
   const runtime = useQuery<RuntimeInfo>("/api/runtime", events.revision)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      const saved = localStorage.getItem("agentbridge:sidebar-collapsed")
+      return saved === null ? window.innerWidth < 1280 : saved === "true"
+    } catch {
+      return false
+    }
+  })
   const navigation = (
     <nav aria-label="主导航" className="workspace-nav">
       {[
@@ -70,8 +86,8 @@ export default function App() {
         <GatewayContext
           value={{ runtime: runtime.data, revision: events.revision }}
         >
-          <div className="app-shell">
-            <aside className="app-sidebar">
+          <div className="app-shell" data-collapsed={sidebarCollapsed}>
+            <aside id="desktop-navigation" className="app-sidebar">
               <NavLink to="/tasks" className="brand" aria-label="AgentBridge">
                 <Network aria-hidden="true" />
                 <span>AgentBridge</span>
@@ -83,6 +99,26 @@ export default function App() {
               </div>
             </aside>
             <header className="app-header">
+              <IconButton
+                label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                className="hidden lg:inline-flex"
+                aria-expanded={!sidebarCollapsed}
+                aria-controls="desktop-navigation"
+                onClick={() => {
+                  const collapsed = !sidebarCollapsed
+                  setSidebarCollapsed(collapsed)
+                  try {
+                    localStorage.setItem(
+                      "agentbridge:sidebar-collapsed",
+                      String(collapsed)
+                    )
+                  } catch {
+                    /* Navigation remains usable when storage is blocked. */
+                  }
+                }}
+              >
+                {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+              </IconButton>
               <Dialog open={menuOpen} onOpenChange={setMenuOpen}>
                 <DialogTrigger
                   render={<IconButton label="打开导航" className="lg:hidden" />}
@@ -106,14 +142,6 @@ export default function App() {
                     : "正在连接"}
               </span>
               <div className="header-runtime">
-                <span className="runtime-name font-mono text-xs">
-                  {runtime.data?.engine ?? "Gateway"}
-                </span>
-                <span className="runtime-health">
-                  {runtime.data && (
-                    <Status state={runtime.data.health.status} />
-                  )}
-                </span>
                 <Choice
                   label="主题"
                   value={theme}
@@ -161,16 +189,6 @@ export default function App() {
                 </Routes>
               </Suspense>
             </main>
-            <footer className="app-footer">
-              <span>{runtime.data?.engine ?? "Gateway"}</span>
-              <span>
-                {runtime.data?.storage.toUpperCase() ?? "Gateway"}
-                <span className="hidden sm:inline">
-                  {" "}
-                  · {runtime.data?.instanceId.slice(0, 8) ?? "连接中"}
-                </span>
-              </span>
-            </footer>
           </div>
         </GatewayContext>
       </TooltipProvider>

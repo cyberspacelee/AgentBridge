@@ -6,12 +6,14 @@ import { PiAdapter } from "./engines/pi/adapter.js";
 import { createServer } from "./gateway/server.js";
 
 const config = readConfig();
-const adapters = {
-  opencode: () => new OpenCodeAdapter(config),
-  pi: () => new PiAdapter(config),
-};
+const adapters = [new OpenCodeAdapter(config), new PiAdapter(config)];
 const store = new Store(config.database, config.limits.maxEventBytes);
-const runtime = new SessionRuntime(store, adapters[config.engine](), config);
+const runtime = new SessionRuntime(
+  store,
+  adapters.find((adapter) => adapter.id === config.engine)!,
+  config,
+  adapters.filter((adapter) => adapter.id !== config.engine),
+);
 await runtime.start();
 const server = createServer(runtime);
 try {

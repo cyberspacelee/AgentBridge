@@ -41,7 +41,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 interface Overview {
   capturedAt: string
-  health: EngineHealth
+  health: EngineHealth | null
   accepted: number
   completed: number
   failed: number
@@ -106,6 +106,22 @@ interface Log {
 export function Observability() {
   const { revision, runtime } = useGateway()
   const [params, setParams] = useSearchParams()
+  const engineOptions = [
+    { value: "", label: "全部引擎" },
+    { value: "pi", label: "Pi" },
+    { value: "opencode", label: "OpenCode" },
+    ...(runtime && !["pi", "opencode"].includes(runtime.engine)
+      ? [{ value: runtime.engine, label: runtime.engine }]
+      : []),
+  ]
+  const engine = engineOptions.some(
+    (option) => option.value === params.get("engine")
+  )
+    ? params.get("engine")!
+    : ""
+  const engineName = engineOptions.find(
+    (option) => option.value === engine
+  )!.label
   const window = ["15", "60", "1440", "10080"].includes(
     params.get("window") ?? ""
   )
@@ -148,32 +164,40 @@ export function Observability() {
   )
     ? params.get("tab")!
     : "overview"
-  const range = `from=${encodeURIComponent(new Date(clock - Number(window) * 60000).toISOString())}&to=${encodeURIComponent(new Date(clock).toISOString())}`
+  const range = `engine=${encodeURIComponent(engine)}&from=${encodeURIComponent(new Date(clock - Number(window) * 60000).toISOString())}&to=${encodeURIComponent(new Date(clock).toISOString())}`
   const overview = useQuery<Overview>(
     `/api/observability/overview?${range}`,
     queryRevision,
-    `overview:${window}`
+    `overview:${engine}:${window}`
   )
   const series = useQuery<Series>(
     `/api/observability/series?${range}&metric=${metric}`,
     queryRevision,
-    `series:${window}:${metric}`
+    `series:${engine}:${window}:${metric}`
   )
   const errors = useQuery<{ items: Log[] }>(
     tab === "errors"
       ? `/api/observability/errors?${range}&stage=${encodeURIComponent(stage)}&code=${encodeURIComponent(code)}`
       : null,
     queryRevision,
-    tab === "errors" ? `errors:${window}:${stage}:${code}` : null
+    tab === "errors" ? `errors:${engine}:${window}:${stage}:${code}` : null
   )
   const data = overview.data
   return (
-    <div className="page">
+    <div
+      className={`page ${["tools", "errors"].includes(tab) ? "list-page observation-list-page" : ""}`}
+    >
       <div className="page-heading">
         <div>
           <h1>网关观测</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="observation-filters">
+          <Choice
+            label="观测引擎"
+            value={engine}
+            options={engineOptions}
+            onChange={(value) => change("engine", value)}
+          />
           <Field orientation="horizontal" className="w-auto">
             <Switch
               id="auto-refresh"
@@ -211,7 +235,7 @@ export function Observability() {
       </div>
       <div className="observation-meta">
         <span>
-          {runtime?.engine ?? "Gateway"} · {runtime?.instanceId.slice(0, 8)}
+          {engineName} · {runtime?.instanceId.slice(0, 8)}
         </span>
         <span role="status">
           {data
@@ -318,7 +342,11 @@ export function Observability() {
                     <div>
                       <dt>引擎</dt>
                       <dd>
-                        <Status state={data.health.status} />
+                        {data.health ? (
+                          <Status state={data.health.status} />
+                        ) : (
+                          "未连接"
+                        )}
                       </dd>
                     </div>
                     <div>
@@ -347,10 +375,17 @@ export function Observability() {
               <div className="section-heading">
                 <h2 className="flex items-center gap-2">
                   <Server className="size-4" />
-                  {runtime?.engine}
+                  {engine || runtime?.engine}
                 </h2>
-                <Status state={data.health.status} />
+                {data.health ? (
+                  <Status state={data.health.status} />
+                ) : (
+                  <span className="text-muted-foreground">未连接</span>
+                )}
               </div>
+              <p className="mb-4 text-xs text-muted-foreground">
+                网关资源 · 本实例
+              </p>
               <dl className="metric-band">
                 <Metric label="网关 RSS" value={bytes(data.resource.rss)} />
                 <Metric label="堆内存" value={bytes(data.resource.heapUsed)} />
@@ -372,9 +407,9 @@ export function Observability() {
                 </TableHeader>
                 <TableBody>
                   {[
-                    ["引擎版本", data.health.version ?? "未知"],
-                    ["引擎进程数", data.health.processes],
-                    ["进程重启次数", data.health.restarts],
+                    ["引擎版本", data.health?.version ?? "未知"],
+                    ["引擎进程数", data.health?.processes ?? "未知"],
+                    ["进程重启次数", data.health?.restarts ?? "未知"],
                     [
                       "引擎进程内存",
                       bytes(data.resource.childProcessMemoryBytes),
@@ -384,7 +419,10 @@ export function Observability() {
                     ["执行超时", duration(runtime?.limits.runTimeoutMs)],
                     ["会话容量", runtime?.limits.maxSessions],
                     ["SSE 连接上限", runtime?.limits.maxSseConnections],
-                    ["引擎诊断", data.health.message ?? "无"],
+                    [
+                      "引擎诊断",
+                      data.health ? (data.health.message ?? "无") : "未连接",
+                    ],
                   ].map(([label, value]) => (
                     <TableRow key={label}>
                       <TableCell>{label}</TableCell>
@@ -425,34 +463,40 @@ export function Observability() {
                   value={number(data.usage.costUsd)}
                 />
               </dl>
-              {data.tools.length ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>工具</TableHead>
-                      <TableHead>调用次数</TableHead>
-                      <TableHead>失败次数</TableHead>
-                      <TableHead>失败率</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.tools.map((tool) => (
-                      <TableRow key={tool.name}>
-                        <TableCell className="max-w-md font-mono break-all whitespace-normal">
-                          {tool.name}
-                        </TableCell>
-                        <TableCell>{tool.calls}</TableCell>
-                        <TableCell>{tool.failed}</TableCell>
-                        <TableCell>
-                          {number((tool.failed / tool.calls) * 100)}%
-                        </TableCell>
+              <div className="list-body">
+                {data.tools.length ? (
+                  <Table className="stacked-table tool-list">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>工具</TableHead>
+                        <TableHead>调用次数</TableHead>
+                        <TableHead>失败次数</TableHead>
+                        <TableHead>失败率</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <Blank>该时间范围内暂无工具调用</Blank>
-              )}
+                    </TableHeader>
+                    <TableBody>
+                      {data.tools.map((tool) => (
+                        <TableRow key={tool.name}>
+                          <TableCell className="max-w-md font-mono break-all whitespace-normal">
+                            {tool.name}
+                          </TableCell>
+                          <TableCell data-label="调用次数">
+                            {tool.calls}
+                          </TableCell>
+                          <TableCell data-label="失败次数">
+                            {tool.failed}
+                          </TableCell>
+                          <TableCell data-label="失败率">
+                            {number((tool.failed / tool.calls) * 100)}%
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Blank>该时间范围内暂无工具调用</Blank>
+                )}
+              </div>
             </>
           )}
         </TabsContent>
@@ -480,54 +524,61 @@ export function Observability() {
             />
           </form>
           <Failure error={errors.error} />
-          {errors.data?.items.length ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>发生时间</TableHead>
-                  <TableHead>阶段 / 代码</TableHead>
-                  <TableHead>错误信息</TableHead>
-                  <TableHead>执行</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {errors.data.items.map((log) => (
-                  <TableRow key={log.id}>
-                    <TableCell className="text-xs">
-                      {date(log.occurredAt)}
-                    </TableCell>
-                    <TableCell>
-                      <div>{log.stage}</div>
-                      <div className="text-xs text-destructive">{log.code}</div>
-                    </TableCell>
-                    <TableCell className="max-w-lg break-words whitespace-normal">
-                      {log.message}
-                    </TableCell>
-                    <TableCell>
-                      {log.sessionId ? (
-                        <Link
-                          to={`/tasks/${log.sessionId}?tab=diagnostics${log.runId ? `&run=${log.runId}` : ""}&return=${encodeURIComponent(`/observability?${params}`)}`}
-                          className="inline-flex items-center gap-1 text-info underline"
-                        >
-                          查看
-                          <ArrowUpRight className="size-3.5" />
-                        </Link>
-                      ) : (
-                        "无关联执行"
-                      )}
-                    </TableCell>
+          <div className="list-body">
+            {errors.data?.items.length ? (
+              <Table className="stacked-table error-list">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>发生时间</TableHead>
+                    <TableHead>阶段 / 代码</TableHead>
+                    <TableHead>错误信息</TableHead>
+                    <TableHead>执行</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : !errors.loading && !errors.error ? (
-            <Blank>该时间范围内暂无错误</Blank>
-          ) : errors.loading ? (
-            <Skeleton className="h-48" />
-          ) : null}
+                </TableHeader>
+                <TableBody>
+                  {errors.data.items.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell data-label="发生时间" className="text-xs">
+                        {date(log.occurredAt)}
+                      </TableCell>
+                      <TableCell data-label="阶段 / 代码">
+                        <div>{log.stage}</div>
+                        <div className="text-xs text-destructive">
+                          {log.code}
+                        </div>
+                      </TableCell>
+                      <TableCell
+                        data-label="错误信息"
+                        className="max-w-lg break-words whitespace-normal"
+                      >
+                        {log.message}
+                      </TableCell>
+                      <TableCell data-label="执行">
+                        {log.sessionId ? (
+                          <Link
+                            to={`/tasks/${log.sessionId}?tab=diagnostics${log.runId ? `&run=${log.runId}` : ""}&return=${encodeURIComponent(`/observability?${params}`)}`}
+                            className="inline-flex items-center gap-1 text-info underline"
+                          >
+                            查看
+                            <ArrowUpRight className="size-3.5" />
+                          </Link>
+                        ) : (
+                          "无关联执行"
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : !errors.loading && !errors.error ? (
+              <Blank>该时间范围内暂无错误</Blank>
+            ) : errors.loading ? (
+              <Skeleton className="h-48" />
+            ) : null}
+          </div>
         </TabsContent>
       </Tabs>
-      {data && (
+      {data && tab === "engine" && (
         <section className="mt-8 border-t pt-6">
           <h2 className="text-sm font-medium">网关基础指标 · 本实例</h2>
           <dl className="metric-band mt-5">

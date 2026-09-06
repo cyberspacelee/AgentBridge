@@ -79,6 +79,28 @@ export class PiAdapter implements EngineAdapter {
   };
   private generation = 0;
   constructor(private config: Config) {}
+  private get configDirectory() {
+    return (
+      process.env.ENGINE_B_CONFIG_DIR ??
+      path.join(this.config.dataDirectory, "pi")
+    );
+  }
+  async models() {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+    const models = await ModelRuntime.create({
+      authPath: path.join(this.configDirectory, "auth.json"),
+      modelsPath: path.join(this.configDirectory, "models.json"),
+      modelsStorePath: path.join(this.configDirectory, "models-store.json"),
+      allowModelNetwork: false,
+    });
+    if (models.getError())
+      throw engineError("Pi model configuration could not be loaded");
+    return models.getAvailableSnapshot().map((model) => ({
+      providerID: model.provider,
+      modelID: model.id,
+      name: model.name,
+    }));
+  }
   health() {
     return {
       ...this.state,
@@ -160,9 +182,7 @@ export class PiAdapter implements EngineAdapter {
       session.directory,
       {
         ...process.env,
-        PI_CODING_AGENT_DIR:
-          process.env.ENGINE_B_CONFIG_DIR ??
-          path.join(this.config.dataDirectory, "pi"),
+        PI_CODING_AGENT_DIR: this.configDirectory,
         PI_TELEMETRY: "0",
         AGENT_BRIDGE_PERMISSION_POLICY: session.interactionPolicy.permission,
       },

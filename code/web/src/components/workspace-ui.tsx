@@ -114,11 +114,33 @@ export function CopyText({
     <IconButton
       label={result || label}
       disabled={!text}
-      onClick={() => {
-        void navigator.clipboard.writeText(text).then(
-          () => setResult("已复制"),
-          () => setResult("复制失败")
-        )
+      onClick={async () => {
+        try {
+          if (navigator.clipboard) await navigator.clipboard.writeText(text)
+          else {
+            // LAN HTTP pages cannot use the secure-context Clipboard API.
+            const active = document.activeElement as HTMLElement | null
+            const field = document.createElement("textarea")
+            field.value = text
+            field.readOnly = true
+            Object.assign(field.style, {
+              position: "fixed",
+              opacity: "0",
+              fontSize: "16px",
+            })
+            ;(active?.closest('[role="dialog"]') ?? document.body).append(field)
+            try {
+              field.select()
+              if (!document.execCommand("copy")) throw new Error("Copy failed")
+            } finally {
+              field.remove()
+              active?.focus({ preventScroll: true })
+            }
+          }
+          setResult("已复制")
+        } catch {
+          setResult("复制失败")
+        }
       }}
     >
       {result === "已复制" ? <Check /> : <Copy />}
@@ -190,7 +212,7 @@ export function Failure({ error }: { error?: Error | null }) {
 }
 export function Blank({ children }: { children: ReactNode }) {
   return (
-    <Empty className="min-h-48">
+    <Empty className="workspace-empty">
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <Inbox />
@@ -205,21 +227,28 @@ export function Choice({
   value,
   options,
   onChange,
+  id,
+  disabled,
+  invalid,
 }: {
   label: string
   value: string
   options: { value: string; label: string }[]
   onChange: (value: string) => void
+  id?: string
+  disabled?: boolean
+  invalid?: boolean
 }) {
   return (
     <Select
       items={options}
       value={value}
+      disabled={disabled}
       onValueChange={(v) => {
         if (v !== null) onChange(v)
       }}
     >
-      <SelectTrigger aria-label={label}>
+      <SelectTrigger id={id} aria-label={label} aria-invalid={invalid}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
