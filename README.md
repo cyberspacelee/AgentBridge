@@ -104,6 +104,12 @@ pnpm test:browser
 
 Playwright 自动启动独立测试服务，覆盖桌面和手机视口。原生引擎测试需显式启用，见 [安装与验收](INSTRUCTION.md)。逐页截图、问题修复记录和验证边界见 [UI QA 报告](code/artifacts/ui/qa/README.md)。两个引擎均已完成真实模型最小请求验证，尚未逐一验证所有模型、Office 外部链路和 Windows 实机。
 
+## 仓库文件管理
+
+源码、依赖锁文件、项目设计规范和经审查的 QA 证据纳入版本管理。依赖目录、构建输出、运行数据、认证配置和自动测试报告由 `.gitignore` 排除；交付用 `solution.zip` 按需生成，使用 GitHub Release 附件分发。
+
+Hallmark 是可选的个人设计工具，本项目忽略其安装目录 `.agents/skills/hallmark/`、状态目录 `.hallmark/` 和当前仅记录该工具的 `skills-lock.json`。项目自有的共享技能可按需提交；若以后统一管理团队技能，应恢复跟踪相应技能锁文件并记录安装方式。`design.md` 是项目设计规范，继续保留。
+
 ## 常见问题
 
 **`Pi prompt failed`**：查看任务诊断中的实际错误。本轮遇到的原因是隔离 Pi 配置缺少认证，底层返回 `No API key found for the selected model`。设置正确的 `ENGINE_B_CONFIG_DIR` 或补齐该目录的认证后重启服务，再提交任务。
