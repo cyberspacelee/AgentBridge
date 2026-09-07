@@ -4,14 +4,6 @@ import { SessionRuntime } from "./runtime/sessions.js";
 import { OpenCodeAdapter } from "./engines/opencode/adapter.js";
 import { PiAdapter } from "./engines/pi/adapter.js";
 import { createServer } from "./gateway/server.js";
-import { loadEnvFile } from "node:process";
-
-try {
-  loadEnvFile();
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
-
 const config = readConfig();
 const adapters = [new OpenCodeAdapter(config), new PiAdapter(config)];
 const store = new Store(config.database, config.limits.maxEventBytes);

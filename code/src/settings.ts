@@ -19,8 +19,12 @@ import {
   type SettingsView,
 } from "../shared/settings.js";
 import type { Config } from "./config.js";
-import { GatewayError } from "./errors.js";
-import { startProcess, stopProcess } from "./engines/process.js";
+import { GatewayError, errorDetail } from "./errors.js";
+import {
+  startProcess,
+  stopProcess,
+  processDiagnostic,
+} from "./engines/process.js";
 import { within } from "./async.js";
 
 export function readJson(file: string): Record<string, unknown> {
@@ -336,22 +340,22 @@ export class SettingsManager {
       child.stdin.end();
       await within(
         new Promise<void>((resolve, reject) => {
-          child!.once("error", () =>
+          child!.once("error", (error) =>
             reject(
               new GatewayError(
                 "ENGINE_ERROR",
-                "Pi package command could not start",
+                `Pi package command could not start: ${errorDetail(error, diagnosticSecrets(this.config))}`,
                 502,
               ),
             ),
           );
-          child!.once("exit", (code) =>
+          child!.once("close", (code) =>
             code === 0
               ? resolve()
               : reject(
                   new GatewayError(
                     "ENGINE_ERROR",
-                    `Pi ${action} failed (exit ${code}); check the package source and network`,
+                    `Pi ${action} failed: ${errorDetail(processDiagnostic(child!), diagnosticSecrets(this.config))}`,
                     502,
                   ),
                 ),

@@ -2,7 +2,7 @@
 
 本目录是 pnpm workspace 安装和命令入口。项目介绍、模型认证、局域网访问及常见问题见[根目录 README](../README.md)，完整配置和 API 调用见[安装与验收](../INSTRUCTION.md)。
 
-需要 Node.js >= 22.19.0、pnpm 10.33.2。在本目录执行：
+需要 Node.js >= 22.21.0、pnpm 10.33.2。在本目录执行：
 
 ```sh
 pnpm install --frozen-lockfile

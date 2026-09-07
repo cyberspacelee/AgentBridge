@@ -25,6 +25,12 @@ test("diagnostics preserve provider and Windows filesystem errors while redactin
     "Authorization: Bearer [REDACTED]",
   );
   assert.ok(!errorDetail("api_key=private-value").includes("private-value"));
+  assert.equal(
+    errorDetail(
+      "https://private-token@registry.example/ _authToken=npm-private",
+    ),
+    "https://[REDACTED]@registry.example/ _authToken=[REDACTED]",
+  );
   assert.match(
     errorDetail(
       new Error("fetch failed", {
@@ -48,5 +54,8 @@ test("diagnostics preserve provider and Windows filesystem errors while redactin
   circular.cause = circular;
   assert.ok(errorDetail(circular).length < 2000);
   assert.ok(errorDetail("x".repeat(10000) + " final failure").length <= 2000);
-  assert.match(errorDetail("x".repeat(10000) + " final failure"), /final failure$/);
+  assert.match(
+    errorDetail("x".repeat(10000) + " final failure"),
+    /final failure$/,
+  );
 });

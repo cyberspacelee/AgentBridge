@@ -16,7 +16,7 @@ AgentBridge 将 Pi 和 OpenCode 接入同一个任务工作台，提供统一 HT
 
 ## 快速启动
 
-需要 Node.js **>= 22.19.0** 和 pnpm **10.33.2**。安装入口是 `code/`，Pi 和 OpenCode CLI 均由项目依赖提供。
+需要 Node.js **>= 22.21.0** 和 pnpm **10.33.2**。安装入口是 `code/`，Pi 和 OpenCode CLI 均由项目依赖提供。
 
 ```sh
 cd code

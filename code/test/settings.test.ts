@@ -231,3 +231,40 @@ test("Pi uses selected local configuration and installs, loads and removes a loc
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Pi package failures preserve npm diagnostics without exposing credentials", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-npm-error-"));
+  try {
+    const npm = path.join(directory, "npm.mjs");
+    await writeFile(
+      npm,
+      `process.stderr.write('npm error E407 proxy authentication required https://user:private-proxy@proxy.example:8080 _authToken=private-npm-token\\n'); process.exitCode = 1;`,
+    );
+    await writeFile(
+      path.join(directory, "settings.json"),
+      JSON.stringify({ npmCommand: [process.execPath, npm] }),
+    );
+    const manager = new SettingsManager(
+      readConfig([], {
+        AGENT_DATA_DIR: path.join(directory, "bridge"),
+        ENGINE_B_CONFIG_DIR: directory,
+      }),
+    );
+    await assert.rejects(
+      manager.packageOperation({
+        action: "install",
+        source: "npm:bridge-network-check@1.0.0",
+      }),
+      (error: Error) => {
+        assert.match(error.message, /E407/);
+        assert.match(error.message, /proxy authentication required/);
+        assert.ok(!error.message.includes("private-proxy"));
+        assert.ok(!error.message.includes("private-npm-token"));
+        assert.ok(error.message.length < 2100);
+        return true;
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -74,10 +74,10 @@ export function errorDetail(value: unknown, secrets: string[] = []): string {
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/-]+=*/gi, "$1 [REDACTED]")
     .replace(/\bsk-[A-Za-z0-9_-]+/g, "[REDACTED]")
     .replace(
-      /(\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi,
+      /(\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|_auth(?:token)?|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi,
       "$1[REDACTED]",
     )
-    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/[\x00-\x1f\x7f]/g, " ");
   return message.length <= 2000
     ? message
