@@ -5,7 +5,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createParser } from "eventsource-parser";
 import { z } from "zod";
 import type { Config } from "../../config.js";
-import type { EngineAdapter, EngineResult, EngineUpdate } from "../adapter.js";
+import type {
+  EngineAdapter,
+  EngineBindingResult,
+  EngineResult,
+  EngineUpdate,
+} from "../adapter.js";
 import type {
   EngineHealth,
   Interaction,
@@ -283,21 +288,34 @@ export class OpenCodeAdapter implements EngineAdapter {
     this.sessions.set(session.id, { session, nativeId });
     return { nativeSessionId: nativeId, processGeneration: this.generation };
   }
-  async recoverSession(id: string) {
-    const native = this.sessions.get(id);
-    if (!native || this.state.status !== "ready") return null;
-    const session = object(
+  async recoverSession(session: Session, binding: EngineBindingResult) {
+    if (this.state.status !== "ready") return null;
+    const native = object(
       await this.request(
-        `/session/${encodeURIComponent(native.nativeId)}`,
+        `/session/${encodeURIComponent(binding.nativeSessionId)}`,
         "GET",
         undefined,
-        native.session.directory,
+        session.directory,
       ),
     );
-    if (session.id !== native.nativeId)
+    if (
+      native.id !== binding.nativeSessionId ||
+      native.directory !== session.directory
+    )
       throw engineError("OpenCode session recovery mismatch");
+    this.sessions.set(session.id, {
+      session,
+      nativeId: binding.nativeSessionId,
+    });
+    try {
+      // An external server can still be executing work from the previous gateway.
+      await this.abort(session.id);
+    } catch (error) {
+      this.sessions.delete(session.id);
+      throw error;
+    }
     return {
-      nativeSessionId: native.nativeId,
+      nativeSessionId: binding.nativeSessionId,
       processGeneration: this.generation,
     };
   }
@@ -645,9 +663,7 @@ export class OpenCodeAdapter implements EngineAdapter {
     if (this.child)
       await stopProcess(this.child, this.config.limits.abortTimeoutMs);
     else
-      await Promise.all(
-        [...this.sessions.keys()].map((id) => this.disposeSession(id)),
-      );
+      await Promise.all([...this.sessions.keys()].map((id) => this.abort(id)));
     await this.streamJob;
   }
 }

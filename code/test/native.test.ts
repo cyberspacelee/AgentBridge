@@ -26,8 +26,9 @@ for (const engine of ["pi", "opencode"] as const)
       const config = readConfig(["--engine", engine], {
         ...process.env,
         AGENT_DATA_DIR: path.join(directory, "data"),
+        ENGINE_A_PASSWORD: "native-smoke-secret",
       });
-      const adapter =
+      let adapter =
         engine === "pi" ? new PiAdapter(config) : new OpenCodeAdapter(config);
       const session: Session = {
         id: randomUUID(),
@@ -50,12 +51,94 @@ for (const engine of ["pi", "opencode"] as const)
           await adapter.stop();
           await adapter.start();
         }
-        const recovered = await adapter.recoverSession(session.id);
+        const recovered = await adapter.recoverSession(session, binding);
         assert.ok(
           recovered && recovered.processGeneration > binding.processGeneration,
         );
+        assert.equal(recovered.nativeSessionId, binding.nativeSessionId);
+        await adapter.stop();
+        adapter =
+          engine === "pi" ? new PiAdapter(config) : new OpenCodeAdapter(config);
+        await adapter.start();
+        const cold = await adapter.recoverSession(session, recovered);
+        assert.equal(cold?.nativeSessionId, binding.nativeSessionId);
+        if (engine === "pi") {
+          await adapter.stop();
+          const file = path.join(
+            config.dataDirectory,
+            "pi-sessions",
+            `${session.id}.jsonl`,
+          );
+          const history = await readFile(file, "utf8");
+          const failing = new PiAdapter({
+            ...config,
+            pi: { ...config.pi, command: process.execPath },
+          });
+          try {
+            await failing.start();
+            await assert.rejects(failing.recoverSession(session, binding));
+            assert.equal(await readFile(file, "utf8"), history);
+            assert.equal(failing.health().processes, 0);
+          } finally {
+            await failing.stop();
+          }
+          await adapter.start();
+          assert.equal(
+            (await adapter.recoverSession(session, binding))?.nativeSessionId,
+            binding.nativeSessionId,
+          );
+        }
+        if (engine === "opencode") {
+          for (let restart = 0; restart < 2; restart++) {
+            const external = new OpenCodeAdapter({
+              ...config,
+              opencode: { ...config.opencode, managed: false },
+            });
+            try {
+              await external.start();
+              await assert.rejects(
+                external.recoverSession(
+                  { ...session, directory: path.join(directory, "wrong") },
+                  binding,
+                ),
+              );
+              assert.equal(
+                (await external.recoverSession(session, binding))
+                  ?.nativeSessionId,
+                binding.nativeSessionId,
+              );
+            } finally {
+              await external.stop();
+            }
+          }
+        }
         await adapter.abort(session.id, randomUUID());
         await adapter.disposeSession(session.id);
+        if (engine === "pi") {
+          const file = path.join(
+            config.dataDirectory,
+            "pi-sessions",
+            `${session.id}.jsonl`,
+          );
+          await assert.rejects(adapter.recoverSession(session, binding));
+          await assert.rejects(readFile(file), { code: "ENOENT" });
+          for (const content of [
+            "",
+            "invalid history\n",
+            JSON.stringify({
+              type: "session",
+              version: 3,
+              id: randomUUID(),
+              timestamp: new Date().toISOString(),
+              cwd: directory,
+            }) + "\n",
+          ]) {
+            await writeFile(file, content);
+            await assert.rejects(adapter.recoverSession(session, binding));
+            assert.equal(await readFile(file, "utf8"), content);
+            assert.equal(adapter.health().processes, 0);
+          }
+        }
       } finally {
         await adapter.stop();
         await rm(directory, { recursive: true, force: true });
@@ -75,11 +158,27 @@ for (const engine of ["pi", "opencode"] as const)
       const output = path.join(directory, "result.txt");
       let toolRequests = 0;
       let rejectModel = false;
+      let recoveredHistory = false;
       const server = createServer(async (req, res) => {
         try {
           const chunks: Buffer[] = [];
           for await (const chunk of req) chunks.push(Buffer.from(chunk));
           const body = JSON.parse(Buffer.concat(chunks).toString());
+          if (
+            body.messages.some((message: { content: unknown }) =>
+              JSON.stringify(message.content).includes(
+                "Continue after gateway restart",
+              ),
+            )
+          ) {
+            recoveredHistory = body.messages.some(
+              (message: { role: string; content: unknown }) =>
+                message.role === "assistant" &&
+                JSON.stringify(message.content).includes(
+                  "Native execution complete.",
+                ),
+            );
+          }
           if (rejectModel) {
             res.writeHead(401, { "content-type": "application/json" });
             res.end(
@@ -174,7 +273,7 @@ for (const engine of ["pi", "opencode"] as const)
         AGENT_DATA_DIR: path.join(directory, "data"),
         AGENT_LIMITS: JSON.stringify({ runTimeoutMs: 45000 }),
       });
-      const store = new Store(":memory:");
+      let store = new Store(config.database);
       const settings = new SettingsManager(config);
       const initial = settings.view();
       settings.save({
@@ -195,7 +294,7 @@ for (const engine of ["pi", "opencode"] as const)
       });
       const adapter =
         engine === "pi" ? new PiAdapter(config) : new OpenCodeAdapter(config);
-      const runtime = new SessionRuntime(store, adapter, config);
+      let runtime = new SessionRuntime(store, adapter, config);
       try {
         await runtime.start();
         const accepted = await runtime.submit(
@@ -245,6 +344,57 @@ for (const engine of ["pi", "opencode"] as const)
         );
         assert.equal(messages.at(-1)?.finishReason, "stop");
         assert.ok(messages.at(-1)?.parts.some((p) => p.type === "step-finish"));
+        const originalBinding = store.db
+          .prepare(
+            "SELECT nativeSessionId FROM engine_bindings WHERE sessionId=?",
+          )
+          .get(accepted.sessionId)!;
+        await runtime.stop();
+        store.close();
+        store = new Store(config.database);
+        runtime = new SessionRuntime(
+          store,
+          engine === "pi" ? new PiAdapter(config) : new OpenCodeAdapter(config),
+          config,
+        );
+        await runtime.start();
+        await within(
+          (async () => {
+            while (runtime.session(accepted.sessionId).availability !== "ready")
+              await delay(50);
+          })(),
+          15000,
+        );
+        assert.equal(
+          store.db
+            .prepare(
+              "SELECT nativeSessionId FROM engine_bindings WHERE sessionId=?",
+            )
+            .get(accepted.sessionId)!.nativeSessionId,
+          originalBinding.nativeSessionId,
+        );
+        const continued = await runtime.submit(
+          {
+            submissionId: randomUUID(),
+            model: { providerID: "bridge", modelID: "bridge-test" },
+            parts: [{ type: "text", text: "Continue after gateway restart" }],
+          },
+          accepted.sessionId,
+        );
+        assert.equal(
+          (await within(runtime.wait(continued.runId), 20000)).state,
+          "completed",
+        );
+        assert.equal(
+          recoveredHistory,
+          true,
+          "Native model history was lost across gateway restart",
+        );
+        assert.equal(
+          toolRequests,
+          1,
+          "Gateway replayed the original tool execution",
+        );
         rejectModel = true;
         const rejected = await runtime.submit(
           createTaskSchema.parse({

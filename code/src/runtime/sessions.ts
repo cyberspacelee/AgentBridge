@@ -557,8 +557,31 @@ export class SessionRuntime {
               session.id,
               (this.repairAttempts.get(session.id) ?? 0) + 1,
             );
+            const persisted = this.store.db
+              .prepare("SELECT * FROM engine_bindings WHERE sessionId=?")
+              .get(session.id);
+            if (
+              !persisted ||
+              persisted.engineId !== session.engineId ||
+              persisted.directory !== session.directory ||
+              typeof persisted.nativeSessionId !== "string" ||
+              !persisted.nativeSessionId
+            ) {
+              this.repairAttempts.set(session.id, 2);
+              this.log(
+                "error",
+                "recovery",
+                "BAD_GATEWAY",
+                "Native session binding is missing or inconsistent",
+                session.id,
+              );
+              continue;
+            }
             const repair = adapter
-              .recoverSession(session.id)
+              .recoverSession(session, {
+                nativeSessionId: persisted.nativeSessionId,
+                processGeneration: Number(persisted.processGeneration),
+              })
               .then((binding) => {
                 const current = this.store.get("sessions", session.id);
                 if (!binding) {

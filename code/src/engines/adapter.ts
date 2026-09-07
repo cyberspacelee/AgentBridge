@@ -29,7 +29,10 @@ export interface EngineAdapter {
   unavailableSessions?(): string[];
   start(): Promise<void>;
   createSession(session: Session): Promise<EngineBindingResult>;
-  recoverSession?(sessionId: string): Promise<EngineBindingResult | null>;
+  recoverSession?(
+    session: Session,
+    binding: EngineBindingResult,
+  ): Promise<EngineBindingResult | null>;
   run(
     session: Session,
     run: Run,

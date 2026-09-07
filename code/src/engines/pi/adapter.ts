@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, open, rm, writeFile } from "node:fs/promises";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { z } from "zod";
 import type { Config } from "../../config.js";
-import type { EngineAdapter, EngineResult, EngineUpdate } from "../adapter.js";
+import type {
+  EngineAdapter,
+  EngineBindingResult,
+  EngineResult,
+  EngineUpdate,
+} from "../adapter.js";
 import type {
   EngineHealth,
   Interaction,
@@ -188,17 +193,21 @@ export class PiAdapter implements EngineAdapter {
     await mkdir(path.join(this.config.dataDirectory, "pi-sessions"), {
       recursive: true,
     });
+    // Pi initializes an existing empty file immediately, before the first model response.
+    await writeFile(this.sessionFile(session.id), "", { flag: "wx" });
+    return this.openSession(session);
+  }
+  private sessionFile(id: string) {
+    return path.join(this.config.dataDirectory, "pi-sessions", `${id}.jsonl`);
+  }
+  private async openSession(session: Session, expectedNativeId?: string) {
     const child = startProcess(
       this.config.pi.command,
       [
         "--mode",
         "rpc",
         "--session",
-        path.join(
-          this.config.dataDirectory,
-          "pi-sessions",
-          `${session.id}.jsonl`,
-        ),
+        this.sessionFile(session.id),
         "--extension",
         path.join(codeRoot, "tools/pi-extension.mjs"),
         ...readSettings(this.config)
@@ -270,6 +279,8 @@ export class PiAdapter implements EngineAdapter {
     try {
       const state = await this.command(rpc, "get_state");
       rpc.nativeId = z.string().min(1).parse(object(state.data).sessionId);
+      if (expectedNativeId && rpc.nativeId !== expectedNativeId)
+        throw engineError("Pi session recovery mismatch");
       const commands = object(
         (await this.command(rpc, "get_commands")).data,
       ).commands;
@@ -283,16 +294,36 @@ export class PiAdapter implements EngineAdapter {
         processGeneration: rpc.generation,
       };
     } catch (error) {
-      await this.disposeSession(session.id);
+      await stopProcess(rpc.child, this.config.limits.abortTimeoutMs);
+      this.sessions.delete(session.id);
       throw error;
     }
   }
-  async recoverSession(id: string) {
-    const rpc = this.sessions.get(id);
-    if (!rpc) return null;
-    await stopProcess(rpc.child, this.config.limits.abortTimeoutMs);
-    this.state.restarts++;
-    return this.createSession(rpc.session);
+  async recoverSession(session: Session, binding: EngineBindingResult) {
+    if (this.state.status !== "ready") return null;
+    const rpc = this.sessions.get(session.id);
+    if (rpc) {
+      await stopProcess(rpc.child, this.config.limits.abortTimeoutMs);
+      this.state.restarts++;
+    }
+    // Validate the persisted identity before Pi can append startup records.
+    const file = await open(this.sessionFile(session.id), "r");
+    try {
+      let header: Record<string, unknown> | undefined;
+      for await (const line of file.readLines()) {
+        header = object(JSON.parse(line));
+        break;
+      }
+      if (
+        header?.type !== "session" ||
+        header.id !== binding.nativeSessionId ||
+        header.cwd !== session.directory
+      )
+        throw engineError("Pi session recovery mismatch");
+    } finally {
+      await file.close();
+    }
+    return this.openSession(session, binding.nativeSessionId);
   }
   private command(
     rpc: RpcSession,
@@ -597,15 +628,14 @@ export class PiAdapter implements EngineAdapter {
     const rpc = this.sessions.get(id);
     if (rpc) await stopProcess(rpc.child, this.config.limits.abortTimeoutMs);
     this.sessions.delete(id);
-    await rm(
-      path.join(this.config.dataDirectory, "pi-sessions", `${id}.jsonl`),
-      { force: true },
-    );
+    await rm(this.sessionFile(id), { force: true });
   }
   async stop() {
     this.state.status = "stopping";
     await Promise.all(
-      [...this.sessions.keys()].map((id) => this.disposeSession(id)),
+      [...this.sessions.values()].map((rpc) =>
+        stopProcess(rpc.child, this.config.limits.abortTimeoutMs),
+      ),
     );
   }
 }

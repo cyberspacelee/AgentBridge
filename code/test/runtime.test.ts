@@ -10,6 +10,7 @@ import { Store } from "../src/storage/sqlite.js";
 import { SessionRuntime, within } from "../src/runtime/sessions.js";
 import type {
   EngineAdapter,
+  EngineBindingResult,
   EngineResult,
   EngineUpdate,
 } from "../src/engines/adapter.js";
@@ -39,11 +40,12 @@ class ControlledEngine implements EngineAdapter {
   unavailableSessions() {
     return [...this.failures];
   }
-  async recoverSession(id: string) {
-    if (!this.sessions.has(id)) return null;
+  async recoverSession(session: Session, binding: EngineBindingResult) {
+    const id = session.id;
+    this.sessions.add(id);
     this.failures.delete(id);
     this.recovered.push(id);
-    return { nativeSessionId: randomUUID(), processGeneration: 2 };
+    return { ...binding, processGeneration: 2 };
   }
   executions = new Map<
     string,
@@ -189,15 +191,13 @@ test("engine Error messages survive database and JSON serialization", async () =
   try {
     const accepted = await f.runtime.submit(input(f.directory));
     await until(() => f.adapter.executions.has(accepted.sessionId));
-    f.adapter.executions
-      .get(accepted.sessionId)!
-      .resolve({
-        outcome: "failed",
-        error: engineError("Provider refused request", {
-          statusCode: 401,
-          message: "invalid credentials",
-        }),
-      });
+    f.adapter.executions.get(accepted.sessionId)!.resolve({
+      outcome: "failed",
+      error: engineError("Provider refused request", {
+        statusCode: 401,
+        message: "invalid credentials",
+      }),
+    });
     await f.runtime.wait(accepted.runId);
     const persisted = JSON.parse(JSON.stringify(f.runtime.run(accepted.runId)));
     assert.deepEqual(persisted.error, {
@@ -768,5 +768,102 @@ test("native failure recovery never replays a previously accepted execution", as
     assert.equal(f.runtime.run(first.runId).state, "failed");
   } finally {
     await f.close();
+  }
+});
+
+test("gateway restart rebuilds both engines from durable bindings without replaying runs", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-recovery-"));
+  const config = readConfig([], { AGENT_DATA_DIR: directory });
+  const engines = () =>
+    ["pi", "opencode"].map((id) => {
+      const engine = new ControlledEngine();
+      engine.id = id;
+      return engine;
+    });
+  let adapters = engines();
+  let store = new Store(config.database);
+  let runtime = new SessionRuntime(store, adapters[0]!, config, [adapters[1]!]);
+  try {
+    await runtime.start();
+    const originals = [];
+    for (const adapter of adapters) {
+      const accepted = await runtime.submit({
+        ...input(directory),
+        engineId: adapter.id as "pi" | "opencode",
+      });
+      await until(() => adapter.executions.has(accepted.sessionId));
+      adapter.complete(accepted.sessionId);
+      await runtime.wait(accepted.runId);
+      originals.push({
+        ...accepted,
+        nativeId: store.db
+          .prepare(
+            "SELECT nativeSessionId FROM engine_bindings WHERE sessionId=?",
+          )
+          .get(accepted.sessionId)!.nativeSessionId,
+      });
+    }
+    const missing = await runtime.createSession({ directory, engineId: "pi" });
+    const mismatch = await runtime.createSession({
+      directory,
+      engineId: "opencode",
+    });
+    await runtime.stop();
+    store.db
+      .prepare("DELETE FROM engine_bindings WHERE sessionId=?")
+      .run(missing.id);
+    store.db
+      .prepare("UPDATE engine_bindings SET directory=? WHERE sessionId=?")
+      .run(path.join(directory, "wrong"), mismatch.id);
+    const interrupted = {
+      ...runtime.run(originals[0]!.runId),
+      id: randomUUID(),
+      sequence: 2,
+      state: "running" as const,
+      finishedAt: null,
+    };
+    store.transaction(() => store.put("runs", interrupted));
+    const previousInstance = store.instanceId;
+    store.close();
+    adapters = engines();
+    store = new Store(config.database);
+    runtime = new SessionRuntime(store, adapters[0]!, config, [adapters[1]!]);
+    await runtime.start();
+    await until(() =>
+      originals.every(
+        (item) => runtime.session(item.sessionId).availability === "ready",
+      ),
+    );
+    assert.notEqual(store.instanceId, previousInstance);
+    assert.equal(runtime.run(interrupted.id).error?.code, "GATEWAY_RESTARTED");
+    assert.equal(runtime.run(interrupted.id).state, "failed");
+    assert.equal(runtime.session(missing.id).availability, "unavailable");
+    assert.equal(runtime.session(mismatch.id).availability, "unavailable");
+    for (const [index, original] of originals.entries()) {
+      const adapter = adapters[index]!;
+      assert.deepEqual(adapter.starts, []);
+      assert.deepEqual(adapter.recovered, [original.sessionId]);
+      assert.equal(runtime.run(original.runId).state, "completed");
+      const binding = store.db
+        .prepare("SELECT * FROM engine_bindings WHERE sessionId=?")
+        .get(original.sessionId)!;
+      assert.equal(binding.nativeSessionId, original.nativeId);
+      assert.equal(binding.instanceId, store.instanceId);
+      assert.equal(binding.processGeneration, 2);
+      const next = await runtime.submit(
+        {
+          submissionId: randomUUID(),
+          parts: [{ type: "text", text: "continue" }],
+        },
+        original.sessionId,
+      );
+      await until(() => adapter.executions.has(original.sessionId));
+      adapter.complete(original.sessionId);
+      assert.equal((await runtime.wait(next.runId)).state, "completed");
+    }
+  } finally {
+    await runtime.stop();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
