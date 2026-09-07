@@ -219,7 +219,7 @@ pnpm start --engine pi --host 127.0.0.1 --port 3000
 
 观测页面包括执行结果/排队/P50/P95、引擎状态/进程/重启、网关 RSS/堆/事件循环、工具失败、Token/费用及缺失覆盖、错误下钻、HTTP 状态、SSE 连接/字节/背压断开、SQLite 和事件保留量。`GET /metrics` 提供 Prometheus 格式。引擎子进程内存目前为未知。
 
-stdout 和 `.agentbridge/logs/` 输出 JSON 日志，按 10 MiB/天轮转，保留当前文件及 5 个历史文件。SQLite 错误日志最多保留 10,000 条。正文和密钥不进入常规请求日志。
+stdout 和 `.agentbridge/logs/` 输出 JSON 日志，`time` 使用 UTC ISO 8601 格式（例如 `2026-09-07T08:30:00.123Z`）。文件按 10 MiB/天轮转，保留当前文件及 5 个历史文件。SQLite 错误日志最多保留 10,000 条。正文和密钥不进入常规请求日志。
 
 ### 模型失败与 Windows 目录排查
 

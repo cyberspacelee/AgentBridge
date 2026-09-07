@@ -74,6 +74,7 @@ export function createServer(runtime: SessionRuntime) {
   });
   const logger = pino(
     {
+      timestamp: pino.stdTimeFunctions.isoTime,
       redact: [
         "req.headers.authorization",
         "req.headers.cookie",
