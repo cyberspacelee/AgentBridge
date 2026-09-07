@@ -71,8 +71,16 @@ export function diagnosticSecrets(config: Config): string[] {
   ];
   // Invalid settings must not hide the error we are trying to report.
   try {
+    const settings = readSettings(config);
     values.push(
-      ...readSettings(config).providers.map((provider) => provider.apiKey),
+      ...settings.providers.map((provider) => provider.apiKey),
+      ...settings.mcp.flatMap((mcp) =>
+        Object.values(
+          mcp.config.type === "local"
+            ? mcp.config.environment
+            : mcp.config.headers,
+        ),
+      ),
     );
   } catch {}
   return values;
@@ -145,7 +153,9 @@ export function opencodeEnvironment(config: Config) {
       mcp: {
         ...z.record(z.string(), z.unknown()).parse(content.mcp || {}),
         ...Object.fromEntries(
-          settings.mcp.map((m) => [m.id, { ...m.config, enabled: m.enabled }]),
+          settings.mcp
+            .filter((m) => m.engine !== "pi")
+            .map((m) => [m.id, { ...m.config, enabled: m.enabled }]),
         ),
       },
     }),
@@ -158,8 +168,174 @@ const restartSnapshot = (settings: Settings) =>
     settings.opencodeConfigFile,
     settings.providers,
     settings.skills.filter((skill) => skill.engine !== "pi"),
-    settings.mcp,
+    settings.mcp.filter((mcp) => mcp.engine !== "pi"),
   ]);
+
+export function piMcpConfiguration(settings: Settings) {
+  const environment: NodeJS.ProcessEnv = {};
+  const servers = Object.fromEntries(
+    settings.mcp
+      .filter((m) => m.engine !== "opencode")
+      .map((m) => {
+        const literal = (field: string, value: string) => {
+          const key = `AGENT_BRIDGE_MCP_SECRET_${createHash("sha256")
+            .update(JSON.stringify([m.id, field]))
+            .digest("hex")}`;
+          environment[key] = value;
+          // The adapter expands {env:NAME} last, after checking for command secrets.
+          return `{env:${key}}`;
+        };
+        const entries = (field: string, values: Record<string, string>) =>
+          Object.fromEntries(
+            Object.entries(values).map(([key, value]) => [
+              key,
+              literal(`${field}.${key}`, value),
+            ]),
+          );
+        return [
+          m.id,
+          {
+            ...(m.config.type === "local"
+              ? {
+                  command: m.config.command[0],
+                  args: m.config.command
+                    .slice(1)
+                    .map((value, index) => literal(`args.${index}`, value)),
+                  env: entries("env", m.config.environment),
+                }
+              : {
+                  url: literal("url", m.config.url),
+                  headers: entries("headers", m.config.headers),
+                }),
+            disabled: !m.enabled,
+          },
+        ];
+      }),
+  );
+  return { servers, environment };
+}
+
+type ConfigWrite = { file: string; value: unknown };
+function piMcpWrites(
+  config: Config,
+  settings: Settings,
+  previous?: Settings,
+): ConfigWrite[] {
+  const directory = piDirectory(config, settings);
+  const targets = new Map([[directory, piMcpConfiguration(settings).servers]]);
+  if (previous && piDirectory(config, previous) !== directory)
+    targets.set(piDirectory(config, previous), {});
+  return [...targets].flatMap(([target, generated]) => {
+    const file = path.join(target, "mcp.json");
+    if (!Object.keys(generated).length && !existsSync(file)) return [];
+    let native: Record<string, unknown>;
+    try {
+      native = readJson(file);
+    } catch (error) {
+      // Native JSONC remains the extension's concern when no managed entries need syncing.
+      if (
+        !Object.keys(generated).length &&
+        !previous?.mcp.some((m) => m.engine !== "opencode")
+      )
+        return [];
+      throw error;
+    }
+    const ownership = z
+      .object({ owner: z.string(), servers: z.array(z.string()) })
+      .optional()
+      .parse(native._agentbridge);
+    if (
+      !Object.keys(generated).length &&
+      ownership?.owner !== config.dataDirectory
+    )
+      return [];
+    if (ownership && ownership.owner !== config.dataDirectory)
+      throw new GatewayError(
+        "CONFLICT",
+        `Pi MCP configuration is managed by another gateway: ${file}`,
+        409,
+      );
+    const servers = {
+      ...z
+        .record(z.string(), z.unknown())
+        .parse(native.mcpServers ?? native["mcp-servers"] ?? {}),
+    };
+    for (const id of Object.keys(generated))
+      if (Object.hasOwn(servers, id) && !ownership?.servers.includes(id))
+        throw new GatewayError(
+          "CONFLICT",
+          `Pi MCP server ${id} already exists in ${file}; use another name`,
+          409,
+        );
+    for (const id of ownership?.servers ?? []) delete servers[id];
+    const value = {
+      ...native,
+      mcpServers: { ...servers, ...generated },
+      _agentbridge: {
+        owner: config.dataDirectory,
+        servers: Object.keys(generated),
+      },
+    };
+    return JSON.stringify(native) === JSON.stringify(value)
+      ? []
+      : [{ file, value }];
+  });
+}
+
+function writeConfigFiles(writes: ConfigWrite[]) {
+  const staged: {
+    file: string;
+    temporary: string;
+    previous?: Buffer;
+    committed: boolean;
+  }[] = [];
+  try {
+    for (const { file, value } of writes) {
+      const previous = existsSync(file) ? readFileSync(file) : undefined;
+      mkdirSync(path.dirname(file), { recursive: true });
+      const item = {
+        file,
+        temporary: `${file}.${randomUUID()}.tmp`,
+        previous,
+        committed: false,
+      };
+      staged.push(item);
+      writeFileSync(item.temporary, JSON.stringify(value, null, 2) + "\n", {
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
+    for (const item of staged) {
+      renameSync(item.temporary, item.file);
+      item.committed = true;
+    }
+  } catch (error) {
+    // Restore derived files if committing the gateway settings fails.
+    for (const item of staged.reverse()) {
+      if (!item.committed) continue;
+      if (item.previous === undefined) rmSync(item.file, { force: true });
+      else {
+        writeFileSync(item.temporary, item.previous, {
+          mode: 0o600,
+          flag: "wx",
+        });
+        renameSync(item.temporary, item.file);
+      }
+    }
+    throw new GatewayError(
+      "CONFIGURATION_ERROR",
+      `Could not save configuration: ${errorDetail(error)}`,
+      500,
+    );
+  } finally {
+    for (const item of staged) rmSync(item.temporary, { force: true });
+  }
+}
+
+export function syncPiMcp(config: Config, settings = readSettings(config)) {
+  writeConfigFiles(piMcpWrites(config, settings));
+  return piMcpConfiguration(settings).environment;
+}
 
 export class SettingsManager {
   private initial: string;
@@ -191,6 +367,27 @@ export class SettingsManager {
       "opencode",
       "opencode.json",
     );
+    const directory = piDirectory(this.config, settings);
+    const adapterDetected = packages.some((item) => {
+      const source = typeof item === "string" ? item : item.source;
+      if (/^npm:pi-mcp-adapter(?:@|$)/.test(source))
+        return existsSync(
+          path.join(directory, "npm/node_modules/pi-mcp-adapter/package.json"),
+        );
+      if (/^(npm:|git:|https?:|ssh:|git@)/.test(source)) return false;
+      const manifest = path.resolve(
+        directory,
+        source.startsWith("~/")
+          ? path.join(os.homedir(), source.slice(2))
+          : source,
+        "package.json",
+      );
+      try {
+        return readJson(manifest).name === "pi-mcp-adapter";
+      } catch {
+        return false;
+      }
+    });
     return {
       settings: safe,
       revision: revision(settings),
@@ -205,6 +402,13 @@ export class SettingsManager {
       effectivePiDirectory: piDirectory(this.config, settings),
       externalOpenCode: !this.config.opencode.managed,
       environmentProvider: !!this.config.compatibleProvider,
+      piMcp: {
+        configFile: path.join(directory, "mcp.json"),
+        adapterDetected,
+        serverCount: settings.mcp.filter(
+          (m) => m.engine !== "opencode" && m.enabled,
+        ).length,
+      },
       packages: packages.map((item) => {
         const source = typeof item === "string" ? item : item.source;
         return /^(npm:|git:|https?:|ssh:|git@)/.test(source)
@@ -279,18 +483,13 @@ export class SettingsManager {
           400,
         );
     }
-    const file = path.join(this.config.dataDirectory, "settings.json");
-    mkdirSync(path.dirname(file), { recursive: true });
-    const temporary = `${file}.${randomUUID()}.tmp`;
-    try {
-      writeFileSync(temporary, JSON.stringify(settings, null, 2) + "\n", {
-        mode: 0o600,
-        flag: "wx",
-      });
-      renameSync(temporary, file);
-    } finally {
-      rmSync(temporary, { force: true });
-    }
+    writeConfigFiles([
+      ...piMcpWrites(this.config, settings, previous),
+      {
+        file: path.join(this.config.dataDirectory, "settings.json"),
+        value: settings,
+      },
+    ]);
     return this.view();
   }
   async packageOperation(input: unknown) {

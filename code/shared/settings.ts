@@ -65,6 +65,7 @@ const secrets = z.record(name, z.string().max(8192));
 export const mcpSchema = z
   .object({
     id: name,
+    engine: z.enum(["both", "pi", "opencode"]).default("opencode"),
     enabled: z.boolean().default(true),
     config: z.discriminatedUnion("type", [
       z
@@ -115,5 +116,6 @@ export interface SettingsView {
   externalOpenCode: boolean;
   environmentProvider: boolean;
   packages: string[];
+  piMcp: { configFile: string; adapterDetected: boolean; serverCount: number };
 }
 export const hiddenSecret = "********";

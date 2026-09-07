@@ -31,6 +31,7 @@ import {
 import { codeRoot, toolInstructions } from "../tool-instructions.js";
 import {
   piDirectory,
+  syncPiMcp,
   piProviders,
   readSettings,
   diagnosticSecrets,
@@ -201,6 +202,8 @@ export class PiAdapter implements EngineAdapter {
     return path.join(this.config.dataDirectory, "pi-sessions", `${id}.jsonl`);
   }
   private async openSession(session: Session, expectedNativeId?: string) {
+    const settings = readSettings(this.config);
+    const mcpEnvironment = syncPiMcp(this.config, settings);
     const child = startProcess(
       this.config.pi.command,
       [
@@ -210,10 +213,8 @@ export class PiAdapter implements EngineAdapter {
         this.sessionFile(session.id),
         "--extension",
         path.join(codeRoot, "tools/pi-extension.mjs"),
-        ...readSettings(this.config)
-          .skills.filter(
-            (skill) => skill.enabled && skill.engine !== "opencode",
-          )
+        ...settings.skills
+          .filter((skill) => skill.enabled && skill.engine !== "opencode")
           .flatMap((skill) => ["--skill", skill.path]),
         "--no-prompt-templates",
         "--no-context-files",
@@ -225,6 +226,7 @@ export class PiAdapter implements EngineAdapter {
       session.directory,
       {
         ...process.env,
+        ...mcpEnvironment,
         PI_CODING_AGENT_DIR: this.configDirectory,
         PI_TELEMETRY: "0",
         AGENT_BRIDGE_PERMISSION_POLICY: session.interactionPolicy.permission,
@@ -289,6 +291,15 @@ export class PiAdapter implements EngineAdapter {
         !commands.some((command) => object(command).name === "bridge_health")
       )
         throw engineError("Pi interaction extension did not load");
+      if (
+        settings.mcp.some((m) => m.engine !== "opencode" && m.enabled) &&
+        !commands.some((command) => object(command).name === "mcp")
+      )
+        throw engineError(
+          "Pi MCP is configured but pi-mcp-adapter did not load; install the extension in the selected Pi directory",
+          processDiagnostic(child),
+          diagnosticSecrets(this.config),
+        );
       return {
         nativeSessionId: rpc.nativeId,
         processGeneration: rpc.generation,

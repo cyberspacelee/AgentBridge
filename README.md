@@ -7,7 +7,7 @@ AgentBridge 将 Pi 和 OpenCode 接入同一个任务工作台，提供统一 HT
 ## 功能
 
 - 按任务选择 Pi 或 OpenCode，并从对应引擎的可用目录中选择供应商和模型。
-- 配置页面管理 OpenAI 兼容模型、Skill 目录、OpenCode MCP 和 Pi 插件；支持 `.env` 及用户原生配置。
+- 配置页面管理 OpenAI 兼容模型、Skill 目录、Pi/OpenCode MCP 和 Pi 插件；支持 `.env` 及用户原生配置。
 - 创建、搜索、筛选任务，查看流式输出、工具调用、交互记录和诊断，支持追加执行、停止与删除。
 - 查看和下载交付物，处理权限审批与反问。
 - 按引擎查看执行结果、资源、工具、Token/费用和异常，提供 Prometheus 指标。
@@ -47,9 +47,9 @@ pnpm start --engine pi
 
 打开 [任务工作台](http://127.0.0.1:3000/tasks) 或 [运行观测](http://127.0.0.1:3000/observability)。服务同时注册两个引擎，`--engine` 只指定未显式选择时的默认引擎，默认值为 `opencode`；新任务切换引擎无需重启。
 
-访问 `/settings` 管理 OpenAI 兼容模型、Skill 目录、OpenCode MCP 和 Pi 插件。也可在 `code/.env` 配置，字段见 [env 示例](code/.env.example)。办公能力由安装的 skill 或 MCP 提供，网关不再内置 Office/Python 工具。完整配置见 [安装与验收](INSTRUCTION.md)。
+访问 `/settings` 管理 OpenAI 兼容模型、Skill 目录、Pi/OpenCode MCP 和 Pi 插件。也可在 `code/.env` 配置，字段见 [env 示例](code/.env.example)。办公能力由安装的 skill 或 MCP 提供，网关不再内置 Office/Python 工具。完整配置见 [安装与验收](INSTRUCTION.md)。
 
-页面配置保存在 `AGENT_DATA_DIR/settings.json`，API Key 保存后只返回掩码。Pi 变更对新建任务生效；OpenCode 变更需要重启网关并新建任务。Pi 的 MCP/subagent 需安装对应插件并遵循插件自身的配置格式；本地 Skill 管理仅增删目录引用，不删除原文件。配置优先级、示例和接口见[配置使用示例](INSTRUCTION.md#配置使用示例)与[配置管理-api](INSTRUCTION.md#配置管理-api)。
+页面配置保存在 `AGENT_DATA_DIR/settings.json`，API Key 保存后只返回掩码。MCP 可选择适用引擎；Pi 自动生成当前配置目录下的 `mcp.json`（默认 `AGENT_DATA_DIR/pi/mcp.json`），并通过 `pi-mcp-adapter` 加载，缺少扩展时页面提供安装入口。Pi 变更对新建任务生效；OpenCode 变更需要重启网关并新建任务。本地 Skill 管理仅增删目录引用，不删除原文件。配置优先级、示例和接口见[配置使用示例](INSTRUCTION.md#配置使用示例)与[配置管理-api](INSTRUCTION.md#配置管理-api)。
 
 ## 局域网访问
 

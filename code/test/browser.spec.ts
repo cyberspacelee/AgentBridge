@@ -144,6 +144,8 @@ test("settings persist models, skills and MCP with masked secrets", async ({
   await page.getByRole("tab", { name: "MCP", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();
   await page.getByLabel("名称", { exact: true }).fill(`office-mcp-${suffix}`);
+  await page.getByRole("combobox", { name: "MCP 引擎", exact: true }).click();
+  await page.getByRole("option", { name: "Pi", exact: true }).click();
   await page
     .getByLabel("命令和参数（JSON 数组）")
     .fill('["node", "office-server.mjs"]');
@@ -154,6 +156,12 @@ test("settings persist models, skills and MCP with masked secrets", async ({
       name: `配置操作 office-mcp-${suffix}`,
       exact: true,
     }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Pi MCP 配置文件")).toHaveValue(
+    /[/\\]pi[/\\]mcp\.json$/,
+  );
+  await expect(
+    page.getByRole("button", { name: "安装 MCP 扩展", exact: true }),
   ).toBeVisible();
   await captureQa(page, `settings-mcp-${suffix}`);
   await page.getByRole("tab", { name: "Pi 插件", exact: true }).click();

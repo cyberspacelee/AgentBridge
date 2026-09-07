@@ -44,9 +44,11 @@ OpenCode 使用其官方 provider 配置和环境变量。Pi 默认隔离个人�
 
 OpenCode 自动读取用户原生 JSON/JSONC 配置及认证，也可在页面指定额外配置文件。Pi 页面可选择用户 `~/.pi/agent` 或其他目录，直接复用该目录的模型、认证、skills 和插件；`ENGINE_B_CONFIG_DIR` 优先于页面选择。页面添加的模型通过扩展注册，不改写用户的 `models.json`。
 
-Skills 管理登记本地目录，支持两个引擎或单一引擎、启用/禁用和移除引用，保留原目录和附件；目录内容遵循原生 `SKILL.md` 格式。原生配置已加载的资源仍由原生配置管理。OpenCode MCP 支持 stdio 命令数组与环境变量，或远程 HTTP URL 与请求头。MCP 的环境变量和请求头保存后均被掩码。
+Skills 管理登记本地目录，支持两个引擎或单一引擎、启用/禁用和移除引用，保留原目录和附件；目录内容遵循原生 `SKILL.md` 格式。原生配置已加载的资源仍由原生配置管理。MCP 支持 stdio 命令数组与环境变量，或远程 HTTP URL 与请求头，可选择 Pi、OpenCode 或两个引擎；旧配置缺省保持 OpenCode。MCP 的环境变量和请求头保存后均被掩码。
 
-Pi 插件页调用锁定版本的 `pi install/remove`，支持 `npm:`、`git:`、HTTPS 或本地绝对路径；写入当前显示的 Pi 配置目录。选个人目录时安装/卸载也作用于该目录。Pi 的 MCP/subagent 由插件提供，插件的配置格式、RPC 兼容性和能力以插件自身文档为准；网关不内置 MCP 客户端或 subagent 调度器。
+选择 Pi 后，保存配置及启动新 Pi 进程时自动同步实际 Pi 配置目录中的 `mcp.json`，默认位置为 `AGENT_DATA_DIR/pi/mcp.json`，无需手工生成。网关转换命令、参数、环境变量和 HTTP 请求头，通过 `PI_CODING_AGENT_DIR` 交给 `pi-mcp-adapter` 读取；Pi 的工作目录仍是任务目录。生成的参数、URL 和凭据使用网关注入的环境变量引用，只在网关启动的 Pi 进程中解析。`mcp.json` 保留其他手工服务器及扩展顶层设置，`_agentbridge` 记录网关管理的条目；删除、切换引擎或配置目录会清理对应生成条目，禁用会写入 `disabled`。手工同名服务器会阻止保存，需改用其他名称；已有文件须为有效 JSON，含注释的 JSONC 文件需先转为 JSON。
+
+Pi 插件页调用锁定版本的 `pi install/remove`，支持 `npm:`、`git:`、HTTPS 或本地绝对路径；写入当前显示的 Pi 配置目录。选个人目录时安装/卸载也作用于该目录。MCP 页面未检测到扩展时提供安装 `npm:pi-mcp-adapter@2.32.1` 的入口；配置保存不会触发网络安装。生成文件不等于扩展已加载或服务已连接；启用了 Pi MCP 但扩展未加载时，新任务会给出安装提示。Pi 的 MCP/subagent 由插件提供，网关不内置 MCP 客户端或 subagent 调度器。
 
 Pi 配置和插件变更对新建任务生效；OpenCode 变更需重启网关并新建任务，页面显示待重启状态。外部 `ENGINE_A_URL` 服务需在其部署端应用配置。重启会终止运行中的任务并使旧会话不可继续，先完成当前任务。内置 Office 工具及 Python 依赖已移除，办公任务需要自行接入 skill 或 MCP。
 
@@ -88,7 +90,7 @@ AGENT_MODEL={"providerID":"company","modelID":"model-one"}
 
 在“Skills”中登记 `/absolute/path/company-skills`，选择 `OpenCode + Pi` 或单一引擎。`SKILL.md` 按原生格式提供名称、描述和任务说明，脚本与附件留在原目录。移除引用只停止网关显式加载该目录；若原生配置也引用了它，仍须在原生配置中移除。网关不下载或自动编写 Skill 文件。
 
-OpenCode MCP 本地连接表单分别填写命令数组和环境变量对象，例如：
+MCP 本地连接表单分别填写适用引擎、命令数组和环境变量对象，例如：
 
 ```json
 ["node", "/absolute/path/office-mcp/server.mjs"]
@@ -129,6 +131,7 @@ Pi 插件来源支持 `npm:package-name@version`、`git:github.com/owner/repo@ta
   "skills": [{"id":"office","path":"/absolute/path/company-skills","engine":"both","enabled":true}],
   "mcp": [{
     "id": "office",
+    "engine": "both",
     "enabled": true,
     "config": {"type":"local","command":["node","/absolute/path/office-mcp/server.mjs"],"environment":{}}
   }]
@@ -247,7 +250,7 @@ pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-办公 skill/MCP 的验证按所安装集成的测试说明执行。
+办公 skill/MCP 的验证按所安装集成的测试说明执行。验证网关与实际 Pi MCP 扩展的集成时，可设置 `AGENT_MCP_ADAPTER_PATH` 为已安装的 `pi-mcp-adapter@2.32.1` 包目录，在 `code` 下运行 `pnpm exec tsx --test test/pi-mcp.test.ts`；测试使用临时 Pi 配置和本地 stdio/HTTP 服务，不请求模型，也不改动个人配置。不设置该变量时仅运行配置同步测试。
 
 原生 smoke 不发起模型调用，验证创建、RPC/HTTP、强停、恢复和删除。PowerShell：
 

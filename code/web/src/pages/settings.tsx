@@ -180,7 +180,7 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
               ? "OpenAI 兼容模型"
               : kind === "skills"
                 ? "Skills"
-                : "MCP · OpenCode"}
+                : "MCP"}
           </h2>
           <Button
             variant="outline"
@@ -221,9 +221,7 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
                       ? `${item.baseUrl} · ${item.models.map((model) => model.id).join(", ")}`
                       : "path" in item
                         ? `${item.path} · ${item.engine}`
-                        : item.config.type === "remote"
-                          ? item.config.url
-                          : item.config.command.join(" ")}
+                        : `${item.config.type === "remote" ? item.config.url : item.config.command.join(" ")} · ${item.engine === "both" ? "OpenCode + Pi" : item.engine === "pi" ? "Pi" : "OpenCode"}`}
                   </TableCell>
                   <TableCell data-label="启用">
                     <Switch
@@ -276,7 +274,9 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
                                 description:
                                   kind === "skills"
                                     ? "移除网关中的 Skill 引用，保留原目录及附件。原生配置中的引用不受影响。"
-                                    : "删除网关中的此项配置。原生文件和环境变量配置不受影响；配置变更的生效范围保持不变。",
+                                    : kind === "mcp"
+                                      ? "删除此项 MCP 配置，并清理 Pi 文件中由网关生成的对应条目。其他手工配置保留。"
+                                      : "删除网关中的此项配置。原生文件和环境变量配置不受影响；配置变更的生效范围保持不变。",
                                 label: "确认删除",
                                 execute: () =>
                                   save({
@@ -427,9 +427,35 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
         <TabsContent value="skills">{rows("skills")}</TabsContent>
         <TabsContent value="mcp">
           {rows("mcp")}
-          <p className="py-4 text-sm text-muted-foreground">
-            Pi MCP 由已安装插件提供，使用对应插件的配置文件。
-          </p>
+          {view.piMcp && (
+            <div className="flex flex-col gap-3 py-4">
+              <Field>
+                <FieldLabel htmlFor="pi-mcp-config">Pi MCP 配置文件</FieldLabel>
+                <Input
+                  id="pi-mcp-config"
+                  readOnly
+                  value={view.piMcp.configFile}
+                />
+              </Field>
+              {view.piMcp.serverCount > 0 && !view.piMcp.adapterDetected && (
+                <Notice title="未检测到 pi-mcp-adapter">
+                  <p>Pi MCP 配置已生成；当前 Pi 目录需要安装该扩展。</p>
+                  <Button
+                    className="mt-2 w-fit"
+                    type="button"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void packageAction("install", "npm:pi-mcp-adapter@2.32.1")
+                    }
+                  >
+                    <Download data-icon="inline-start" />
+                    安装 MCP 扩展
+                  </Button>
+                </Notice>
+              )}
+            </div>
+          )}
         </TabsContent>
         <TabsContent value="pi">
           <form
@@ -589,7 +615,7 @@ function EntryEditor({
     ]
   )
   const [path, setPath] = useState(skill?.path ?? "")
-  const [engine, setEngine] = useState(skill?.engine ?? "both")
+  const [engine, setEngine] = useState(skill?.engine ?? mcp?.engine ?? "both")
   const [mcpType, setMcpType] = useState(mcp?.config.type ?? "local")
   const [endpoint, setEndpoint] = useState(
     mcp?.config.type === "remote" ? mcp.config.url : ""
@@ -656,6 +682,7 @@ function EntryEditor({
             ? skillSchema.parse({ id, path, engine, enabled })
             : mcpSchema.parse({
                 id,
+                engine,
                 enabled,
                 config:
                   mcpType === "local"
@@ -885,6 +912,23 @@ function EntryEditor({
           )}
           {kind === "mcp" && (
             <>
+              <Field>
+                <FieldLabel htmlFor="mcp-engine">适用引擎</FieldLabel>
+                <Choice
+                  id="mcp-engine"
+                  label="MCP 引擎"
+                  invalid={!!invalid.engine}
+                  aria-describedby={invalid.engine ? "engine-error" : undefined}
+                  value={engine}
+                  onChange={(value) => setEngine(value as typeof engine)}
+                  options={[
+                    { value: "both", label: "OpenCode + Pi" },
+                    { value: "opencode", label: "OpenCode" },
+                    { value: "pi", label: "Pi" },
+                  ]}
+                />
+                {fieldError("engine")}
+              </Field>
               <Field>
                 <FieldLabel htmlFor="mcp-type">连接类型</FieldLabel>
                 <Choice
