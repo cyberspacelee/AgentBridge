@@ -8,6 +8,8 @@
 
 ## 1. 产品与设计方向
 
+基础组件选型、业务封装边界和本轮迁移清单统一见 [UI 组件统一规范](docs/design/UI_COMPONENTS.md)。能用 shadcn/ui 实现的基础交互必须复用组件层。
+
 AgentBridge 是任务执行、人工决策、结果交付与故障定位的工作台。优先服务两个连续流程：业务使用者提交要求、处理审批、取得文件；运维使用者查看负载、定位失败 Run、回到任务。
 
 - Genre：modern-minimal；应用结构：Workbench。中性灰白底、明确文字层级、细分隔线、紧凑表格。
@@ -225,7 +227,7 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
 
 焦点环立即出现，2 px、offset 2 px；图标动作有 aria-label 和 Tooltip，hover 延迟 800 ms、键盘焦点立即可用。Dialog 有标题与必要说明，关闭恢复触发点焦点。可见焦点不能被粘性输入区遮住。
 
-动效只使用 CSS 的颜色 / opacity，120–180 ms，无页面入场动画、文字 shimmer、弹跳或 hover 缩放。`prefers-reduced-motion` 停止加载旋转，状态文字继续呈现；禁止 transition-all。成功通常就地更新，复制成功可短暂提示，错误保留可恢复入口。
+动效只使用 CSS 的颜色 / opacity，120–180 ms，无页面入场动画、文字 shimmer、弹跳或 hover 缩放。`prefers-reduced-motion` 停止加载旋转，状态文字继续呈现；禁止 transition-all。保存、复制、安装等即时反馈统一使用 Sonner；持续状态及可恢复错误使用 Alert，字段错误使用 FieldError，危险确认使用 AlertDialog。
 
 页面只显示任务、结果、状态和决策相关文字，不将设计理念、功能介绍或快捷键教学搬进产品。状态为空、加载失败、断线保留数据、无匹配项、任务被删除、文件失效分别设计。
 

@@ -29,6 +29,21 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/App.tsx', 'src/pages/**/*.tsx', 'src/components/*.tsx'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [{ group: ['@base-ui/react', '@base-ui/react/*', '@radix-ui/*'], message: 'Use the shadcn components in @/components/ui.' }] }],
+      'no-restricted-syntax': ['error',
+        { selector: 'JSXOpeningElement[name.name=/^(button|input|textarea|select|option|dialog|details|summary|hr)$/]', message: 'Use the matching shadcn/ui component.' },
+        { selector: 'CallExpression[callee.object.name=/^(window|globalThis)$/][callee.property.name=/^(alert|confirm|prompt)$/]', message: 'Use AlertDialog, Dialog or Sonner.' },
+        { selector: 'JSXAttribute[name.name="role"][value.value=/^(dialog|alertdialog|tab|tablist|menu|menuitem|switch|checkbox|radio|combobox)$/]', message: 'Use a shadcn primitive for this interaction role.' },
+      ],
+    },
+  },
+  {
+    files: ['src/components/ui/combobox.tsx'],
+    rules: { 'react-refresh/only-export-components': ['error', { allowExportNames: ['useComboboxAnchor'] }] },
+  },
+  {
     files: ['src/components/workspace-ui.tsx'],
     rules: {
       'react-refresh/only-export-components': ['error', { allowExportNames: ['labels', 'date', 'number', 'duration', 'bytes'] }],

@@ -1,11 +1,17 @@
-import { useId, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react"
 import type { ToolPart } from "../../../shared/contracts"
 import { Button } from "@/components/ui/button"
 import { CopyText, ElapsedTime, Status } from "@/components/workspace-ui"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
 
 export function ToolCall({ part }: { part: ToolPart }) {
-  const id = useId()
   const failed = part.state === "failed" || part.state === "interrupted"
   const [view, setView] = useState({ failed, open: failed })
   const [limit, setLimit] = useState(4096)
@@ -44,13 +50,16 @@ export function ToolCall({ part }: { part: ToolPart }) {
     />
   )
   return (
-    <section className="tool-call" aria-label={`工具 ${part.name}`}>
-      <button
-        type="button"
+    <Collapsible
+      render={<section />}
+      className="tool-call"
+      aria-label={`工具 ${part.name}`}
+      open={view.open}
+      onOpenChange={(open) => setView({ failed, open })}
+    >
+      <CollapsibleTrigger
+        render={<Button variant="ghost" size="row" />}
         className="tool-summary"
-        aria-expanded={view.open}
-        aria-controls={id}
-        onClick={() => setView({ failed, open: !view.open })}
       >
         {view.open ? (
           <ChevronDown aria-hidden="true" />
@@ -64,21 +73,30 @@ export function ToolCall({ part }: { part: ToolPart }) {
         </span>
         <Status state={part.state} />
         <span className="tool-duration">{elapsed}</span>
-      </button>
-      {view.open && (
-        <div id={id} className="tool-content">
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted>
+        <Separator />
+        <div className="tool-content">
           <div className="flex items-center justify-between gap-2">
             <h3>{failed ? "错误详情" : "结果"}</h3>
             <CopyText text={part.output} label="复制已接收输出" />
           </div>
-          <pre tabIndex={0} aria-label="工具输出">
-            {result.visible ||
-              (part.state === "pending"
-                ? "尚未开始"
-                : part.state === "running"
-                  ? "等待工具输出"
-                  : "无文本输出")}
-          </pre>
+          <ScrollArea
+            viewportProps={{
+              className: "max-h-80",
+              tabIndex: 0,
+              "aria-label": "工具输出",
+            }}
+          >
+            <pre>
+              {result.visible ||
+                (part.state === "pending"
+                  ? "尚未开始"
+                  : part.state === "running"
+                    ? "等待工具输出"
+                    : "无文本输出")}
+            </pre>
+          </ScrollArea>
           {result.more && (
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-muted-foreground">预览已省略</span>
@@ -95,27 +113,45 @@ export function ToolCall({ part }: { part: ToolPart }) {
               </Button>
             </div>
           )}
-          <details>
-            <summary className="cursor-pointer py-2">输入</summary>
-            <pre tabIndex={0}>{JSON.stringify(part.input, null, 2)}</pre>
-          </details>
-          <details>
-            <summary className="cursor-pointer py-2">诊断</summary>
-            <dl className="metadata">
-              <dt>调用 ID</dt>
-              <dd className="font-mono">{part.toolCallId}</dd>
-              <dt>耗时</dt>
-              <dd>{elapsed}</dd>
-              {target && (
-                <>
-                  <dt>目标</dt>
-                  <dd className="font-mono">{target}</dd>
-                </>
-              )}
-            </dl>
-          </details>
+          <Collapsible>
+            <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+              <ChevronDown data-icon="inline-start" />
+              输入
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <ScrollArea
+                viewportProps={{
+                  className: "max-h-80",
+                  tabIndex: 0,
+                  "aria-label": "工具输入",
+                }}
+              >
+                <pre>{JSON.stringify(part.input, null, 2)}</pre>
+              </ScrollArea>
+            </CollapsibleContent>
+          </Collapsible>
+          <Collapsible>
+            <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+              <ChevronDown data-icon="inline-start" />
+              诊断
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <dl className="metadata">
+                <dt>调用 ID</dt>
+                <dd className="font-mono">{part.toolCallId}</dd>
+                <dt>耗时</dt>
+                <dd>{elapsed}</dd>
+                {target && (
+                  <>
+                    <dt>目标</dt>
+                    <dd className="font-mono">{target}</dd>
+                  </>
+                )}
+              </dl>
+            </CollapsibleContent>
+          </Collapsible>
         </div>
-      )}
-    </section>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }

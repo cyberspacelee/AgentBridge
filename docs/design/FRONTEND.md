@@ -2,6 +2,8 @@
 
 目标是可连续使用的任务工作台和网关观测系统。技术基线固定为 React、TypeScript、Vite、shadcn/ui Base UI 和 Tailwind CSS 4。组件通过官方 CLI 按需引入，不混用 Radix。
 
+基础组件选型、封装边界与整改验收见 [UI 组件统一规范](UI_COMPONENTS.md)。
+
 视觉与 Agent 组件的统一规则见 [design.md](../../design.md)，实施基线与进度见 [UI 整改记录](UI_REMEDIATION.md)。本文负责信息架构与行为；涉及颜色、字体、布局尺寸、消息 / Tool 结果呈现时以 design.md 为准。2026-09-06 已落地本轮视觉与 Agent UI 整改，检查证据及未覆盖的外部验收见 [验收记录](../../code/artifacts/ui/README.md)。
 
 ## 1. 应用结构

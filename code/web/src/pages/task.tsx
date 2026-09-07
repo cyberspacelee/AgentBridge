@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { toast } from "sonner"
 import {
   ArrowLeft,
   ArrowDown,
@@ -45,17 +46,38 @@ import {
   labels,
   number,
   Status,
+  ConfirmDialog,
+  Notice,
 } from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+  FieldLegend,
+} from "@/components/ui/field"
+import { Checkbox } from "@/components/ui/checkbox"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
@@ -77,6 +99,7 @@ export function Task() {
   const [action, setAction] = useState<"stop" | "delete" | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error>()
+  const [actionFocus, setActionFocus] = useState<HTMLElement | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [showInfo, setShowInfo] = useState(true)
   const [positions] = useState(
@@ -114,6 +137,7 @@ export function Task() {
         method: action === "stop" ? "POST" : "DELETE",
       })
       setAction(null)
+      toast.success(action === "delete" ? "任务已删除" : "停止请求已提交")
       if (action === "delete") navigate("/tasks")
       else query.reload()
     } catch (e) {
@@ -168,11 +192,22 @@ export function Task() {
                     ["queued", "running", "stopping"].includes(r.state)
                   )
                 }
-                onClick={() => setAction("stop")}
+                onClick={(event) => {
+                  setActionFocus(event.currentTarget)
+                  setError(undefined)
+                  setAction("stop")
+                }}
               >
                 <Square />
               </IconButton>
-              <IconButton label="删除任务" onClick={() => setAction("delete")}>
+              <IconButton
+                label="删除任务"
+                onClick={(event) => {
+                  setActionFocus(event.currentTarget)
+                  setError(undefined)
+                  setAction("delete")
+                }}
+              >
                 <Trash2 />
               </IconButton>
             </div>
@@ -367,60 +402,39 @@ export function Task() {
           </div>
         </>
       )}
-      <Dialog
+      <ConfirmDialog
         open={action !== null}
+        title={action === "delete" ? "删除任务" : "停止任务"}
+        description={
+          action === "delete"
+            ? "删除会话、执行记录与消息。工作目录中的文件会保留。"
+            : "停止当前执行并取消该任务中尚未开始的轮次。"
+        }
+        confirmLabel={action === "delete" ? "确认删除" : "确认停止"}
+        busy={busy}
+        error={error}
+        finalFocus={actionFocus}
         onOpenChange={(open) => {
-          if (!open && !busy) {
+          if (!open) {
             setAction(null)
             setError(undefined)
           }
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {action === "delete" ? "删除任务" : "停止任务"}
-            </DialogTitle>
-            <DialogDescription>
-              {action === "delete"
-                ? "删除会话、执行记录与消息。工作目录中的文件会保留。"
-                : "停止当前执行并取消该任务中尚未开始的轮次。"}
-            </DialogDescription>
-          </DialogHeader>
-          <Failure error={error} />
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setAction(null)}
-              disabled={busy}
-            >
-              返回
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => void confirm()}
-              disabled={busy}
-            >
-              {busy
-                ? "正在处理"
-                : action === "delete"
-                  ? "确认删除"
-                  : "确认停止"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={infoOpen} onOpenChange={setInfoOpen}>
-        <DialogContent
-          className="max-h-[90svh] overflow-y-auto"
+        onConfirm={() => void confirm()}
+      />
+      <Sheet open={infoOpen} onOpenChange={setInfoOpen}>
+        <SheetContent
+          className="overflow-y-auto"
           finalFocus={() =>
             document.querySelector<HTMLButtonElement>(
               'button[aria-label="任务信息"]'
             )
           }
         >
-          <DialogTitle>任务信息</DialogTitle>
-          <dl className="metadata">
+          <SheetHeader>
+            <SheetTitle>任务信息</SheetTitle>
+          </SheetHeader>
+          <dl className="metadata px-4 pb-4">
             <dt>工作目录</dt>
             <dd className="font-mono">{detail?.task.directory}</dd>
             <dt>引擎</dt>
@@ -443,8 +457,8 @@ export function Task() {
             <dt>费用 (USD)</dt>
             <dd>{number(selected?.usage?.costUsd)}</dd>
           </dl>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }
@@ -472,11 +486,15 @@ function Execution({
     const element = log.current
     if (!element || !runId) return
     const saved = positions.get(runId)
-    const scrollable = getComputedStyle(element).overflowY === "auto"
+    const scrollable = ["auto", "scroll"].includes(
+      getComputedStyle(element).overflowY
+    )
     if (scrollable) element.scrollTop = saved?.top ?? element.scrollHeight
     following.current = saved?.follow ?? true
     const track = () => {
-      const near = scrollable
+      const near = ["auto", "scroll"].includes(
+        getComputedStyle(element).overflowY
+      )
         ? element.scrollHeight - element.scrollTop - element.clientHeight <= 64
         : element.getBoundingClientRect().bottom <= innerHeight + 64
       following.current = near
@@ -500,7 +518,7 @@ function Execution({
       element &&
       follow &&
       following.current &&
-      getComputedStyle(element).overflowY === "auto"
+      ["auto", "scroll"].includes(getComputedStyle(element).overflowY)
     )
       element.scrollTop = element.scrollHeight
   }, [messages, follow])
@@ -520,11 +538,14 @@ function Execution({
           </FieldLabel>
         </Field>
       </div>
-      <div
-        className="execution-log"
-        ref={log}
-        tabIndex={0}
-        aria-label="执行消息"
+      <ScrollArea
+        className="execution-scroll"
+        viewportProps={{
+          className: "execution-log",
+          ref: log,
+          tabIndex: 0,
+          "aria-label": "执行消息",
+        }}
       >
         {messages.map((message) => (
           <AgentMessage key={message.id} message={message} />
@@ -534,14 +555,17 @@ function Execution({
         )}
         {children}
         <div ref={bottom} />
-      </div>
+      </ScrollArea>
       {!atBottom && (
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             const element = log.current
-            if (element && getComputedStyle(element).overflowY === "auto")
+            if (
+              element &&
+              ["auto", "scroll"].includes(getComputedStyle(element).overflowY)
+            )
               element.scrollTop = element.scrollHeight
             else bottom.current?.scrollIntoView({ block: "end" })
             following.current = true
@@ -618,9 +642,7 @@ function FollowUp({
         />
       </Field>
       <Failure error={error} />
-      {disabledReason && (
-        <p className="text-xs text-muted-foreground">{disabledReason}</p>
-      )}
+      {disabledReason && <Notice title={disabledReason} />}
       <div className="follow-up-actions">
         <span className="text-xs text-muted-foreground">
           {run && ["running", "queued", "stopping"].includes(run.state)
@@ -717,40 +739,85 @@ function InteractionRow({
             void reply({ answers })
           }}
         >
-          <fieldset disabled={busy || i.state !== "pending"}>
+          <FieldSet disabled={busy || i.state !== "pending"}>
             <FieldGroup>
               {i.questions.map((q, index) => (
-                <fieldset key={index}>
-                  <legend>{q.text}</legend>
+                <FieldSet key={index}>
+                  <FieldLegend id={`${i.id}-${index}-legend`} variant="label">
+                    {q.text}
+                  </FieldLegend>
                   {q.options.length ? (
-                    <div className="flex flex-wrap gap-4">
-                      {q.options.map((option) => (
-                        <label
-                          key={option}
-                          className="flex items-center gap-2 text-sm"
-                        >
-                          <input
-                            type={q.multiple ? "checkbox" : "radio"}
-                            name={`${i.id}-${index}`}
-                            checked={answers[index]?.includes(option) ?? false}
-                            onChange={(e) =>
-                              setAnswers((previous) =>
-                                previous.map((a, n) =>
-                                  n !== index
-                                    ? a
-                                    : q.multiple
-                                      ? e.target.checked
+                    q.multiple ? (
+                      <FieldGroup>
+                        {q.options.map((option, optionIndex) => (
+                          <Field
+                            key={option}
+                            orientation="horizontal"
+                            data-disabled={busy || i.state !== "pending"}
+                          >
+                            <Checkbox
+                              id={`${i.id}-${index}-${optionIndex}`}
+                              disabled={busy || i.state !== "pending"}
+                              checked={
+                                answers[index]?.includes(option) ?? false
+                              }
+                              onCheckedChange={(checked) =>
+                                setAnswers((previous) =>
+                                  previous.map((a, n) =>
+                                    n !== index
+                                      ? a
+                                      : checked
                                         ? [...a, option]
                                         : a.filter((v) => v !== option)
-                                      : [option]
+                                  )
                                 )
+                              }
+                            />
+                            <FieldLabel
+                              htmlFor={`${i.id}-${index}-${optionIndex}`}
+                            >
+                              {option}
+                            </FieldLabel>
+                          </Field>
+                        ))}
+                      </FieldGroup>
+                    ) : (
+                      <RadioGroup
+                        aria-labelledby={`${i.id}-${index}-legend`}
+                        disabled={busy || i.state !== "pending"}
+                        value={
+                          answers[index]?.find((answer) =>
+                            q.options.includes(answer)
+                          ) ?? null
+                        }
+                        onValueChange={(value) => {
+                          if (typeof value === "string")
+                            setAnswers((previous) =>
+                              previous.map((a, n) =>
+                                n === index ? [value] : a
                               )
-                            }
-                          />
-                          {option}
-                        </label>
-                      ))}
-                    </div>
+                            )
+                        }}
+                      >
+                        {q.options.map((option, optionIndex) => (
+                          <Field
+                            key={option}
+                            orientation="horizontal"
+                            data-disabled={busy || i.state !== "pending"}
+                          >
+                            <RadioGroupItem
+                              id={`${i.id}-${index}-${optionIndex}`}
+                              value={option}
+                            />
+                            <FieldLabel
+                              htmlFor={`${i.id}-${index}-${optionIndex}`}
+                            >
+                              {option}
+                            </FieldLabel>
+                          </Field>
+                        ))}
+                      </RadioGroup>
+                    )
                   ) : null}
                   {(q.allowCustom || !q.options.length) && (
                     <Input
@@ -779,7 +846,7 @@ function InteractionRow({
                       }
                     />
                   )}
-                </fieldset>
+                </FieldSet>
               ))}
             </FieldGroup>
             {i.state === "pending" && (
@@ -791,7 +858,7 @@ function InteractionRow({
                 提交回答
               </Button>
             )}
-          </fieldset>
+          </FieldSet>
         </form>
       )}
       {i.reply && (
@@ -882,12 +949,21 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
                       {a.displayName}
                     </span>
                   </div>
-                  <div
-                    className="mt-1 truncate text-xs text-muted-foreground"
-                    title={a.relativePath}
-                  >
-                    {a.relativePath}
-                  </div>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <div
+                          tabIndex={0}
+                          className="mt-1 truncate text-xs text-muted-foreground"
+                        />
+                      }
+                    >
+                      {a.relativePath}
+                    </TooltipTrigger>
+                    <TooltipContent className="break-all">
+                      {a.relativePath}
+                    </TooltipContent>
+                  </Tooltip>
                 </TableCell>
                 <TableCell data-label="大小">{bytes(a.sizeBytes)}</TableCell>
                 <TableCell data-label="可用性">
@@ -918,7 +994,7 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
                       disabled={downloading || a.availability !== "available"}
                       onClick={() => void download(a)}
                     >
-                      <Download className="size-4" />
+                      <Download />
                     </IconButton>
                   </div>
                 </TableCell>
@@ -945,9 +1021,17 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
           {content?.id === preview?.id ? (
             <>
               <Failure error={content?.error} />
-              <pre className="max-h-[65svh] overflow-auto text-xs break-words whitespace-pre-wrap">
-                {content?.text}
-              </pre>
+              <ScrollArea
+                viewportProps={{
+                  className: "max-h-[65svh]",
+                  tabIndex: 0,
+                  "aria-label": "文件预览",
+                }}
+              >
+                <pre className="text-xs break-words whitespace-pre-wrap">
+                  {content?.text}
+                </pre>
+              </ScrollArea>
             </>
           ) : (
             <Skeleton className="h-64" />
@@ -1010,14 +1094,22 @@ function Diagnostics({ run, revision }: { run: Run; revision: number }) {
       </Table>
       <h3 className="font-medium">错误日志</h3>
       {query.data?.logs.length ? (
-        query.data.logs.map((log) => (
-          <div key={log.id} className="border-b py-3">
-            <div className="mb-1 text-xs text-muted-foreground">
-              {date(log.occurredAt)} · {log.code}
+        <ScrollArea
+          viewportProps={{
+            className: "max-h-96",
+            tabIndex: 0,
+            "aria-label": "错误日志",
+          }}
+        >
+          {query.data.logs.map((log) => (
+            <div key={log.id} className="border-b py-3">
+              <div className="mb-1 text-xs text-muted-foreground">
+                {date(log.occurredAt)} · {log.code}
+              </div>
+              <p className="break-words">{log.message}</p>
             </div>
-            <p className="break-words">{log.message}</p>
-          </div>
-        ))
+          ))}
+        </ScrollArea>
       ) : (
         <Blank>本轮暂无错误日志</Blank>
       )}

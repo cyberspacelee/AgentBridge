@@ -18,13 +18,21 @@ import {
 } from "lucide-react"
 import type { RuntimeInfo } from "../../shared/contracts"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Choice, Failure, IconButton } from "@/components/workspace-ui"
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
+  Choice,
+  Failure,
+  IconButton,
+  Notice,
+  Status,
+} from "@/components/workspace-ui"
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+  SheetHeader,
+} from "@/components/ui/sheet"
+import { Toaster } from "@/components/ui/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -124,27 +132,22 @@ export default function App() {
               >
                 {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
               </IconButton>
-              <Dialog open={menuOpen} onOpenChange={setMenuOpen}>
-                <DialogTrigger
+              <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+                <SheetTrigger
                   render={<IconButton label="打开导航" className="lg:hidden" />}
                 >
                   <Menu />
-                </DialogTrigger>
-                <DialogContent className="navigation-dialog">
-                  <DialogTitle>AgentBridge</DialogTitle>
+                </SheetTrigger>
+                <SheetContent side="left" className="navigation-dialog">
+                  <SheetHeader>
+                    <SheetTitle>AgentBridge</SheetTitle>
+                  </SheetHeader>
                   {navigation}
-                </DialogContent>
-              </Dialog>
+                </SheetContent>
+              </Sheet>
               <span className="header-brand">AgentBridge</span>
-              <span
-                className={`connection connection-${events.state}`}
-                role="status"
-              >
-                {events.state === "live"
-                  ? "已连接"
-                  : events.state === "reconnecting"
-                    ? "连接中断，正在重连"
-                    : "正在连接"}
+              <span className="connection" role="status">
+                <Status state={events.state} />
               </span>
               <div className="header-runtime">
                 <Choice
@@ -164,8 +167,13 @@ export default function App() {
                 </IconButton>
               </div>
             </header>
-            {runtime.error && (
-              <div className="runtime-error">
+            {(runtime.error || events.state === "reconnecting") && (
+              <div className="runtime-error flex flex-col gap-2">
+                {events.state === "reconnecting" && (
+                  <Notice title="连接中断，正在重连">
+                    当前显示已接收的数据，连接恢复后自动更新。
+                  </Notice>
+                )}
                 <Failure error={runtime.error} />
               </div>
             )}
@@ -196,6 +204,7 @@ export default function App() {
               </Suspense>
             </main>
           </div>
+          <Toaster />
         </GatewayContext>
       </TooltipProvider>
     </BrowserRouter>

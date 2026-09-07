@@ -33,30 +33,12 @@
 .settings-section .settings-section-heading {
   padding-block: 0;
 }
-.settings-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.settings-list > li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-block: 16px;
-  border-top: 1px solid var(--border);
-}
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
-}
-.settings-status {
-  min-height: 28px;
-  font-size: 13px;
-  color: var(--muted-foreground);
-  overflow-wrap: anywhere;
 }
 .settings-page [data-slot="field"] {
   min-width: 0;
@@ -226,13 +208,6 @@
   .connection {
     @apply inline-flex items-center gap-2 whitespace-nowrap;
   }
-  .connection::before {
-    content: "";
-    @apply size-1.5 shrink-0 rounded-full bg-warning;
-  }
-  .connection-live::before {
-    @apply bg-success;
-  }
   .page {
     @apply mx-auto w-full max-w-[1500px] px-6 py-6;
   }
@@ -290,38 +265,11 @@
   .toolbar {
     @apply mb-4 flex flex-wrap items-center gap-3;
   }
-  .search-input {
-    @apply relative w-80 max-w-full;
-  }
-  .search-input > button {
-    @apply absolute inset-y-0 right-0 h-full w-11;
-  }
-  .search-input input {
-    @apply pr-12;
-  }
   .task-title {
     @apply block max-w-96 truncate font-medium hover:underline;
   }
   .pagination {
     @apply mt-4 flex items-center justify-between text-xs text-muted-foreground;
-  }
-  .status {
-    @apply inline-flex min-h-6 shrink-0 gap-1 rounded border-transparent bg-muted px-2 text-xs text-muted-foreground;
-  }
-  .status[data-tone="info"] {
-    @apply bg-info-soft text-info;
-  }
-  .status[data-tone="success"] {
-    @apply bg-success-soft text-success;
-  }
-  .status[data-tone="warning"] {
-    @apply bg-warning-soft text-warning;
-  }
-  .status[data-tone="danger"] {
-    @apply bg-destructive-soft text-destructive;
-  }
-  .status svg {
-    @apply size-3;
   }
   .status-spinner {
     @apply motion-safe:animate-spin;
@@ -345,7 +293,7 @@
     @apply text-sm font-medium;
   }
   .metadata {
-    @apply mt-5 space-y-2 text-xs;
+    @apply mt-5 flex flex-col gap-2 text-xs;
   }
   .metadata dt {
     @apply pt-2 text-muted-foreground;
@@ -386,10 +334,7 @@
     @apply my-3 min-w-0 rounded-lg border bg-card text-xs;
   }
   .tool-summary {
-    @apply flex min-h-10 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-muted;
-  }
-  .tool-summary > svg {
-    @apply size-4 shrink-0;
+    @apply items-center;
   }
   .tool-name {
     @apply min-w-0 flex-1;
@@ -405,13 +350,13 @@
     @apply shrink-0 text-xs text-muted-foreground tabular-nums;
   }
   .tool-content {
-    @apply flex min-w-0 flex-col gap-3 border-t p-3;
+    @apply flex min-w-0 flex-col gap-3 p-3;
   }
   .tool-content h3 {
     @apply text-xs text-muted-foreground;
   }
   .tool-content pre {
-    @apply max-h-80 overflow-auto font-mono text-[13px] leading-5 break-words whitespace-pre-wrap;
+    @apply font-mono text-[13px] leading-5 break-words whitespace-pre-wrap;
   }
   .step-finish {
     @apply mt-3 flex items-center gap-2 text-xs text-muted-foreground;
@@ -430,10 +375,6 @@
   }
   .interaction legend {
     @apply mb-3 text-sm font-medium;
-  }
-  .interaction input[type="checkbox"],
-  .interaction input[type="radio"] {
-    accent-color: var(--primary);
   }
   .markdown {
     @apply max-w-[72ch] text-[15px] leading-[26px];
@@ -498,7 +439,7 @@
     @apply text-xs text-muted-foreground;
   }
   .diagnostic-ids {
-    @apply space-y-2 text-xs;
+    @apply flex flex-col gap-2 text-xs;
   }
   .diagnostic-ids dt {
     @apply text-muted-foreground;
@@ -560,9 +501,9 @@
   }
 }
 
-.search-input > button {
-  height: 100%;
-  width: 44px;
+.execution-scroll {
+  min-height: 0;
+  flex: 1;
 }
 
 .task-page {
@@ -697,6 +638,7 @@
     font-size: 12px;
   }
   .artifact-list td:first-child,
+  .settings-list td:nth-child(-n + 2),
   .tool-list td:first-child,
   .error-list td:nth-child(n + 3) {
     grid-column: 1 / -1;
@@ -853,16 +795,25 @@
   }
 }
 @media (pointer: coarse), (max-width: 767px) {
-  [data-slot="button"],
+  .group\/button,
+  [data-slot="alert-dialog-action"],
+  [data-slot="alert-dialog-cancel"],
+  [data-slot="dropdown-menu-item"],
+  [data-slot="combobox-item"],
+  [data-slot="input-group"],
   [data-slot="select-trigger"],
   [data-slot="tabs-trigger"],
   .workspace-nav a {
     min-height: 44px;
   }
-  [data-slot="button"]:has(> svg:only-child) {
+  .group\/button {
     min-width: 44px;
   }
+  [data-slot="input-group-addon"] {
+    padding-block: 0;
+  }
   [data-slot="input"],
+  [data-slot="input-group-control"],
   [data-slot="textarea"] {
     font-size: 16px;
   }

@@ -7,7 +7,6 @@ test("settings persist models, skills and MCP with masked secrets", async ({
 }, info) => {
   const suffix = info.project.name;
   const provider = `compatible-${suffix}`;
-  page.on("dialog", (dialog) => void dialog.accept());
   expect((await page.goto("/settings"))?.status()).toBe(200);
   await expect(
     page.getByRole("heading", { name: "配置", exact: true }),
@@ -42,7 +41,7 @@ test("settings persist models, skills and MCP with masked secrets", async ({
   await captureQa(page, `settings-model-form-${suffix}`);
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: `编辑 ${provider}`, exact: true }),
+    page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
   ).toBeVisible();
   const settingsResponse = await request.get("/api/settings");
   expect(await settingsResponse.text()).not.toContain("browser-secret");
@@ -55,7 +54,10 @@ test("settings persist models, skills and MCP with masked secrets", async ({
     { id: "model-two", contextWindow: 200000, maxTokens: 16384 },
   ]);
   await page
-    .getByRole("button", { name: `编辑 ${provider}`, exact: true })
+    .getByRole("button", { name: `配置操作 ${provider}`, exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: `编辑 ${provider}`, exact: true })
     .click();
   await expect(page.getByLabel("API Key", { exact: true })).toHaveValue(
     "********",
@@ -74,12 +76,15 @@ test("settings persist models, skills and MCP with masked secrets", async ({
     .fill("http://127.0.0.1:8889/v1");
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: `编辑 ${provider}`, exact: true }),
+    page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
   ).toBeVisible();
   await page.reload();
   await expect(page.getByText(/8889/)).toBeVisible();
   await page
-    .getByRole("button", { name: `编辑 ${provider}`, exact: true })
+    .getByRole("button", { name: `配置操作 ${provider}`, exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: `编辑 ${provider}`, exact: true })
     .click();
   await expect(
     page
@@ -117,7 +122,7 @@ test("settings persist models, skills and MCP with masked secrets", async ({
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
     page.getByRole("button", {
-      name: `编辑 office-mcp-${suffix}`,
+      name: `配置操作 office-mcp-${suffix}`,
       exact: true,
     }),
   ).toBeVisible();
@@ -131,9 +136,19 @@ test("settings persist models, skills and MCP with masked secrets", async ({
     ["MCP", `office-mcp-${suffix}`],
   ]) {
     await page.getByRole("tab", { name: tab, exact: true }).click();
-    await page.getByRole("button", { name: `删除 ${id}`, exact: true }).click();
+    await page
+      .getByRole("button", { name: `配置操作 ${id}`, exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: `删除 ${id}`, exact: true })
+      .click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: `删除 ${id}`, exact: true }),
+      page.getByRole("button", { name: "取消", exact: true }),
+    ).toBeFocused();
+    await page.getByRole("button", { name: "确认删除", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: `配置操作 ${id}`, exact: true }),
     ).toHaveCount(0);
   }
 });
@@ -249,6 +264,22 @@ async function theme(page: Page, name: string) {
 
 async function captureQa(page: Page, name: string) {
   await page.evaluate(() => document.fonts.ready);
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    const undersized = await page
+      .locator('[class~="group/button"]:visible')
+      .evaluateAll((elements) =>
+        elements
+          .filter((element) => {
+            const rect = element.getBoundingClientRect();
+            return rect.width < 43.5 || rect.height < 43.5;
+          })
+          .map(
+            (element) =>
+              element.getAttribute("aria-label") || element.textContent,
+          ),
+      );
+    expect(undersized).toEqual([]);
+  }
   await expect
     .poll(() =>
       page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
@@ -256,7 +287,7 @@ async function captureQa(page: Page, name: string) {
     .toBe(true);
   const clipped = await page
     .locator(
-      'header button:visible, main button:visible, main [role="combobox"]:visible, [role="dialog"] button:visible',
+      'header button:visible, main button:visible, main [role="combobox"]:visible, [role="dialog"] button:visible, [role="alertdialog"] button:visible',
     )
     .evaluateAll((elements) =>
       elements
@@ -378,7 +409,9 @@ test("task list search, history, filters, pagination, empty state and create for
   await page.goForward();
   await expect(search).toHaveValue("网关");
   const input = await search.boundingBox();
-  const icon = await page.locator(".search-input svg").boundingBox();
+  const icon = await page
+    .locator('.toolbar [data-slot="input-group"] svg')
+    .boundingBox();
   expect(
     Math.abs(input!.y + input!.height / 2 - icon!.y - icon!.height / 2),
   ).toBeLessThan(1);
@@ -436,7 +469,9 @@ test("fixed workspace keeps empty and short list pagination at the bottom", asyn
       q === "empty" ? "0 个任务" : q === "many" ? "50 个任务" : "1 个任务",
     );
     await expect(page.locator(".app-footer")).toHaveCount(0);
-    await expect(page.locator(".app-header .status")).toHaveCount(0);
+    await expect(page.locator('.app-header [data-slot="badge"]')).toHaveCount(
+      1,
+    );
     const metrics = await page.evaluate(() => {
       const list = document.querySelector(".list-body")!;
       const pagination = document
@@ -686,10 +721,18 @@ test("task rounds, follow mode, information panel and narrow dialogs", async ({
   await page.getByRole("button", { name: "任务信息", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
+  await expect
+    .poll(async () => {
+      const bounds = await dialog.boundingBox();
+      return Math.abs(bounds!.x + bounds!.width - 320);
+    })
+    .toBeLessThan(1);
   const rect = await dialog.boundingBox();
   expect(rect!.y).toBeGreaterThanOrEqual(0);
   expect(rect!.y + rect!.height).toBeLessThanOrEqual(641);
-  expect(Math.abs(rect!.x + rect!.width / 2 - 160)).toBeLessThan(1);
+  expect(rect!.x).toBeGreaterThanOrEqual(0);
+  expect(Math.abs(rect!.x + rect!.width - 320)).toBeLessThan(1);
+  await expect(dialog).toHaveAttribute("data-slot", "sheet-content");
   await captureQa(page, `task-info-${info.project.name}`);
   await page.keyboard.press("Escape");
   await expect(
@@ -976,7 +1019,7 @@ test("task assignment, approval, output, observations, cancellation and deletion
   });
   await page.getByRole("button", { name: "停止任务", exact: true }).click();
   await page.getByRole("button", { name: "确认停止" }).click();
-  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(page.getByRole("alertdialog")).not.toBeVisible();
   await page.getByRole("button", { name: "删除任务", exact: true }).click();
   await page.getByRole("button", { name: "确认删除" }).click();
   await expect(page).toHaveURL(/\/tasks$/);
@@ -1296,8 +1339,14 @@ test("tool states, keyboard focus, reduced motion and enlarged text", async ({
   await page.keyboard.press("Tab");
   await trigger.focus();
   expect(
-    await trigger.evaluate((element) => getComputedStyle(element).outlineStyle),
-  ).not.toBe("none");
+    await trigger.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return (
+        element.matches(":focus-visible") &&
+        (style.outlineStyle !== "none" || style.boxShadow !== "none")
+      );
+    }),
+  ).toBe(true);
   await page.keyboard.press("Enter");
   await expect(tool.getByRole("button", { expanded: false })).toBeFocused();
   if (info.project.name === "mobile") {
@@ -1361,4 +1410,253 @@ test("task updates keep the focused row in place", async ({ page }) => {
   await expect(page.locator(".task-title").first()).toHaveText(first.title);
   await page.getByRole("button", { name: "刷新任务列表", exact: true }).focus();
   await expect(page.locator(".task-title").first()).toHaveText(second.title);
+});
+
+test("danger confirmation cancels, locks during submission and preserves failures", async ({
+  page,
+}) => {
+  const detail = designFixture();
+  let requests = 0;
+  let release: (() => void) | undefined;
+  await page.route("**/session/design-fixture", async (route) => {
+    requests++;
+    if (requests === 1) {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await route.fulfill({
+        status: 503,
+        json: { code: "UNAVAILABLE", message: "删除失败，请重试" },
+      });
+    } else await route.fulfill({ status: 204 });
+  });
+  await mockTask(page, detail);
+  const trigger = page.getByRole("button", { name: "删除任务", exact: true });
+  const confirmation = page.getByRole("alertdialog");
+  await trigger.click();
+  await expect(
+    confirmation.getByRole("button", { name: "取消", exact: true }),
+  ).toBeFocused();
+  await expect(confirmation).toContainText("工作目录中的文件会保留");
+  await confirmation.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  expect(requests).toBe(0);
+  await trigger.click();
+  await confirmation
+    .getByRole("button", { name: "确认删除", exact: true })
+    .click();
+  await expect.poll(() => requests).toBe(1);
+  await expect(
+    confirmation.getByRole("button", { name: "确认删除", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    confirmation.getByRole("button", { name: "取消", exact: true }),
+  ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toBeVisible();
+  release!();
+  await expect(confirmation.getByRole("alert")).toContainText(
+    "删除失败，请重试",
+  );
+  await captureQa(page, "confirmation-failure");
+  await confirmation
+    .getByRole("button", { name: "确认删除", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  expect(requests).toBe(2);
+  await expect(page.locator("[data-sonner-toast]")).toContainText("任务已删除");
+});
+
+test("settings field errors, failed saves and package confirmations use shared components", async ({
+  page,
+}) => {
+  let settings = {
+    piConfigDirectory: "",
+    opencodeConfigFile: "",
+    providers: [],
+    skills: [],
+    mcp: [],
+  };
+  let packages = ["npm:sample-plugin"];
+  let writes = 0;
+  let removals = 0;
+  const view = () => ({
+    settings,
+    packages,
+    revision: String(writes),
+    restartRequired: true,
+    externalOpenCode: true,
+    environmentProvider: true,
+    effectivePiDirectory: "/tmp/pi-config",
+    local: { pi: "/tmp/pi", opencode: "/tmp/opencode.json" },
+  });
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "PUT") {
+      writes++;
+      if (writes === 1)
+        return route.fulfill({
+          status: 409,
+          json: { code: "CONFLICT", message: "配置版本冲突" },
+        });
+      settings = route.request().postDataJSON().settings;
+    }
+    await route.fulfill({ json: view() });
+  });
+  await page.route("**/api/settings/pi/packages", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      action: "remove",
+      source: "npm:sample-plugin",
+    });
+    removals++;
+    if (removals === 1)
+      return route.fulfill({
+        status: 500,
+        json: { code: "FAILED", message: "卸载失败" },
+      });
+    packages = [];
+    await route.fulfill({ json: view() });
+  });
+  await page.goto("/settings");
+  await expect(page.locator('[data-slot="alert"]')).toHaveCount(3);
+  await page.getByRole("tab", { name: "MCP", exact: true }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("名称", { exact: true }).fill("sample");
+  await dialog.getByLabel("命令和参数（JSON 数组）").fill("[");
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(dialog.getByLabel("命令和参数（JSON 数组）")).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await expect(dialog.getByLabel("命令和参数（JSON 数组）")).toHaveAttribute(
+    "aria-describedby",
+    "config.command-error",
+  );
+  await expect(dialog.getByRole("alert")).toHaveText("JSON 格式不正确");
+  expect(writes).toBe(0);
+  await dialog
+    .getByLabel("命令和参数（JSON 数组）")
+    .fill('["node","server.js"]');
+  await dialog.getByLabel("环境变量（JSON 对象）").fill("[]");
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(dialog.getByLabel("环境变量（JSON 对象）")).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await dialog.getByLabel("环境变量（JSON 对象）").fill("{}");
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("配置版本冲突");
+  await expect(dialog.getByLabel("名称", { exact: true })).toHaveValue(
+    "sample",
+  );
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator("[data-sonner-toast]").last()).toContainText(
+    "配置已保存",
+  );
+  await page.getByRole("tab", { name: "Pi 插件", exact: true }).click();
+  const uninstall = page.getByRole("button", {
+    name: "卸载 npm:sample-plugin",
+    exact: true,
+  });
+  await uninstall.click();
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toContainText("/tmp/pi-config");
+  await page.keyboard.press("Escape");
+  await expect(uninstall).toBeFocused();
+  expect(removals).toBe(0);
+  await uninstall.click();
+  await confirmation
+    .getByRole("button", { name: "确认卸载", exact: true })
+    .click();
+  await expect(confirmation.getByRole("alert")).toContainText("卸载失败");
+  await confirmation
+    .getByRole("button", { name: "确认卸载", exact: true })
+    .click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(page.getByText("暂无插件", { exact: true })).toBeVisible();
+});
+
+test("model search filters, handles no matches and selects with keyboard", async ({
+  page,
+}) => {
+  await page.goto("/tasks");
+  await page.getByRole("button", { name: "分派任务", exact: true }).click();
+  const provider = page.getByRole("combobox", {
+    name: "模型供应商",
+    exact: true,
+  });
+  await provider.fill("no-provider-matches");
+  await expect(page.getByText("没有匹配的选项", { exact: true })).toBeVisible();
+  await provider.fill("pi-secondary");
+  await expect(
+    page.getByRole("option", { name: "pi-secondary", exact: true }),
+  ).toBeVisible();
+  await provider.press("ArrowDown");
+  await provider.press("Enter");
+  await expect(provider).toHaveValue("pi-secondary");
+  const model = page.getByRole("combobox", { name: "模型名称", exact: true });
+  await model.fill("quality");
+  await expect(
+    page.getByRole("option", { name: "pi secondary quality", exact: true }),
+  ).toBeVisible();
+  await model.press("ArrowDown");
+  await model.press("Enter");
+  await expect(model).toHaveValue("pi secondary quality");
+  await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+test("single choice keyboard navigation and custom answers remain exclusive", async ({
+  page,
+}) => {
+  const detail = designFixture();
+  detail.interactions.push({
+    id: "single-choice",
+    sessionId: "design-fixture",
+    runId: "design-run",
+    kind: "question",
+    title: "选择输出格式",
+    questions: [
+      {
+        text: "输出格式",
+        options: ["Markdown", "JSON"],
+        multiple: false,
+        allowCustom: true,
+      },
+    ],
+    state: "pending",
+    policy: "manual",
+    createdAt: "2026-09-06T06:00:00.000Z",
+    resolvedAt: null,
+    reply: null,
+    error: null,
+  });
+  let answers: string[][] | undefined;
+  await page.route("**/question/single-choice/reply", async (route) => {
+    answers = route.request().postDataJSON().answers;
+    await route.fulfill({
+      status: 409,
+      json: { code: "CONFLICT", message: "保留回答以重试" },
+    });
+  });
+  await mockTask(page, detail);
+  const group = page.getByRole("radiogroup", { name: "输出格式", exact: true });
+  const markdown = group.getByRole("radio", { name: "Markdown", exact: true });
+  const json = group.getByRole("radio", { name: "JSON", exact: true });
+  await markdown.check();
+  await markdown.press("ArrowDown");
+  await expect(json).toBeChecked();
+  await expect(markdown).not.toBeChecked();
+  const custom = page.getByRole("textbox", {
+    name: "输出格式 自定义回答",
+    exact: true,
+  });
+  await custom.fill("纯文本");
+  await expect(json).not.toBeChecked();
+  await markdown.check();
+  await expect(custom).toHaveValue("");
+  await page.getByRole("button", { name: "提交回答", exact: true }).click();
+  await expect.poll(() => answers).toEqual([["Markdown"]]);
+  await expect(markdown).toBeChecked();
 });

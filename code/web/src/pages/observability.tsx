@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
-import { ArrowUpRight, Download, RefreshCw, Server } from "lucide-react"
+import {
+  ArrowUpRight,
+  ChevronDown,
+  Download,
+  RefreshCw,
+  Server,
+} from "lucide-react"
 import {
   CartesianGrid,
   Line,
@@ -23,8 +29,15 @@ import {
   IconButton,
   number,
   Status,
+  Notice,
 } from "@/components/workspace-ui"
-import { buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Table,
@@ -239,10 +252,15 @@ export function Observability() {
         </span>
         <span role="status">
           {data
-            ? `更新于 ${date(data.capturedAt)}${now - Date.parse(data.capturedAt) > 15000 ? " · 数据已陈旧" : ""}${refreshPolicy.auto ? "" : " · 自动刷新已暂停"}`
+            ? `更新于 ${date(data.capturedAt)}${refreshPolicy.auto ? "" : " · 自动刷新已暂停"}`
             : "正在读取"}
         </span>
       </div>
+      {data && now - Date.parse(data.capturedAt) > 15000 && (
+        <Notice title="数据已陈旧">
+          当前显示上次采集结果，可手动刷新获取最新数据。
+        </Notice>
+      )}
       <div className="observation-tab-select mb-4">
         <Choice
           label="观测视图"
@@ -434,15 +452,16 @@ export function Observability() {
                 </TableBody>
               </Table>
               <div className="mt-5">
-                <a
-                  href="/metrics"
-                  target="_blank"
-                  rel="noreferrer"
-                  className={buttonVariants({ variant: "outline" })}
+                <Button
+                  variant="outline"
+                  nativeButton={false}
+                  render={
+                    <a href="/metrics" target="_blank" rel="noreferrer" />
+                  }
                 >
-                  <Download data-icon="inline-start" className="size-4" />
+                  <Download data-icon="inline-start" />
                   Prometheus 指标
-                </a>
+                </Button>
               </div>
             </>
           )}
@@ -695,29 +714,38 @@ function Trend({ data }: { data?: Series }) {
         采样起点 {date(data.availableFrom)}
       </p>
       {!!data.points.length && (
-        <details className="mt-3 text-xs">
-          <summary className="cursor-pointer py-2">
+        <Collapsible className="mt-3">
+          <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+            <ChevronDown data-icon="inline-start" />
             采样数据 · {data.points.length} 条
-          </summary>
-          <div className="max-h-64 overflow-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>采样时间</TableHead>
-                  <TableHead>数值 ({data.unit})</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.points.map((point, index) => (
-                  <TableRow key={`${point.at}:${index}`}>
-                    <TableCell>{date(point.at)}</TableCell>
-                    <TableCell>{number(point.value)}</TableCell>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ScrollArea
+              viewportProps={{
+                className: "max-h-64",
+                tabIndex: 0,
+                "aria-label": "采样数据",
+              }}
+            >
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>采样时间</TableHead>
+                    <TableHead>数值 ({data.unit})</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </details>
+                </TableHeader>
+                <TableBody>
+                  {data.points.map((point, index) => (
+                    <TableRow key={`${point.at}:${index}`}>
+                      <TableCell>{date(point.at)}</TableCell>
+                      <TableCell>{number(point.value)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </ScrollArea>
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </>
   )

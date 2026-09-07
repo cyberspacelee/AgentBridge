@@ -1,4 +1,6 @@
-import { useState, type FormEvent } from "react"
+import { useRef, useState, type FormEvent } from "react"
+import { ZodError } from "zod"
+import { toast } from "sonner"
 import {
   Download,
   Pencil,
@@ -7,6 +9,8 @@ import {
   Save,
   Trash2,
   X,
+  MoreHorizontal,
+  LoaderCircle,
 } from "lucide-react"
 import {
   settingsSchema,
@@ -17,11 +21,46 @@ import {
   type SettingsView,
 } from "../../../shared/settings"
 import { api, useQuery } from "@/lib/api"
-import { Blank, Choice, Failure, IconButton } from "@/components/workspace-ui"
+import {
+  Blank,
+  Choice,
+  ConfirmDialog,
+  Failure,
+  IconButton,
+  Notice,
+} from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "@/components/ui/field"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog"
+import {
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -53,7 +92,15 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
   const [view, setView] = useState(initial)
   const [error, setError] = useState<Error>()
   const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState("")
+  const actionTrigger = useRef<HTMLElement | null>(null)
+  const [confirmationFocus, setConfirmationFocus] =
+    useState<HTMLElement | null>(null)
+  const [confirmation, setConfirmation] = useState<{
+    title: string
+    description: string
+    label: string
+    execute: () => Promise<boolean>
+  }>()
   const [editing, setEditing] = useState<{
     kind: "providers" | "skills" | "mcp"
     id?: string
@@ -65,9 +112,9 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
   const [source, setSource] = useState("")
   const settings = view.settings
   async function save(next: Configuration) {
+    if (busy) return false
     setBusy(true)
     setError(undefined)
-    setNotice("")
     try {
       const result = await api<SettingsView>("/api/settings", {
         method: "PUT",
@@ -78,7 +125,7 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
       })
       setView(result)
       setEditing(undefined)
-      setNotice("配置已保存")
+      toast.success("配置已保存")
       return true
     } catch (e) {
       setError(e as Error)
@@ -91,11 +138,12 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
     action: "install" | "remove",
     packageSource: string
   ) {
-    if (action === "remove" && !window.confirm(`卸载 ${packageSource}？`))
-      return
+    if (busy) return false
     setBusy(true)
     setError(undefined)
-    setNotice("")
+    const notification = toast.loading(
+      action === "install" ? "正在安装插件" : "正在卸载插件"
+    )
     try {
       setView(
         await api<SettingsView>("/api/settings/pi/packages", {
@@ -105,13 +153,19 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
         })
       )
       setSource("")
-      setNotice(
+      toast.success(
         action === "install"
           ? "插件已安装，新建 Pi 任务后生效"
-          : "插件已卸载，新建 Pi 任务后生效"
+          : "插件已卸载，新建 Pi 任务后生效",
+        { id: notification }
       )
+      return true
     } catch (e) {
       setError(e as Error)
+      toast.error(action === "install" ? "插件安装失败" : "插件卸载失败", {
+        id: notification,
+      })
+      return false
     } finally {
       setBusy(false)
     }
@@ -131,7 +185,11 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
           <Button
             variant="outline"
             disabled={busy}
-            onClick={() => setEditing({ kind })}
+            onClick={(event) => {
+              actionTrigger.current = event.currentTarget
+              setError(undefined)
+              setEditing({ kind })
+            }}
           >
             <Plus data-icon="inline-start" />
             添加
@@ -140,12 +198,25 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
         {!items.length ? (
           editing?.kind !== kind && <Blank>暂无配置</Blank>
         ) : (
-          <ul className="settings-list">
-            {items.map((item) => (
-              <li key={item.id}>
-                <div className="min-w-0 flex-1">
-                  <strong>{item.id}</strong>
-                  <p className="text-sm break-all text-muted-foreground">
+          <Table className="stacked-table settings-list">
+            <TableHeader>
+              <TableRow>
+                <TableHead>名称</TableHead>
+                <TableHead>配置</TableHead>
+                <TableHead>启用</TableHead>
+                <TableHead>操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="max-w-48 break-all whitespace-normal">
+                    <strong>{item.id}</strong>
+                  </TableCell>
+                  <TableCell
+                    className="max-w-lg break-all whitespace-normal"
+                    data-label="配置"
+                  >
                     {"baseUrl" in item
                       ? `${item.baseUrl} · ${item.models.map((model) => model.id).join(", ")}`
                       : "path" in item
@@ -153,83 +224,150 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
                         : item.config.type === "remote"
                           ? item.config.url
                           : item.config.command.join(" ")}
-                  </p>
-                </div>
-                <Switch
-                  aria-label={`启用 ${item.id}`}
-                  checked={item.enabled}
-                  disabled={busy}
-                  onCheckedChange={(enabled) =>
-                    void save({
-                      ...settings,
-                      [kind]: items.map((entry) =>
-                        entry.id === item.id ? { ...entry, enabled } : entry
-                      ),
-                    })
-                  }
-                />
-                <IconButton
-                  label={`编辑 ${item.id}`}
-                  disabled={busy}
-                  onClick={() => setEditing({ kind, id: item.id })}
-                >
-                  <Pencil />
-                </IconButton>
-                <IconButton
-                  label={`删除 ${item.id}`}
-                  disabled={busy}
-                  onClick={() => {
-                    if (window.confirm(`删除配置 ${item.id}？`))
-                      void save({
-                        ...settings,
-                        [kind]: items.filter((entry) => entry.id !== item.id),
-                      })
-                  }}
-                >
-                  <Trash2 />
-                </IconButton>
-              </li>
-            ))}
-          </ul>
+                  </TableCell>
+                  <TableCell data-label="启用">
+                    <Switch
+                      aria-label={`启用 ${item.id}`}
+                      checked={item.enabled}
+                      disabled={busy}
+                      onCheckedChange={(enabled) =>
+                        void save({
+                          ...settings,
+                          [kind]: items.map((entry) =>
+                            entry.id === item.id ? { ...entry, enabled } : entry
+                          ),
+                        })
+                      }
+                    />
+                  </TableCell>
+                  <TableCell data-label="操作">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <IconButton
+                            label={`配置操作 ${item.id}`}
+                            disabled={busy}
+                          />
+                        }
+                        onClick={(event) => {
+                          actionTrigger.current = event.currentTarget
+                        }}
+                      >
+                        <MoreHorizontal />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setError(undefined)
+                              setEditing({ kind, id: item.id })
+                            }}
+                          >
+                            <Pencil />
+                            编辑 {item.id}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => {
+                              setError(undefined)
+                              setConfirmationFocus(actionTrigger.current)
+                              setConfirmation({
+                                title: `删除配置 ${item.id}`,
+                                description:
+                                  kind === "skills"
+                                    ? "移除网关中的 Skill 引用，保留原目录及附件。原生配置中的引用不受影响。"
+                                    : "删除网关中的此项配置。原生文件和环境变量配置不受影响；配置变更的生效范围保持不变。",
+                                label: "确认删除",
+                                execute: () =>
+                                  save({
+                                    ...settings,
+                                    [kind]: items.filter(
+                                      (entry) => entry.id !== item.id
+                                    ),
+                                  }),
+                              })
+                            }}
+                          >
+                            <Trash2 />
+                            删除 {item.id}
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
         {editing?.kind === kind && (
-          <EntryEditor
-            key={`${kind}:${editing.id ?? "new"}`}
-            kind={kind}
-            entry={items.find((item) => item.id === editing.id)}
-            busy={busy}
-            cancel={() => setEditing(undefined)}
-            submit={async (entry) => {
-              if (!editing.id && items.some((item) => item.id === entry.id)) {
-                setError(new Error("名称已存在"))
-                return
+          <Dialog
+            open
+            onOpenChange={(open) => {
+              if (!open && !busy) {
+                setEditing(undefined)
+                setError(undefined)
               }
-              await save({
-                ...settings,
-                [kind]: editing.id
-                  ? items.map((item) => (item.id === editing.id ? entry : item))
-                  : [...items, entry],
-              })
             }}
-          />
+          >
+            <DialogContent
+              className="max-h-[90svh] overflow-y-auto sm:max-w-2xl"
+              showCloseButton={!busy}
+              finalFocus={() => actionTrigger.current}
+            >
+              <DialogHeader>
+                <DialogTitle>
+                  {editing.id ? `编辑 ${editing.id}` : "添加配置"}
+                </DialogTitle>
+                <DialogDescription>
+                  保存后应用到网关配置，具体生效范围见页面状态。
+                </DialogDescription>
+              </DialogHeader>
+              <Failure error={error} />
+              <EntryEditor
+                key={`${kind}:${editing.id ?? "new"}`}
+                kind={kind}
+                entry={items.find((item) => item.id === editing.id)}
+                existingIds={items.map((item) => item.id)}
+                busy={busy}
+                cancel={() => setEditing(undefined)}
+                submit={async (entry) => {
+                  if (
+                    !editing.id &&
+                    items.some((item) => item.id === entry.id)
+                  ) {
+                    setError(new Error("名称已存在"))
+                    return
+                  }
+                  await save({
+                    ...settings,
+                    [kind]: editing.id
+                      ? items.map((item) =>
+                          item.id === editing.id ? entry : item
+                        )
+                      : [...items, entry],
+                  })
+                }}
+              />
+            </DialogContent>
+          </Dialog>
         )}
       </>
     )
   }
   return (
     <>
-      <Failure error={error} />
-      <div role="status" className="settings-status">
-        {busy ? "正在处理…" : notice}
+      {!editing && !confirmation && <Failure error={error} />}
+      <div className="flex flex-col gap-3">
         {view.restartRequired && (
-          <p>
-            OpenCode 配置待生效：需要重启网关并新建任务。Pi 变更对新建任务生效。
-          </p>
+          <Notice title="OpenCode 配置待生效">
+            需要重启网关并新建任务。Pi 变更对新建任务生效。
+          </Notice>
         )}
         {view.externalOpenCode && (
-          <p>
-            当前连接外部 OpenCode；模型、Skill 和 MCP 配置需在该服务端应用。
-          </p>
+          <Notice title="当前连接外部 OpenCode">
+            模型、Skill 和 MCP 配置需在该服务端应用。
+          </Notice>
         )}
       </div>
       <Tabs defaultValue="models" onValueChange={() => setEditing(undefined)}>
@@ -241,9 +379,7 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
         </TabsList>
         <TabsContent value="models">
           {view.environmentProvider && (
-            <p className="py-3 text-sm text-muted-foreground">
-              已加载 env 模型配置，同名供应商以 env 为准。
-            </p>
+            <Notice title="已加载 env 模型配置">同名供应商以 env 为准。</Notice>
           )}
           {rows("providers")}
           <form
@@ -329,20 +465,41 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
             {!view.packages.length ? (
               <Blank>暂无插件</Blank>
             ) : (
-              <ul className="settings-list">
-                {view.packages.map((item) => (
-                  <li key={item}>
-                    <span className="min-w-0 flex-1 break-all">{item}</span>
-                    <IconButton
-                      label={`卸载 ${item}`}
-                      disabled={busy}
-                      onClick={() => void packageAction("remove", item)}
-                    >
-                      <Trash2 />
-                    </IconButton>
-                  </li>
-                ))}
-              </ul>
+              <Table className="stacked-table settings-list">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>插件来源</TableHead>
+                    <TableHead>操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {view.packages.map((item) => (
+                    <TableRow key={item}>
+                      <TableCell className="max-w-lg break-all whitespace-normal">
+                        {item}
+                      </TableCell>
+                      <TableCell data-label="操作">
+                        <IconButton
+                          label={`卸载 ${item}`}
+                          disabled={busy}
+                          onClick={(event) => {
+                            setError(undefined)
+                            setConfirmationFocus(event.currentTarget)
+                            setConfirmation({
+                              title: `卸载 ${item}`,
+                              description: `作用于 Pi 配置目录 ${view.effectivePiDirectory}。本地插件只移除引用；卸载后新建 Pi 任务生效。`,
+                              label: "确认卸载",
+                              execute: () => packageAction("remove", item),
+                            })
+                          }}
+                        >
+                          <Trash2 />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
             <form
               onSubmit={(e) => {
@@ -370,6 +527,26 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
           </section>
         </TabsContent>
       </Tabs>
+      <ConfirmDialog
+        open={!!confirmation}
+        title={confirmation?.title ?? "确认操作"}
+        description={confirmation?.description}
+        confirmLabel={confirmation?.label ?? "确认"}
+        busy={busy}
+        error={error}
+        finalFocus={confirmationFocus}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmation(undefined)
+            setError(undefined)
+          }
+        }}
+        onConfirm={() => {
+          void confirmation?.execute().then((saved) => {
+            if (saved) setConfirmation(undefined)
+          })
+        }}
+      />
     </>
   )
 }
@@ -384,12 +561,14 @@ function EntryEditor({
   busy,
   cancel,
   submit,
+  existingIds,
 }: {
   kind: "providers" | "skills" | "mcp"
   entry?: Entry
   busy: boolean
   cancel: () => void
   submit: (entry: Entry) => Promise<void>
+  existingIds: string[]
 }) {
   const [id, setId] = useState(entry?.id ?? "")
   const provider = entry && "baseUrl" in entry ? entry : undefined
@@ -428,11 +607,34 @@ function EntryEditor({
     )
   )
   const [error, setError] = useState<Error>()
+  const [invalid, setInvalid] = useState<Record<string, string>>({})
+  const fieldProps = (name: string) => ({
+    "aria-invalid": !!invalid[name],
+    "aria-describedby": invalid[name] ? `${name}-error` : undefined,
+  })
+  const fieldError = (name: string) => (
+    <FieldError id={`${name}-error`}>{invalid[name]}</FieldError>
+  )
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
+    if (busy) return
     setError(undefined)
+    setInvalid({})
+    if (!entry && existingIds.includes(id)) {
+      setInvalid({ id: "名称已存在" })
+      return
+    }
+    let jsonField = "config.command"
     try {
       const enabled = entry?.enabled ?? true
+      let parsedCommand: unknown
+      let parsedSecrets: unknown
+      if (kind === "mcp") {
+        if (mcpType === "local") parsedCommand = JSON.parse(command)
+        jsonField =
+          mcpType === "local" ? "config.environment" : "config.headers"
+        parsedSecrets = JSON.parse(secrets)
+      }
       const result =
         kind === "providers"
           ? providerSchema.parse({
@@ -455,256 +657,320 @@ function EntryEditor({
                   mcpType === "local"
                     ? {
                         type: "local",
-                        command: JSON.parse(command),
-                        environment: JSON.parse(secrets),
+                        command: parsedCommand,
+                        environment: parsedSecrets,
                       }
                     : {
                         type: "remote",
                         url: endpoint,
-                        headers: JSON.parse(secrets),
+                        headers: parsedSecrets,
                       },
               })
       await submit(result)
     } catch (e) {
-      setError(e as Error)
+      if (e instanceof ZodError)
+        setInvalid(
+          Object.fromEntries(
+            e.issues.map((issue) => {
+              const path = issue.path.join(".")
+              const name = path.startsWith("config.command")
+                ? "config.command"
+                : path.startsWith("config.environment")
+                  ? "config.environment"
+                  : path.startsWith("config.headers")
+                    ? "config.headers"
+                    : path
+              return [name, issue.message]
+            })
+          )
+        )
+      else if (e instanceof SyntaxError)
+        setInvalid({ [jsonField]: "JSON 格式不正确" })
+      else setError(e as Error)
     }
   }
   return (
-    <form className="settings-section" onSubmit={(e) => void onSubmit(e)}>
+    <form className="flex flex-col gap-4" onSubmit={(e) => void onSubmit(e)}>
       <div className="settings-section-heading">
-        <h2>{entry ? `编辑 ${entry.id}` : "添加配置"}</h2>
-        <IconButton label="取消编辑" type="button" onClick={cancel}>
+        <IconButton
+          label="取消编辑"
+          type="button"
+          disabled={busy}
+          onClick={cancel}
+        >
           <X />
         </IconButton>
       </div>
       <Failure error={error} />
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="entry-id">名称</FieldLabel>
-          <Input
-            id="entry-id"
-            required
-            pattern="[a-zA-Z0-9_-]+"
-            disabled={!!entry}
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-          />
-        </Field>
-        {kind === "providers" && (
-          <>
-            <Field>
-              <FieldLabel htmlFor="base-url">Base URL</FieldLabel>
-              <Input
-                id="base-url"
-                required
-                type="url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://api.example.com/v1"
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="api-key">API Key</FieldLabel>
-              <Input
-                id="api-key"
-                type="password"
-                autoComplete="new-password"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="protocol">API 协议</FieldLabel>
-              <Choice
-                id="protocol"
-                label="API 协议"
-                value={protocol}
-                onChange={(value) => setProtocol(value as typeof protocol)}
-                options={[
-                  { value: "openai-completions", label: "Chat Completions" },
-                  { value: "openai-responses", label: "Responses" },
-                ]}
-              />
-            </Field>
-            <div className="settings-section-heading">
-              <h2>模型</h2>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy || models.length >= 100}
-                onClick={() =>
-                  setModels([
-                    ...models,
-                    {
-                      id: "",
-                      name: "",
-                      contextWindow: 128000,
-                      maxTokens: 16384,
-                    },
-                  ])
-                }
-              >
-                <Plus data-icon="inline-start" />
-                添加模型
-              </Button>
-            </div>
-            {models.map((model, index) => (
-              <div
-                className="settings-model-row"
-                key={index}
-                role="group"
-                aria-label={`模型 ${index + 1}`}
-              >
-                <Field>
-                  <FieldLabel htmlFor={`model-${index}-id`}>模型 ID</FieldLabel>
-                  <Input
-                    id={`model-${index}-id`}
-                    required
-                    maxLength={200}
-                    value={model.id}
-                    onChange={(e) =>
-                      setModels(
-                        models.map((item, i) =>
-                          i === index ? { ...item, id: e.target.value } : item
-                        )
-                      )
-                    }
-                  />
-                </Field>
-                {(
-                  [
-                    ["contextWindow", "上下文长度", 1024, 10000000],
-                    ["maxTokens", "最大输出长度", 1, 1000000],
-                  ] as const
-                ).map(([key, label, min, max]) => (
-                  <Field key={key}>
-                    <FieldLabel htmlFor={`model-${index}-${key}`}>
-                      {label}
+      <FieldSet disabled={busy}>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="entry-id">名称</FieldLabel>
+            <Input
+              id="entry-id"
+              {...fieldProps("id")}
+              required
+              pattern="[a-zA-Z0-9_-]+"
+              disabled={!!entry}
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+            />
+            {fieldError("id")}
+          </Field>
+          {kind === "providers" && (
+            <>
+              <Field>
+                <FieldLabel htmlFor="base-url">Base URL</FieldLabel>
+                <Input
+                  id="base-url"
+                  {...fieldProps("baseUrl")}
+                  required
+                  type="url"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://api.example.com/v1"
+                />
+                {fieldError("baseUrl")}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="api-key">API Key</FieldLabel>
+                <Input
+                  id="api-key"
+                  {...fieldProps("apiKey")}
+                  type="password"
+                  autoComplete="new-password"
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                />
+                {fieldError("apiKey")}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="protocol">API 协议</FieldLabel>
+                <Choice
+                  id="protocol"
+                  label="API 协议"
+                  invalid={!!invalid.api}
+                  aria-describedby={invalid.api ? "api-error" : undefined}
+                  value={protocol}
+                  onChange={(value) => setProtocol(value as typeof protocol)}
+                  options={[
+                    { value: "openai-completions", label: "Chat Completions" },
+                    { value: "openai-responses", label: "Responses" },
+                  ]}
+                />
+                {fieldError("api")}
+              </Field>
+              <div className="settings-section-heading">
+                <h2>模型</h2>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy || models.length >= 100}
+                  onClick={() =>
+                    setModels([
+                      ...models,
+                      {
+                        id: "",
+                        name: "",
+                        contextWindow: 128000,
+                        maxTokens: 16384,
+                      },
+                    ])
+                  }
+                >
+                  <Plus data-icon="inline-start" />
+                  添加模型
+                </Button>
+              </div>
+              {fieldError("models")}
+              {models.map((model, index) => (
+                <div
+                  className="settings-model-row"
+                  key={index}
+                  role="group"
+                  aria-label={`模型 ${index + 1}`}
+                >
+                  <Field>
+                    <FieldLabel htmlFor={`model-${index}-id`}>
+                      模型 ID
                     </FieldLabel>
                     <Input
-                      id={`model-${index}-${key}`}
-                      type="number"
+                      id={`model-${index}-id`}
+                      {...fieldProps(`models.${index}.id`)}
                       required
-                      min={min}
-                      max={max}
-                      step={1}
-                      value={Number.isNaN(model[key]) ? "" : model[key]}
+                      maxLength={200}
+                      value={model.id}
                       onChange={(e) =>
                         setModels(
                           models.map((item, i) =>
-                            i === index
-                              ? { ...item, [key]: e.target.valueAsNumber }
-                              : item
+                            i === index ? { ...item, id: e.target.value } : item
                           )
                         )
                       }
                     />
+                    {fieldError(`models.${index}.id`)}
                   </Field>
-                ))}
-                <IconButton
-                  type="button"
-                  label={`删除模型 ${index + 1}`}
-                  disabled={busy || models.length === 1}
-                  onClick={() =>
-                    setModels(models.filter((_, i) => i !== index))
-                  }
-                >
-                  <Trash2 />
-                </IconButton>
-              </div>
-            ))}
-          </>
-        )}
-        {kind === "skills" && (
-          <>
-            <Field>
-              <FieldLabel htmlFor="skill-path">Skill 目录</FieldLabel>
-              <Input
-                id="skill-path"
-                required
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                placeholder="/path/to/skills"
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="skill-engine">引擎</FieldLabel>
-              <Choice
-                id="skill-engine"
-                label="Skill 引擎"
-                value={engine}
-                onChange={(value) => setEngine(value as typeof engine)}
-                options={[
-                  { value: "both", label: "OpenCode + Pi" },
-                  { value: "opencode", label: "OpenCode" },
-                  { value: "pi", label: "Pi" },
-                ]}
-              />
-            </Field>
-          </>
-        )}
-        {kind === "mcp" && (
-          <>
-            <Field>
-              <FieldLabel htmlFor="mcp-type">连接类型</FieldLabel>
-              <Choice
-                id="mcp-type"
-                label="连接类型"
-                value={mcpType}
-                onChange={(value) => {
-                  setMcpType(value as typeof mcpType)
-                  setSecrets("{}")
-                }}
-                options={[
-                  { value: "local", label: "本地 stdio" },
-                  { value: "remote", label: "远程 HTTP" },
-                ]}
-              />
-            </Field>
-            {mcpType === "local" ? (
+                  {(
+                    [
+                      ["contextWindow", "上下文长度", 1024, 10000000],
+                      ["maxTokens", "最大输出长度", 1, 1000000],
+                    ] as const
+                  ).map(([key, label, min, max]) => (
+                    <Field key={key}>
+                      <FieldLabel htmlFor={`model-${index}-${key}`}>
+                        {label}
+                      </FieldLabel>
+                      <Input
+                        id={`model-${index}-${key}`}
+                        {...fieldProps(`models.${index}.${key}`)}
+                        type="number"
+                        required
+                        min={min}
+                        max={max}
+                        step={1}
+                        value={Number.isNaN(model[key]) ? "" : model[key]}
+                        onChange={(e) =>
+                          setModels(
+                            models.map((item, i) =>
+                              i === index
+                                ? { ...item, [key]: e.target.valueAsNumber }
+                                : item
+                            )
+                          )
+                        }
+                      />
+                      {fieldError(`models.${index}.${key}`)}
+                    </Field>
+                  ))}
+                  <IconButton
+                    type="button"
+                    label={`删除模型 ${index + 1}`}
+                    disabled={busy || models.length === 1}
+                    onClick={() =>
+                      setModels(models.filter((_, i) => i !== index))
+                    }
+                  >
+                    <Trash2 />
+                  </IconButton>
+                </div>
+              ))}
+            </>
+          )}
+          {kind === "skills" && (
+            <>
               <Field>
-                <FieldLabel htmlFor="mcp-command">
-                  命令和参数（JSON 数组）
+                <FieldLabel htmlFor="skill-path">Skill 目录</FieldLabel>
+                <Input
+                  id="skill-path"
+                  {...fieldProps("path")}
+                  required
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  placeholder="/path/to/skills"
+                />
+                {fieldError("path")}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="skill-engine">引擎</FieldLabel>
+                <Choice
+                  id="skill-engine"
+                  label="Skill 引擎"
+                  invalid={!!invalid.engine}
+                  aria-describedby={invalid.engine ? "engine-error" : undefined}
+                  value={engine}
+                  onChange={(value) => setEngine(value as typeof engine)}
+                  options={[
+                    { value: "both", label: "OpenCode + Pi" },
+                    { value: "opencode", label: "OpenCode" },
+                    { value: "pi", label: "Pi" },
+                  ]}
+                />
+                {fieldError("engine")}
+              </Field>
+            </>
+          )}
+          {kind === "mcp" && (
+            <>
+              <Field>
+                <FieldLabel htmlFor="mcp-type">连接类型</FieldLabel>
+                <Choice
+                  id="mcp-type"
+                  label="连接类型"
+                  value={mcpType}
+                  onChange={(value) => {
+                    setMcpType(value as typeof mcpType)
+                    setSecrets("{}")
+                  }}
+                  options={[
+                    { value: "local", label: "本地 stdio" },
+                    { value: "remote", label: "远程 HTTP" },
+                  ]}
+                />
+              </Field>
+              {mcpType === "local" ? (
+                <Field>
+                  <FieldLabel htmlFor="mcp-command">
+                    命令和参数（JSON 数组）
+                  </FieldLabel>
+                  <Textarea
+                    id="mcp-command"
+                    {...fieldProps("config.command")}
+                    required
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    rows={3}
+                    placeholder={'["npx", "-y", "package"]'}
+                  />
+                  {fieldError("config.command")}
+                </Field>
+              ) : (
+                <Field>
+                  <FieldLabel htmlFor="mcp-url">MCP URL</FieldLabel>
+                  <Input
+                    id="mcp-url"
+                    {...fieldProps("config.url")}
+                    required
+                    type="url"
+                    value={endpoint}
+                    onChange={(e) => setEndpoint(e.target.value)}
+                  />
+                  {fieldError("config.url")}
+                </Field>
+              )}
+              <Field>
+                <FieldLabel htmlFor="mcp-secrets">
+                  {mcpType === "local" ? "环境变量" : "请求头"}（JSON 对象）
                 </FieldLabel>
                 <Textarea
-                  id="mcp-command"
-                  required
-                  value={command}
-                  onChange={(e) => setCommand(e.target.value)}
+                  id="mcp-secrets"
+                  {...fieldProps(
+                    mcpType === "local"
+                      ? "config.environment"
+                      : "config.headers"
+                  )}
+                  value={secrets}
+                  onChange={(e) => setSecrets(e.target.value)}
                   rows={3}
-                  placeholder={'["npx", "-y", "package"]'}
+                  autoComplete="off"
                 />
+                {fieldError(
+                  mcpType === "local" ? "config.environment" : "config.headers"
+                )}
               </Field>
-            ) : (
-              <Field>
-                <FieldLabel htmlFor="mcp-url">MCP URL</FieldLabel>
-                <Input
-                  id="mcp-url"
-                  required
-                  type="url"
-                  value={endpoint}
-                  onChange={(e) => setEndpoint(e.target.value)}
-                />
-              </Field>
-            )}
-            <Field>
-              <FieldLabel htmlFor="mcp-secrets">
-                {mcpType === "local" ? "环境变量" : "请求头"}（JSON 对象）
-              </FieldLabel>
-              <Textarea
-                id="mcp-secrets"
-                value={secrets}
-                onChange={(e) => setSecrets(e.target.value)}
-                rows={3}
-                autoComplete="off"
-              />
-            </Field>
-          </>
-        )}
-      </FieldGroup>
+            </>
+          )}
+        </FieldGroup>
+      </FieldSet>
       <div className="settings-actions">
         <Button type="submit" disabled={busy}>
-          <Save data-icon="inline-start" />
+          {busy ? (
+            <LoaderCircle
+              data-icon="inline-start"
+              className="motion-safe:animate-spin"
+            />
+          ) : (
+            <Save data-icon="inline-start" />
+          )}
           保存配置
         </Button>
       </div>

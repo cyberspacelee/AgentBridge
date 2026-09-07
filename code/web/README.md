@@ -15,4 +15,6 @@ pnpm web:dev
 
 组件按需通过 `pnpm exec shadcn add <component>` 引入，保持 `components.json` 中的 `base-nova` 配置。前后端共享 code/pnpm-lock.yaml。
 
+基础组件选型和业务封装遵循 [UI 组件统一规范](../../docs/design/UI_COMPONENTS.md)。业务层绕过组件层的写法由 ESLint 拦截，规则回归使用 `pnpm exec tsx --test test/ui-policy.test.ts`（在 code 目录执行）。
+
 详细约束见 [开发规范](../../DEVELOPMENT.md)，分层与业务契约见 [架构设计](../../ARCHITECTURE.md)。

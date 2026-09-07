@@ -22,7 +22,25 @@ import {
   IconButton,
   labels,
   Status,
+  Notice,
 } from "@/components/workspace-ui"
+import {
+  InputGroup,
+  InputGroupInput,
+  InputGroupAddon,
+  InputGroupButton,
+} from "@/components/ui/input-group"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+} from "@/components/ui/pagination"
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip"
+import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -31,6 +49,7 @@ import {
   FieldError,
   FieldGroup,
   FieldLabel,
+  FieldSet,
 } from "@/components/ui/field"
 import {
   Dialog,
@@ -103,8 +122,8 @@ export function Tasks() {
           update("q", search)
         }}
       >
-        <div className="search-input">
-          <Input
+        <InputGroup className="max-w-80">
+          <InputGroupInput
             aria-label="搜索任务"
             placeholder="搜索任务名称或 ID"
             value={search}
@@ -112,10 +131,23 @@ export function Tasks() {
               setSearchDraft({ query: searchQuery, text: e.target.value })
             }
           />
-          <IconButton label="搜索" type="submit">
-            <Search />
-          </IconButton>
-        </div>
+          <InputGroupAddon align="inline-end">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <InputGroupButton
+                    type="submit"
+                    size="icon-sm"
+                    aria-label="搜索"
+                  />
+                }
+              >
+                <Search />
+              </TooltipTrigger>
+              <TooltipContent>搜索</TooltipContent>
+            </Tooltip>
+          </InputGroupAddon>
+        </InputGroup>
         <Choice
           label="任务状态"
           value={params.get("status") ?? ""}
@@ -141,7 +173,7 @@ export function Tasks() {
       <Failure error={query.error} />
       <div className="list-body">
         {query.loading ? (
-          <div className="space-y-4 py-5">
+          <div className="flex flex-col gap-4 py-5">
             {[0, 1, 2, 3].map((n) => (
               <Skeleton key={n} className="h-14 w-full" />
             ))}
@@ -191,12 +223,18 @@ export function Tasks() {
                     </Link>
                     <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                       <FolderOpen className="size-3 shrink-0" />
-                      <span
-                        className="max-w-80 truncate"
-                        title={task.directory}
-                      >
-                        {task.directory}
-                      </span>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span tabIndex={0} className="max-w-80 truncate" />
+                          }
+                        >
+                          {task.directory}
+                        </TooltipTrigger>
+                        <TooltipContent className="break-all">
+                          {task.directory}
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -226,12 +264,13 @@ export function Tasks() {
                     )}
                   </TableCell>
                   <TableCell data-secondary>
-                    <Link
-                      aria-label={`打开 ${task.title}`}
-                      to={`/tasks/${task.id}`}
+                    <IconButton
+                      label={`打开 ${task.title}`}
+                      nativeButton={false}
+                      render={<Link to={`/tasks/${task.id}`} />}
                     >
-                      <ArrowRight className="size-4" />
-                    </Link>
+                      <ArrowRight />
+                    </IconButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -251,25 +290,31 @@ export function Tasks() {
         <span>
           {query.data ? `本页 ${query.data.items.length} 个任务` : ""}
         </span>
-        <div className="flex gap-2">
-          <IconButton
-            label="返回第一页"
-            disabled={!params.get("cursor")}
-            onClick={() => update("cursor", "")}
-          >
-            <ArrowLeft />
-          </IconButton>
-          <IconButton
-            label="下一页"
-            disabled={!query.data?.nextCursor}
-            onClick={() => {
-              if (query.data?.nextCursor)
-                update("cursor", query.data.nextCursor)
-            }}
-          >
-            <ArrowRight />
-          </IconButton>
-        </div>
+        <Pagination aria-label="任务分页" className="mx-0 w-auto">
+          <PaginationContent>
+            <PaginationItem>
+              <IconButton
+                label="返回第一页"
+                disabled={!params.get("cursor")}
+                onClick={() => update("cursor", "")}
+              >
+                <ArrowLeft />
+              </IconButton>
+            </PaginationItem>
+            <PaginationItem>
+              <IconButton
+                label="下一页"
+                disabled={!query.data?.nextCursor}
+                onClick={() => {
+                  if (query.data?.nextCursor)
+                    update("cursor", query.data.nextCursor)
+                }}
+              >
+                <ArrowRight />
+              </IconButton>
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
       </div>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
@@ -359,7 +404,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
   }
   return (
     <form onSubmit={send} className="task-create-form">
-      <fieldset disabled={busy} className="min-w-0">
+      <FieldSet disabled={busy}>
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="engine">执行引擎</FieldLabel>
@@ -385,7 +430,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
               }}
             />
           </Field>
-          <Field>
+          <Field data-invalid={!!invalid.title}>
             <FieldLabel htmlFor="title">任务名称</FieldLabel>
             <Input
               id="title"
@@ -425,12 +470,14 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             />
             <FieldError id="prompt-error">{invalid.parts}</FieldError>
           </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field>
+          <FieldGroup className="sm:grid sm:grid-cols-2">
+            <Field data-invalid={!!invalid.model}>
               <FieldLabel htmlFor="provider">模型供应商</FieldLabel>
               <Choice
                 id="provider"
                 label="模型供应商"
+                searchable
+                aria-describedby={invalid.model ? "model-error" : undefined}
                 invalid={!!invalid.model}
                 disabled={busy || !providers.length}
                 value={provider}
@@ -450,11 +497,13 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
                 }}
               />
             </Field>
-            <Field>
+            <Field data-invalid={!!invalid.model}>
               <FieldLabel htmlFor="model">模型名称</FieldLabel>
               <Choice
                 id="model"
                 label="模型名称"
+                searchable
+                aria-describedby={invalid.model ? "model-error" : undefined}
                 invalid={!!invalid.model}
                 disabled={busy || !providerModels.length}
                 value={model}
@@ -474,13 +523,18 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
                 onChange={setSelectedModel}
               />
             </Field>
-          </div>
+          </FieldGroup>
           <FieldError id="model-error">{invalid.model}</FieldError>
           <Failure error={catalog.error} />
           {!catalog.loading && !catalog.error && !models.length && (
-            <p role="status" className="text-sm text-muted-foreground">
-              此引擎尚未配置可用模型或供应商凭据。
-            </p>
+            <Notice title="此引擎尚未配置可用模型或供应商凭据。">
+              <Link to="/settings">前往配置模型</Link>
+            </Notice>
+          )}
+          {engine && engine.health.status !== "ready" && (
+            <Notice title="引擎尚未就绪">
+              {engine.health.message || "等待引擎恢复后再分派任务。"}
+            </Notice>
           )}
           {catalog.error && (
             <Button variant="outline" type="button" onClick={catalog.reload}>
@@ -488,7 +542,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
               重新加载模型
             </Button>
           )}
-          <div className="grid gap-4 sm:grid-cols-2">
+          <FieldGroup className="sm:grid sm:grid-cols-2">
             <Field orientation="horizontal">
               <Switch
                 id="manual-permission"
@@ -505,16 +559,17 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
               />
               <FieldLabel htmlFor="manual-question">人工回答反问</FieldLabel>
             </Field>
-          </div>
+          </FieldGroup>
           <Failure error={error} />
-          <div className="flex justify-end border-t pt-4">
+          <Separator />
+          <div className="flex justify-end">
             <Button type="submit" disabled={busy || !canSubmit}>
               <Send data-icon="inline-start" />
               {busy ? "正在提交" : "分派任务"}
             </Button>
           </div>
         </FieldGroup>
-      </fieldset>
+      </FieldSet>
     </form>
   )
 }

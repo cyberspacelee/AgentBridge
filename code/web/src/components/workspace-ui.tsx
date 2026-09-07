@@ -1,4 +1,11 @@
-import { useEffect, useState, type ComponentProps, type ReactNode } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react"
+import { toast } from "sonner"
 import {
   AlertCircle,
   Check,
@@ -32,6 +39,24 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ApiError } from "@/lib/api"
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox"
 
 export const labels: Record<string, string> = {
   queued: "排队中",
@@ -57,13 +82,30 @@ export const labels: Record<string, string> = {
   missing: "文件缺失",
   changed: "文件已修改",
   passed: "检查通过",
+  live: "已连接",
+  reconnecting: "正在重连",
+  connecting: "正在连接",
+  not_checked: "未校验",
 }
 export function Status({ state }: { state: string }) {
-  const tone = ["running", "starting", "replying"].includes(state)
+  const tone = ["running", "starting", "replying", "connecting"].includes(state)
     ? "info"
-    : ["ready", "completed", "resolved", "available", "passed"].includes(state)
+    : [
+          "ready",
+          "completed",
+          "resolved",
+          "available",
+          "passed",
+          "live",
+        ].includes(state)
       ? "success"
-      : ["waiting_input", "stopping", "deleting", "changed"].includes(state)
+      : [
+            "waiting_input",
+            "stopping",
+            "deleting",
+            "changed",
+            "reconnecting",
+          ].includes(state)
         ? "warning"
         : [
               "failed",
@@ -88,7 +130,7 @@ export function Status({ state }: { state: string }) {
               ? Square
               : Clock
   return (
-    <Badge variant={tone} className="status rounded" data-tone={tone}>
+    <Badge variant={tone} className="status" data-tone={tone}>
       <Icon
         aria-hidden="true"
         className={tone === "info" ? "status-spinner" : undefined}
@@ -138,8 +180,13 @@ export function CopyText({
             }
           }
           setResult("已复制")
+          toast.success("已复制", { id: "clipboard" })
         } catch {
           setResult("复制失败")
+          toast.error("复制失败", {
+            id: "clipboard",
+            description: "请检查浏览器剪贴板权限后重试。",
+          })
         }
       }}
     >
@@ -210,6 +257,92 @@ export function Failure({ error }: { error?: Error | null }) {
     </Alert>
   )
 }
+export function Notice({
+  title,
+  children,
+  variant = "default",
+}: {
+  title: string
+  children?: ReactNode
+  variant?: ComponentProps<typeof Alert>["variant"]
+}) {
+  return (
+    <Alert variant={variant} role="status">
+      <AlertCircle aria-hidden="true" />
+      <AlertTitle>{title}</AlertTitle>
+      {children && <AlertDescription>{children}</AlertDescription>}
+    </Alert>
+  )
+}
+
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel,
+  busy,
+  error,
+  onOpenChange,
+  onConfirm,
+  finalFocus,
+}: {
+  open: boolean
+  title: string
+  description: ReactNode
+  confirmLabel: string
+  busy: boolean
+  error?: Error
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+  finalFocus?: HTMLElement | null
+}) {
+  const cancel = useRef<HTMLButtonElement>(null)
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) onOpenChange(next)
+      }}
+    >
+      <AlertDialogContent
+        initialFocus={cancel}
+        finalFocus={
+          finalFocus
+            ? () =>
+                finalFocus.isConnected
+                  ? finalFocus
+                  : document.getElementById("main-content")
+            : undefined
+        }
+        aria-busy={busy}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <Failure error={error} />
+        <AlertDialogFooter>
+          <AlertDialogCancel ref={cancel} disabled={busy}>
+            取消
+          </AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            {busy && (
+              <LoaderCircle
+                data-icon="inline-start"
+                className="motion-safe:animate-spin"
+              />
+            )}
+            {confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
 export function Blank({ children }: { children: ReactNode }) {
   return (
     <Empty className="workspace-empty">
@@ -230,6 +363,8 @@ export function Choice({
   id,
   disabled,
   invalid,
+  searchable = false,
+  ...triggerProps
 }: {
   label: string
   value: string
@@ -238,7 +373,43 @@ export function Choice({
   id?: string
   disabled?: boolean
   invalid?: boolean
+  searchable?: boolean
+  "aria-describedby"?: string
 }) {
+  if (searchable)
+    return (
+      <Combobox
+        items={options.map((option) => option.value)}
+        value={value || null}
+        itemToStringLabel={(value) =>
+          options.find((option) => option.value === value)?.label ?? value
+        }
+        disabled={disabled}
+        onValueChange={(option) => {
+          if (option) onChange(option)
+        }}
+      >
+        <ComboboxInput
+          id={id}
+          aria-label={label}
+          aria-invalid={invalid}
+          disabled={disabled}
+          placeholder={`选择${label}`}
+          {...triggerProps}
+        />
+        <ComboboxContent>
+          <ComboboxEmpty>没有匹配的选项</ComboboxEmpty>
+          <ComboboxList>
+            {(value: string) => (
+              <ComboboxItem key={value} value={value}>
+                {options.find((option) => option.value === value)?.label ??
+                  value}
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    )
   return (
     <Select
       items={options}
@@ -248,7 +419,12 @@ export function Choice({
         if (v !== null) onChange(v)
       }}
     >
-      <SelectTrigger id={id} aria-label={label} aria-invalid={invalid}>
+      <SelectTrigger
+        id={id}
+        aria-label={label}
+        aria-invalid={invalid}
+        {...triggerProps}
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
