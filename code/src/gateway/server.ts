@@ -50,6 +50,16 @@ const timeRange = z
     "Invalid time range",
   );
 
+export function localLogTimestamp(date = new Date()) {
+  const offset = -date.getTimezoneOffset();
+  const local = new Date(date.getTime() + offset * 60_000)
+    .toISOString()
+    .slice(0, -1);
+  const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0");
+  const minutes = String(Math.abs(offset) % 60).padStart(2, "0");
+  return `,"time":"${local}${offset >= 0 ? "+" : "-"}${hours}:${minutes}"`;
+}
+
 export function createServer(runtime: SessionRuntime) {
   const { store, config } = runtime;
   const settings = new SettingsManager(config);
@@ -74,7 +84,7 @@ export function createServer(runtime: SessionRuntime) {
   });
   const logger = pino(
     {
-      timestamp: pino.stdTimeFunctions.isoTime,
+      timestamp: localLogTimestamp,
       redact: [
         "req.headers.authorization",
         "req.headers.cookie",
