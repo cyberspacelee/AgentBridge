@@ -745,7 +745,6 @@ test("task rounds, follow mode, information panel and narrow dialogs", async ({
   await expect(follow).not.toBeChecked();
   await follow.check();
   if (info.project.name === "desktop") {
-    await page.getByRole("button", { name: "任务信息", exact: true }).click();
     await expect(page.locator(".task-aside")).not.toBeVisible();
     await captureQa(page, "task-info-collapsed");
     await page.getByRole("button", { name: "任务信息", exact: true }).click();
@@ -1337,6 +1336,87 @@ test("observation filters persist and paused snapshots survive events and failur
   await expect(page.getByRole("textbox", { name: "错误代码" })).toHaveValue(
     "SAMPLE",
   );
+});
+
+test("execution workspace keeps messages primary across viewport sizes", async ({
+  page,
+}, info) => {
+  test.skip(info.project.name !== "desktop", "Responsive matrix runs once");
+  test.setTimeout(90000);
+  const detail = designFixture();
+  detail.messages[0].parts[0].text = "执行输出，保留可读的上下文。\n\n".repeat(
+    100,
+  );
+  await mockTask(page, detail);
+  const log = page.getByLabel("执行消息", { exact: true });
+  const input = page.getByRole("textbox", { name: "追加任务", exact: true });
+  for (const width of [320, 375, 414, 768, 1440]) {
+    await page.setViewportSize({ width, height: 768 });
+    await expect(input).toBeInViewport({ ratio: 1 });
+    const normal = (await log.boundingBox())!.height;
+    expect(normal).toBeGreaterThan(width < 768 ? 230 : 400);
+    await log.evaluate((el) => {
+      el.scrollTop = 0;
+      el.dispatchEvent(new Event("scroll"));
+    });
+    await expect(
+      page.getByRole("button", { name: "回到最新进度" }),
+    ).toBeVisible();
+    expect((await log.boundingBox())!.height).toBe(normal);
+    await page.getByRole("button", { name: "专注阅读", exact: true }).click();
+    const focused = (await log.boundingBox())!.height;
+    expect(focused).toBeGreaterThan(normal + 80);
+    expect(await log.evaluate((el) => el.scrollTop)).toBe(0);
+    await input.fill("较长的追加要求\n".repeat(80));
+    expect((await input.boundingBox())!.height).toBeLessThanOrEqual(160);
+    await expect(input).toBeInViewport({ ratio: 1 });
+    await expect(
+      page.getByRole("button", { name: "提交新一轮", exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+    await input.fill("");
+    await page.getByRole("button", { name: "回到最新进度" }).click();
+    await expect
+      .poll(() =>
+        log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
+      )
+      .toBeLessThan(2);
+    await page
+      .getByRole("button", { name: "退出专注阅读", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
+      )
+      .toBeLessThan(2);
+    expect(
+      await page
+        .locator("main")
+        .evaluate((el) => el.scrollHeight <= el.clientHeight + 1),
+    ).toBe(true);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    console.log(
+      `Execution workspace ${width}x768: normal=${normal}, focused=${focused}`,
+    );
+    await page.screenshot({
+      path: info.outputPath(`execution-workspace-${width}.png`),
+    });
+  }
+  await theme(page, "深色");
+  await page.screenshot({
+    path: info.outputPath("execution-workspace-dark.png"),
+  });
+  await page.setViewportSize({ width: 375, height: 540 });
+  await page.getByRole("button", { name: "专注阅读", exact: true }).click();
+  await input.fill("短视口中的输入\n".repeat(50));
+  await expect(input).toBeInViewport({ ratio: 1 });
+  expect((await log.boundingBox())!.height).toBeGreaterThan(180);
+  await page.screenshot({
+    path: info.outputPath("execution-workspace-short.png"),
+  });
 });
 
 test("history scroll stays put on updates and IME does not submit", async ({

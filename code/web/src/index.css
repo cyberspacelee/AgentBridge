@@ -554,6 +554,119 @@
 .task-aside {
   overflow-y: auto;
 }
+/* Hallmark: Workbench / design.md. Critique: P5 H5 E4 S5 R5 V4. */
+.page.task-page {
+  padding-block: 12px;
+}
+.task-heading {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+.task-heading .back-link {
+  margin-bottom: 4px;
+}
+.task-heading .page-heading {
+  margin-bottom: 0;
+  gap: 8px;
+}
+.task-navigation {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.execution-controls {
+  flex-shrink: 0;
+  gap: 8px;
+}
+.execution-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+.execution-feed {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.execution-scroll {
+  min-width: 0;
+}
+.execution-log {
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  padding-bottom: 56px;
+}
+.execution-latest {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 16px);
+}
+.follow-up {
+  gap: 6px;
+  padding-top: 8px;
+}
+.follow-up [data-slot="input-group-control"] {
+  min-height: 44px;
+  max-height: min(160px, 20dvh);
+  overflow-y: auto;
+}
+.follow-up [data-slot="input-group"]:has(textarea:enabled) {
+  background: var(--card);
+  opacity: 1;
+}
+.follow-up [data-slot="input-group-addon"] {
+  align-self: flex-end;
+  padding-block: 4px;
+}
+.follow-up-actions {
+  gap: 4px;
+}
+.follow-up-actions > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-page[data-focused="true"] .task-heading,
+.task-page[data-focused="true"] .task-navigation,
+.task-page[data-focused="true"] .task-aside {
+  display: none;
+}
+.task-page[data-focused="true"] .task-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 767px) {
+  .page.task-page {
+    padding: 8px 12px;
+  }
+  .task-heading {
+    margin-bottom: 8px;
+  }
+  .task-heading .back-link {
+    min-height: 32px;
+  }
+  .task-navigation {
+    gap: 4px;
+  }
+  .task-navigation > [data-slot="tabs-list"] {
+    width: 100%;
+    height: 44px;
+    gap: 0;
+    padding: 0;
+  }
+  .execution-context {
+    gap: 6px;
+  }
+  .execution-time {
+    display: none;
+  }
+}
 @media (min-width: 1024px) {
   .app-shell[data-collapsed="true"] {
     grid-template-columns: 64px minmax(0, 1fr);

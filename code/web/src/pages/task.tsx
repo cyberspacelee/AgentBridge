@@ -11,6 +11,8 @@ import { toast } from "sonner"
 import {
   ArrowLeft,
   ArrowDown,
+  Maximize2,
+  Minimize2,
   PanelRight,
   Download,
   Eye,
@@ -79,7 +81,11 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupTextarea,
+} from "@/components/ui/input-group"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -101,7 +107,8 @@ export function Task() {
   const [error, setError] = useState<Error>()
   const [actionFocus, setActionFocus] = useState<HTMLElement | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
-  const [showInfo, setShowInfo] = useState(true)
+  const [showInfo, setShowInfo] = useState(false)
+  const [focused, setFocused] = useState(false)
   const [positions] = useState(
     () => new Map<string, { top: number; follow: boolean }>()
   )
@@ -147,24 +154,25 @@ export function Task() {
     }
   }
   return (
-    <div className="page task-page">
-      <Link
-        to={
-          params.get("return")?.startsWith("/observability?")
-            ? params.get("return")!
-            : "/tasks"
-        }
-        className="back-link"
-      >
-        <ArrowLeft className="size-3.5" />
-        {params.get("return")?.startsWith("/observability?")
-          ? "返回网关观测"
-          : "任务工作台"}
-      </Link>
-      <Failure error={query.error} />
-      {query.loading && <Skeleton className="mt-4 h-72 w-full" />}
-      {detail && (
-        <>
+    <div
+      className="page task-page"
+      data-focused={focused && tab === "execution"}
+    >
+      <div className="task-heading">
+        <Link
+          to={
+            params.get("return")?.startsWith("/observability?")
+              ? params.get("return")!
+              : "/tasks"
+          }
+          className="back-link"
+        >
+          <ArrowLeft className="size-3.5" />
+          {params.get("return")?.startsWith("/observability?")
+            ? "返回网关观测"
+            : "任务工作台"}
+        </Link>
+        {detail && (
           <div className="page-heading">
             <div className="min-w-0">
               <h1 className="break-words">{detail.task.title}</h1>
@@ -212,46 +220,38 @@ export function Task() {
               </IconButton>
             </div>
           </div>
+        )}
+      </div>
+      <Failure error={query.error} />
+      {query.loading && <Skeleton className="mt-4 h-72 w-full" />}
+      {detail && (
+        <>
           <div className="task-layout" data-info={showInfo}>
             <div className="task-main min-w-0">
-              <div className="toolbar">
-                <Choice
-                  label="执行轮次"
-                  value={selected?.id ?? ""}
-                  options={detail.runs.map((r) => ({
-                    value: r.id,
-                    label: `第 ${r.sequence} 轮 · ${labels[r.state]}`,
-                  }))}
-                  onChange={(v) => change("run", v)}
-                />
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {selected && (
-                    <>
-                      {date(selected.acceptedAt)}
-                      <span className="ml-3 hidden sm:inline">
-                        <ElapsedTime
-                          start={selected.startedAt}
-                          end={selected.finishedAt}
-                          active={selected.state === "running"}
-                        />
-                      </span>
-                    </>
-                  )}
-                </span>
-              </div>
               <Tabs
                 className="task-tabs"
                 value={tab}
                 onValueChange={(v) => change("tab", String(v))}
               >
-                <TabsList variant="line" className="mb-3 max-w-full">
-                  <TabsTrigger value="execution">执行记录</TabsTrigger>
-                  <TabsTrigger value="artifacts">交付物</TabsTrigger>
-                  <TabsTrigger value="interactions" aria-label="交互">
-                    交互{pending.length ? ` (${pending.length})` : ""}
-                  </TabsTrigger>
-                  <TabsTrigger value="diagnostics">诊断</TabsTrigger>
-                </TabsList>
+                <div className="task-navigation">
+                  <Choice
+                    label="执行轮次"
+                    value={selected?.id ?? ""}
+                    options={detail.runs.map((r) => ({
+                      value: r.id,
+                      label: `第 ${r.sequence} 轮 · ${labels[r.state]}`,
+                    }))}
+                    onChange={(v) => change("run", v)}
+                  />
+                  <TabsList variant="line" className="max-w-full">
+                    <TabsTrigger value="execution">执行记录</TabsTrigger>
+                    <TabsTrigger value="artifacts">交付物</TabsTrigger>
+                    <TabsTrigger value="interactions" aria-label="交互">
+                      交互{pending.length ? ` (${pending.length})` : ""}
+                    </TabsTrigger>
+                    <TabsTrigger value="diagnostics">诊断</TabsTrigger>
+                  </TabsList>
+                </div>
                 <TabsContent value="execution" data-execution>
                   <Execution
                     key={selected?.id}
@@ -260,6 +260,8 @@ export function Task() {
                       (m) => m.runId === selected?.id
                     )}
                     run={selected}
+                    focused={focused}
+                    onFocusChange={() => setFocused((value) => !value)}
                   >
                     {!!pending.length && (
                       <section
@@ -378,6 +380,8 @@ export function Task() {
                 <>
                   <h2 className="mt-8">本轮用量</h2>
                   <dl className="metadata">
+                    <dt>接收时间</dt>
+                    <dd>{date(selected.acceptedAt)}</dd>
                     <dt>输入 Token</dt>
                     <dd>{number(selected.usage?.input)}</dd>
                     <dt>输出 Token</dt>
@@ -455,6 +459,8 @@ export function Task() {
                 {number(selected?.usage?.input)} /{" "}
                 {number(selected?.usage?.output)}
               </dd>
+              <dt>本轮接收时间</dt>
+              <dd>{date(selected?.acceptedAt)}</dd>
               <dt>费用 (USD)</dt>
               <dd>{number(selected?.usage?.costUsd)}</dd>
             </dl>
@@ -470,11 +476,15 @@ function Execution({
   run,
   children,
   positions,
+  focused,
+  onFocusChange,
 }: {
   messages: Message[]
   run?: Run
   children?: ReactNode
   positions: Map<string, { top: number; follow: boolean }>
+  focused: boolean
+  onFocusChange: () => void
 }) {
   const runId = run?.id
   const [follow, setFollow] = useState(true)
@@ -482,102 +492,118 @@ function Execution({
     () => positions.get(runId ?? "")?.follow ?? true
   )
   const log = useRef<HTMLDivElement>(null)
-  const bottom = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   useLayoutEffect(() => {
     const element = log.current
     if (!element || !runId) return
     const saved = positions.get(runId)
-    const scrollable = ["auto", "scroll"].includes(
-      getComputedStyle(element).overflowY
-    )
-    if (scrollable) element.scrollTop = saved?.top ?? element.scrollHeight
+    element.scrollTop = saved?.top ?? element.scrollHeight
     following.current = saved?.follow ?? true
     const track = () => {
-      const near = ["auto", "scroll"].includes(
-        getComputedStyle(element).overflowY
-      )
-        ? element.scrollHeight - element.scrollTop - element.clientHeight <= 64
-        : element.getBoundingClientRect().bottom <= innerHeight + 64
+      const near =
+        element.scrollHeight - element.scrollTop - element.clientHeight <= 64
       following.current = near
       setAtBottom(near)
       positions.set(runId, { top: element.scrollTop, follow: near })
     }
     element.addEventListener("scroll", track)
-    window.addEventListener("scroll", track, { passive: true })
     return () => {
       positions.set(runId, {
         top: element.scrollTop,
         follow: following.current,
       })
       element.removeEventListener("scroll", track)
-      window.removeEventListener("scroll", track)
     }
   }, [runId, positions])
   useLayoutEffect(() => {
     const element = log.current
-    if (
-      element &&
-      follow &&
-      following.current &&
-      ["auto", "scroll"].includes(getComputedStyle(element).overflowY)
-    )
+    if (element && follow && following.current)
       element.scrollTop = element.scrollHeight
   }, [messages, follow])
+  useLayoutEffect(() => {
+    const element = log.current
+    if (!element) return
+    const observer = new ResizeObserver(() => {
+      if (follow && following.current) element.scrollTop = element.scrollHeight
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [follow])
   return (
     <div className="execution-view">
       <div className="execution-controls">
-        <span role="status">{run && <Status state={run.state} />}</span>
-        <Field orientation="horizontal" className="w-auto">
-          <Switch
-            id="follow"
-            size="sm"
-            checked={follow}
-            onCheckedChange={setFollow}
-          />
-          <FieldLabel htmlFor="follow" className="text-xs">
-            跟随输出
-          </FieldLabel>
-        </Field>
+        <div className="execution-context">
+          <h2 className="text-sm font-semibold">执行消息</h2>
+          <span role="status">{run && <Status state={run.state} />}</span>
+          {run && (
+            <span
+              className="execution-time text-xs text-muted-foreground"
+              title={date(run.acceptedAt)}
+            >
+              <ElapsedTime
+                start={run.startedAt}
+                end={run.finishedAt}
+                active={run.state === "running"}
+              />
+            </span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <Field orientation="horizontal" className="w-auto">
+            <Switch
+              id="follow"
+              size="sm"
+              checked={follow}
+              onCheckedChange={setFollow}
+            />
+            <FieldLabel htmlFor="follow" className="text-xs">
+              跟随输出
+            </FieldLabel>
+          </Field>
+          <IconButton
+            label={focused ? "退出专注阅读" : "专注阅读"}
+            aria-pressed={focused}
+            onClick={onFocusChange}
+          >
+            {focused ? <Minimize2 /> : <Maximize2 />}
+          </IconButton>
+        </div>
       </div>
-      <ScrollArea
-        className="execution-scroll"
-        viewportProps={{
-          className: "execution-log",
-          ref: log,
-          tabIndex: 0,
-          "aria-label": "执行消息",
-        }}
-      >
-        {messages.map((message) => (
-          <AgentMessage key={message.id} message={message} />
-        ))}
-        {!messages.length && (
-          <Blank>{run?.state === "queued" ? "等待执行" : "暂无消息"}</Blank>
-        )}
-        {children}
-        <div ref={bottom} />
-      </ScrollArea>
-      {!atBottom && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            const element = log.current
-            if (
-              element &&
-              ["auto", "scroll"].includes(getComputedStyle(element).overflowY)
-            )
-              element.scrollTop = element.scrollHeight
-            else bottom.current?.scrollIntoView({ block: "end" })
-            following.current = true
-            setAtBottom(true)
+      <div className="execution-feed">
+        <ScrollArea
+          className="execution-scroll"
+          viewportProps={{
+            className: "execution-log",
+            ref: log,
+            tabIndex: 0,
+            "aria-label": "执行消息",
           }}
         >
-          <ArrowDown data-icon="inline-start" />
-          回到最新进度
-        </Button>
-      )}
+          {messages.map((message) => (
+            <AgentMessage key={message.id} message={message} />
+          ))}
+          {!messages.length && (
+            <Blank>{run?.state === "queued" ? "等待执行" : "暂无消息"}</Blank>
+          )}
+          {children}
+        </ScrollArea>
+        {!atBottom && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="execution-latest"
+            onClick={() => {
+              const element = log.current
+              if (element) element.scrollTop = element.scrollHeight
+              following.current = true
+              setAtBottom(true)
+            }}
+          >
+            <ArrowDown data-icon="inline-start" />
+            回到最新进度
+          </Button>
+        )}
+      </div>
       {run?.error && (
         <Failure error={new Error(`${run.error.code}: ${run.error.message}`)} />
       )}
@@ -622,26 +648,40 @@ function FollowUp({
   return (
     <form className="follow-up" onSubmit={send}>
       <Field>
-        <FieldLabel htmlFor="follow-up">追加任务</FieldLabel>
-        <Textarea
-          id="follow-up"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              e.key === "Enter" &&
-              (e.ctrlKey || e.metaKey) &&
-              !e.nativeEvent.isComposing
-            ) {
-              e.preventDefault()
-              e.currentTarget.form?.requestSubmit()
-            }
-          }}
-          rows={3}
-          required
-          disabled={disabled || busy}
-          placeholder="补充要求或继续处理文件"
-        />
+        <FieldLabel htmlFor="follow-up" className="sr-only">
+          追加任务
+        </FieldLabel>
+        <InputGroup>
+          <InputGroupTextarea
+            id="follow-up"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                (e.ctrlKey || e.metaKey) &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault()
+                e.currentTarget.form?.requestSubmit()
+              }
+            }}
+            rows={1}
+            required
+            disabled={disabled || busy}
+            placeholder="追加任务或补充要求"
+          />
+          <InputGroupAddon align="inline-end">
+            <IconButton
+              label={busy ? "正在提交" : "提交新一轮"}
+              type="submit"
+              variant="default"
+              disabled={disabled || busy || !text.trim()}
+            >
+              <Send />
+            </IconButton>
+          </InputGroupAddon>
+        </InputGroup>
       </Field>
       <Failure error={error} />
       {disabledReason && <Notice title={disabledReason} />}
@@ -664,10 +704,6 @@ function FollowUp({
               填入上轮要求
             </Button>
           )}
-          <Button type="submit" disabled={disabled || busy || !text.trim()}>
-            <Send data-icon="inline-start" />
-            {busy ? "正在提交" : "提交新一轮"}
-          </Button>
         </div>
       </div>
     </form>
