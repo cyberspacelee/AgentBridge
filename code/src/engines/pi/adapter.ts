@@ -17,9 +17,19 @@ import type {
 } from "../../../shared/contracts.js";
 import { engineError } from "../../errors.js";
 import { within } from "../../async.js";
-import { readJsonLines, startProcess, stopProcess } from "../process.js";
+import {
+  readJsonLines,
+  startProcess,
+  stopProcess,
+  processDiagnostic,
+} from "../process.js";
 import { codeRoot, toolInstructions } from "../tool-instructions.js";
-import { piDirectory, piProviders, readSettings } from "../../settings.js";
+import {
+  piDirectory,
+  piProviders,
+  readSettings,
+  diagnosticSecrets,
+} from "../../settings.js";
 
 const object = (v: unknown) => z.record(z.string(), z.unknown()).parse(v);
 const text = (v: unknown) => (typeof v === "string" ? v : "");
@@ -64,6 +74,7 @@ interface RpcSession {
     messages: Message[];
     usage: Map<string, Usage>;
     cancelled: boolean;
+    error?: EngineResult["error"];
   };
   interactions: Map<string, { nativeId: string; method: string }>;
   closed: boolean;
@@ -94,7 +105,11 @@ export class PiAdapter implements EngineAdapter {
     for (const [id, provider] of Object.entries(piProviders(this.config)))
       models.registerProvider(id, provider);
     if (models.getError())
-      throw engineError("Pi model configuration could not be loaded");
+      throw engineError(
+        "Pi model configuration could not be loaded",
+        models.getError(),
+        diagnosticSecrets(this.config),
+      );
     return (await models.getAvailable()).map((model) => ({
       providerID: model.provider,
       modelID: model.id,
@@ -124,13 +139,25 @@ export class PiAdapter implements EngineAdapter {
     try {
       await within(
         new Promise<void>((resolve, reject) => {
-          child.once("error", () =>
-            reject(engineError("Pi executable could not be started")),
+          child.once("error", (error) =>
+            reject(
+              engineError(
+                "Pi executable could not be started",
+                error,
+                diagnosticSecrets(this.config),
+              ),
+            ),
           );
           child.once("exit", (code) =>
             code === 0
               ? resolve()
-              : reject(engineError("Pi version check failed")),
+              : reject(
+                  engineError(
+                    "Pi version check failed",
+                    processDiagnostic(child),
+                    diagnosticSecrets(this.config),
+                  ),
+                ),
           );
         }),
         this.config.limits.startupTimeoutMs,
@@ -145,7 +172,11 @@ export class PiAdapter implements EngineAdapter {
       this.state = {
         ...this.state,
         status: "unavailable",
-        message: "Pi executable is unavailable",
+        message: engineError(
+          "Pi executable is unavailable",
+          error,
+          diagnosticSecrets(this.config),
+        ).message,
       };
       await stopProcess(child, this.config.limits.abortTimeoutMs).catch(
         () => {},
@@ -208,8 +239,24 @@ export class PiAdapter implements EngineAdapter {
       rpc.active?.reject(error);
       rpc.active = undefined;
     };
-    child.once("error", () => fail(engineError("Pi process could not start")));
-    child.once("exit", () => fail(engineError("Pi process exited")));
+    child.once("error", (error) =>
+      fail(
+        engineError(
+          "Pi process could not start",
+          error,
+          diagnosticSecrets(this.config),
+        ),
+      ),
+    );
+    child.once("exit", () =>
+      fail(
+        engineError(
+          "Pi process exited",
+          processDiagnostic(child),
+          diagnosticSecrets(this.config),
+        ),
+      ),
+    );
     readJsonLines(
       child.stdout,
       (value) => this.event(rpc, object(value)),
@@ -318,7 +365,13 @@ export class PiAdapter implements EngineAdapter {
       rpc.pending.delete(text(event.id));
       event.success === true
         ? request.resolve(event)
-        : request.reject(engineError(`Pi ${text(event.command)} failed`));
+        : request.reject(
+            engineError(
+              `Pi ${text(event.command)} failed`,
+              event.error,
+              diagnosticSecrets(this.config),
+            ),
+          );
       return;
     }
     const a = rpc.active;
@@ -389,6 +442,14 @@ export class PiAdapter implements EngineAdapter {
           });
       });
       a.message.finishReason = text(native.stopReason);
+      a.error =
+        native.stopReason === "error"
+          ? engineError(
+              "Pi model request failed",
+              native.errorMessage || "Assistant stopped with an error",
+              diagnosticSecrets(this.config),
+            )
+          : undefined;
       a.message.completedAt = at;
       const usage = usageOf(native.usage);
       if (usage) a.usage.set(a.message.id, usage);
@@ -469,6 +530,15 @@ export class PiAdapter implements EngineAdapter {
           : null;
       rpc.active = undefined;
       a.resolve({
+        ...(last?.finishReason !== "stop" && last?.finishReason !== "aborted"
+          ? {
+              error:
+                a.error ??
+                engineError(
+                  `Pi ended without completion (stopReason=${last?.finishReason || "missing"})`,
+                ),
+            }
+          : {}),
         outcome:
           last?.finishReason === "stop"
             ? "completed"

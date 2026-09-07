@@ -22,6 +22,7 @@ import type {
 import { createTaskSchema } from "../shared/contracts.js";
 import { transitionRun } from "../src/domain/transitions.js";
 import { createServer } from "../src/gateway/server.js";
+import { engineError } from "../src/errors.js";
 
 class ControlledEngine implements EngineAdapter {
   id = "test";
@@ -160,6 +161,58 @@ const input = (directory: string, id = randomUUID()) =>
     directory,
     parts: [{ type: "text", text: "work" }],
   });
+
+test("artifact inventory warnings retain the filesystem cause without failing the model run", async () => {
+  const f = await fixture();
+  try {
+    const session = await f.runtime.createSession({ directory: f.directory });
+    await rm(f.directory, { recursive: true });
+    const accepted = await f.runtime.submit(input(f.directory), session.id);
+    await until(() => f.adapter.executions.has(session.id));
+    const log = f.store.db
+      .prepare(
+        "SELECT message,level FROM runtime_logs WHERE runId=? AND code='DISCOVERY_FAILED'",
+      )
+      .get(accepted.runId);
+    assert.equal(log?.level, "warn");
+    assert.match(String(log?.message), /ENOENT/);
+    assert.ok(String(log?.message).includes(f.directory));
+    f.adapter.complete(session.id);
+    assert.equal((await f.runtime.wait(accepted.runId)).state, "completed");
+  } finally {
+    await f.close();
+  }
+});
+
+test("engine Error messages survive database and JSON serialization", async () => {
+  const f = await fixture();
+  try {
+    const accepted = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(accepted.sessionId));
+    f.adapter.executions
+      .get(accepted.sessionId)!
+      .resolve({
+        outcome: "failed",
+        error: engineError("Provider refused request", {
+          statusCode: 401,
+          message: "invalid credentials",
+        }),
+      });
+    await f.runtime.wait(accepted.runId);
+    const persisted = JSON.parse(JSON.stringify(f.runtime.run(accepted.runId)));
+    assert.deepEqual(persisted.error, {
+      code: "BAD_GATEWAY",
+      message: "Provider refused request: 401: invalid credentials",
+      stage: "engine",
+    });
+    const event = f.store.db
+      .prepare("SELECT data FROM events WHERE runId=? AND type='run.finished'")
+      .get(accepted.runId);
+    assert.deepEqual(JSON.parse(String(event?.data)).error, persisted.error);
+  } finally {
+    await f.close();
+  }
+});
 
 test("task engines route models, follow-ups, approvals, cancellation and recovery independently", async () => {
   const second = new ControlledEngine();

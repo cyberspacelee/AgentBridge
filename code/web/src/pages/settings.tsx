@@ -401,7 +401,9 @@ function EntryEditor({
     provider?.api ?? "openai-completions"
   )
   const [models, setModels] = useState(
-    provider?.models.map((m) => m.id).join("\n") ?? ""
+    provider?.models ?? [
+      { id: "", name: "", contextWindow: 128000, maxTokens: 16384 },
+    ]
   )
   const [path, setPath] = useState(skill?.path ?? "")
   const [engine, setEngine] = useState(skill?.engine ?? "both")
@@ -439,14 +441,10 @@ function EntryEditor({
               apiKey: key,
               api: protocol,
               enabled,
-              models: models
-                .split(/\n|,/)
-                .map((value) => value.trim())
-                .filter(Boolean)
-                .map(
-                  (id) =>
-                    provider?.models.find((model) => model.id === id) ?? { id }
-                ),
+              models: models.map((model) => ({
+                ...model,
+                id: model.id.trim(),
+              })),
             })
           : kind === "skills"
             ? skillSchema.parse({ id, path, engine, enabled })
@@ -528,16 +526,93 @@ function EntryEditor({
                 ]}
               />
             </Field>
-            <Field>
-              <FieldLabel htmlFor="models">模型 ID（每行一个）</FieldLabel>
-              <Textarea
-                id="models"
-                required
-                value={models}
-                onChange={(e) => setModels(e.target.value)}
-                rows={3}
-              />
-            </Field>
+            <div className="settings-section-heading">
+              <h2>模型</h2>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy || models.length >= 100}
+                onClick={() =>
+                  setModels([
+                    ...models,
+                    {
+                      id: "",
+                      name: "",
+                      contextWindow: 128000,
+                      maxTokens: 16384,
+                    },
+                  ])
+                }
+              >
+                <Plus data-icon="inline-start" />
+                添加模型
+              </Button>
+            </div>
+            {models.map((model, index) => (
+              <div
+                className="settings-model-row"
+                key={index}
+                role="group"
+                aria-label={`模型 ${index + 1}`}
+              >
+                <Field>
+                  <FieldLabel htmlFor={`model-${index}-id`}>模型 ID</FieldLabel>
+                  <Input
+                    id={`model-${index}-id`}
+                    required
+                    maxLength={200}
+                    value={model.id}
+                    onChange={(e) =>
+                      setModels(
+                        models.map((item, i) =>
+                          i === index ? { ...item, id: e.target.value } : item
+                        )
+                      )
+                    }
+                  />
+                </Field>
+                {(
+                  [
+                    ["contextWindow", "上下文长度", 1024, 10000000],
+                    ["maxTokens", "最大输出长度", 1, 1000000],
+                  ] as const
+                ).map(([key, label, min, max]) => (
+                  <Field key={key}>
+                    <FieldLabel htmlFor={`model-${index}-${key}`}>
+                      {label}
+                    </FieldLabel>
+                    <Input
+                      id={`model-${index}-${key}`}
+                      type="number"
+                      required
+                      min={min}
+                      max={max}
+                      step={1}
+                      value={Number.isNaN(model[key]) ? "" : model[key]}
+                      onChange={(e) =>
+                        setModels(
+                          models.map((item, i) =>
+                            i === index
+                              ? { ...item, [key]: e.target.valueAsNumber }
+                              : item
+                          )
+                        )
+                      }
+                    />
+                  </Field>
+                ))}
+                <IconButton
+                  type="button"
+                  label={`删除模型 ${index + 1}`}
+                  disabled={busy || models.length === 1}
+                  onClick={() =>
+                    setModels(models.filter((_, i) => i !== index))
+                  }
+                >
+                  <Trash2 />
+                </IconButton>
+              </div>
+            ))}
           </>
         )}
         {kind === "skills" && (

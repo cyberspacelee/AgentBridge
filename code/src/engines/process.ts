@@ -4,6 +4,13 @@ import { StringDecoder } from "node:string_decoder";
 import { engineError } from "../errors.js";
 import { within } from "../async.js";
 
+const stderrTails = new WeakMap<ChildProcessWithoutNullStreams, string>();
+export function processDiagnostic(
+  child: ChildProcessWithoutNullStreams,
+): string {
+  return `exit=${child.exitCode ?? "pending"}, signal=${child.signalCode ?? "none"}${stderrTails.get(child) ? `; stderr: ${stderrTails.get(child)}` : ""}`;
+}
+
 export function startProcess(
   command: string,
   args: string[],
@@ -17,8 +24,13 @@ export function startProcess(
     windowsHide: true,
     detached: process.platform !== "win32",
   }) as ChildProcessWithoutNullStreams;
-  // Drain stderr even when logging is disabled, so an engine cannot block on a full pipe.
-  child.stderr.on("data", () => {});
+  // Drain stderr and retain a bounded tail for startup/crash diagnostics.
+  child.stderr.on("data", (chunk) => {
+    stderrTails.set(
+      child,
+      ((stderrTails.get(child) ?? "") + String(chunk)).slice(-8192),
+    );
+  });
   return child;
 }
 export function readJsonLines(

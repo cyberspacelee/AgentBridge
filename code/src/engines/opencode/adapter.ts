@@ -18,9 +18,9 @@ import type {
 } from "../../../shared/contracts.js";
 import { engineError } from "../../errors.js";
 import { within } from "../../async.js";
-import { startProcess, stopProcess } from "../process.js";
+import { startProcess, stopProcess, processDiagnostic } from "../process.js";
 import { toolInstructions } from "../tool-instructions.js";
-import { opencodeEnvironment } from "../../settings.js";
+import { opencodeEnvironment, diagnosticSecrets } from "../../settings.js";
 
 const object = (v: unknown) => z.record(z.string(), z.unknown()).parse(v);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -38,6 +38,7 @@ interface NativeSession {
     messages: Map<string, Message>;
     cancelled: boolean;
     submission?: Promise<unknown>;
+    error?: EngineResult["error"];
   };
 }
 
@@ -126,12 +127,18 @@ export class OpenCodeAdapter implements EngineAdapter {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(timeout),
       });
-    } catch {
-      throw engineError("OpenCode transport failed");
+    } catch (error) {
+      throw engineError(
+        `OpenCode ${method} ${route} transport failed`,
+        error,
+        diagnosticSecrets(this.config),
+      );
     }
     if (!response.ok)
       throw engineError(
-        `OpenCode ${method} operation returned HTTP ${response.status}`,
+        `OpenCode ${method} ${route} returned HTTP ${response.status}`,
+        await response.text(),
+        diagnosticSecrets(this.config),
       );
     if (response.status === 204) return null;
     try {
@@ -159,14 +166,22 @@ export class OpenCodeAdapter implements EngineAdapter {
         },
       );
       this.child.stdout.resume();
-      this.child.on("error", () => {
+      this.child.on("error", (error) => {
         this.state.status = "unavailable";
-        this.state.message = "OpenCode executable could not start";
+        this.state.message = engineError(
+          "OpenCode executable could not start",
+          error,
+          diagnosticSecrets(this.config),
+        ).message;
       });
       this.child.on("exit", () => {
         this.state.status = "unavailable";
         this.state.processes = 0;
-        this.state.message = "OpenCode process exited";
+        this.state.message = engineError(
+          "OpenCode process exited",
+          processDiagnostic(this.child!),
+          diagnosticSecrets(this.config),
+        ).message;
       });
     }
     try {
@@ -194,7 +209,11 @@ export class OpenCodeAdapter implements EngineAdapter {
         }
       }
       if (health?.healthy !== true)
-        throw engineError("OpenCode health check failed");
+        throw engineError(
+          "OpenCode health check failed",
+          this.child ? processDiagnostic(this.child) : this.config.opencode.url,
+          diagnosticSecrets(this.config),
+        );
       const response = await within(
         fetch(this.url("/global/event"), {
           headers: this.headers(),
@@ -220,7 +239,11 @@ export class OpenCodeAdapter implements EngineAdapter {
       });
     } catch (error) {
       this.state.status = "unavailable";
-      this.state.message = "OpenCode is unavailable";
+      this.state.message = engineError(
+        "OpenCode is unavailable",
+        error,
+        diagnosticSecrets(this.config),
+      ).message;
       this.stream.abort();
       if (this.child)
         await stopProcess(this.child, this.config.limits.abortTimeoutMs).catch(
@@ -327,6 +350,12 @@ export class OpenCodeAdapter implements EngineAdapter {
       : typeof info.finish === "string"
         ? info.finish
         : null;
+    if (info.error)
+      active.error = engineError(
+        "OpenCode model request failed",
+        info.error,
+        diagnosticSecrets(this.config),
+      );
     active.messages.set(nativeId, message);
     return message;
   }
@@ -377,7 +406,13 @@ export class OpenCodeAdapter implements EngineAdapter {
     );
     const active = native?.active;
     if (!native || !active || active.cancelled) return;
-    if (event.type === "message.updated" && info) {
+    if (event.type === "session.error") {
+      active.error = engineError(
+        "OpenCode session failed",
+        properties.error,
+        diagnosticSecrets(this.config),
+      );
+    } else if (event.type === "message.updated" && info) {
       const message = this.info(native, info);
       if (message)
         active.emit({ type: "message", message: structuredClone(message) });
@@ -505,6 +540,15 @@ export class OpenCodeAdapter implements EngineAdapter {
           : null;
       return {
         outcome: last?.finishReason === "stop" ? "completed" : "failed",
+        ...(last?.finishReason !== "stop"
+          ? {
+              error:
+                active.error ??
+                engineError(
+                  `OpenCode ended without completion (finishReason=${last?.finishReason || "missing"})`,
+                ),
+            }
+          : {}),
         usage: usages.length
           ? {
               input: sum("input"),

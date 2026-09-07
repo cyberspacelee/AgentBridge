@@ -26,7 +26,13 @@ import type {
   EngineResult,
   EngineUpdate,
 } from "../engines/adapter.js";
-import { asGatewayError, engineError, GatewayError } from "../errors.js";
+import {
+  asGatewayError,
+  engineError,
+  errorDetail,
+  GatewayError,
+} from "../errors.js";
+import { diagnosticSecrets } from "../settings.js";
 import { Store } from "../storage/sqlite.js";
 import {
   discoverFiles,
@@ -132,7 +138,7 @@ export class SessionRuntime {
             "error",
             "engine",
             asGatewayError(error).code,
-            `${adapter.id} engine is not ready`,
+            `${adapter.id} engine is not ready: ${errorDetail(error, diagnosticSecrets(this.config))}`,
           );
         }
       }),
@@ -522,12 +528,12 @@ export class SessionRuntime {
           recovery.pending = adapter
             .stop()
             .then(() => adapter.start())
-            .catch(() =>
+            .catch((error) =>
               this.log(
                 "error",
                 "engine",
                 "BAD_GATEWAY",
-                "Engine restart failed",
+                `Engine restart failed: ${errorDetail(error, diagnosticSecrets(this.config))}`,
               ),
             )
             .finally(() => {
@@ -588,12 +594,12 @@ export class SessionRuntime {
                   session.id,
                 );
               })
-              .catch(() =>
+              .catch((error) =>
                 this.log(
                   "error",
                   "recovery",
                   "BAD_GATEWAY",
-                  "Native session recovery failed",
+                  `Native session recovery failed: ${errorDetail(error, diagnosticSecrets(this.config))}`,
                   session.id,
                 ),
               )
@@ -684,12 +690,12 @@ export class SessionRuntime {
     let before: Map<string, string> | null = null;
     try {
       before = await discoverFiles(session.directory);
-    } catch {
+    } catch (error) {
       this.log(
         "warn",
         "artifact",
         "DISCOVERY_FAILED",
-        "Initial artifact inventory could not be completed",
+        `Initial artifact inventory could not be completed: ${errorDetail(error, diagnosticSecrets(this.config))}`,
         session.id,
         runId,
       );
@@ -724,12 +730,12 @@ export class SessionRuntime {
                 });
               }
             });
-        } catch {
+        } catch (error) {
           this.log(
             "warn",
             "artifact",
             "ARTIFACT_CHECK_FAILED",
-            "Artifact discovery or verification failed",
+            `Artifact discovery or verification failed: ${errorDetail(error, diagnosticSecrets(this.config))}`,
             session.id,
             runId,
           );
@@ -764,6 +770,8 @@ export class SessionRuntime {
     } catch (error) {
       if (this.run(runId).state !== "running") return;
       const e = asGatewayError(error);
+      if (!(error instanceof GatewayError))
+        e.message = errorDetail(error, diagnosticSecrets(this.config));
       // A rejected transport promise does not prove that native work stopped.
       await this.isolate(session.id, {
         code: e.code,
@@ -850,6 +858,9 @@ export class SessionRuntime {
   ) {
     const current = this.run(runId);
     if (isTerminal(current.state)) return;
+    // Error.message is not enumerable; persist a plain failure for HTTP/SSE and reloads.
+    if (error)
+      error = { code: error.code, message: error.message, stage: error.stage };
     let finished!: Run;
     this.store.transaction(() => {
       finished = {

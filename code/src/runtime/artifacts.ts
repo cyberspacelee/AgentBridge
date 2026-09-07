@@ -72,7 +72,7 @@ export async function discoverFiles(
       if (++visited > 10000)
         throw new GatewayError(
           "SERVICE_UNAVAILABLE",
-          "Artifact discovery limit exceeded",
+          `Artifact discovery exceeded 10000 entries under ${root} (at ${directory})`,
           503,
           "artifact",
         );

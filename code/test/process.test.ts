@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { readJsonLines } from "../src/engines/process.js";
+import {
+  readJsonLines,
+  startProcess,
+  processDiagnostic,
+  stopProcess,
+} from "../src/engines/process.js";
+import { within } from "../src/async.js";
 
 test("JSONL handles split UTF-8, CRLF, embedded separators and a final line", () => {
   const stream = new PassThrough();
@@ -36,4 +42,30 @@ test("malformed JSONL stops later records", () => {
   stream.end();
   assert.equal(errors.length, 1);
   assert.deepEqual(values, []);
+});
+
+test("process failures retain a bounded stderr tail and exit code", async () => {
+  const child = startProcess(
+    process.execPath,
+    [
+      "-e",
+      "process.stderr.write('x'.repeat(10000) + ' configuration rejected'); process.exitCode = 7",
+    ],
+    process.cwd(),
+  );
+  child.stdout.resume();
+  try {
+    await within(
+      new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", () => resolve());
+      }),
+      5000,
+    );
+    assert.match(processDiagnostic(child), /exit=7/);
+    assert.match(processDiagnostic(child), /configuration rejected/);
+    assert.ok(processDiagnostic(child).length < 8300);
+  } finally {
+    await stopProcess(child, 1000);
+  }
 });

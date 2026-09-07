@@ -44,7 +44,10 @@ test("settings preserve secrets, reject stale writes and feed native model/skill
             id: "bridge",
             baseUrl: "http://localhost:9999/v1",
             apiKey: "!literal$key",
-            models: [{ id: "model" }],
+            models: [
+              { id: "model", contextWindow: 32000, maxTokens: 4096 },
+              { id: "large", contextWindow: 200000, maxTokens: 16384 },
+            ],
           },
         ],
         skills: [
@@ -83,6 +86,24 @@ test("settings preserve secrets, reject stale writes and feed native model/skill
       opencodeEnvironment(config).OPENCODE_CONFIG_CONTENT,
     );
     assert.equal(native.provider.bridge.options.apiKey, "!literal$key");
+    assert.deepEqual(native.provider.bridge.models.model.limit, {
+      context: 32000,
+      output: 4096,
+    });
+    assert.deepEqual(native.provider.bridge.models.large.limit, {
+      context: 200000,
+      output: 16384,
+    });
+    assert.deepEqual(
+      piProviders(config).bridge!.models.map((model) => [
+        model.contextWindow,
+        model.maxTokens,
+      ]),
+      [
+        [32000, 4096],
+        [200000, 16384],
+      ],
+    );
     assert.deepEqual(native.skills.paths, [directory]);
     assert.equal(native.mcp.office.environment.TOKEN, "secret");
     const models = await new PiAdapter(config).models();

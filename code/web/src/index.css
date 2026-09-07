@@ -61,6 +61,22 @@
 .settings-page [data-slot="field"] {
   min-width: 0;
 }
+.settings-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr)) 36px;
+  align-items: end;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .settings-model-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) 36px;
+  }
+  .settings-model-row > :first-child {
+    grid-column: 1 / -1;
+  }
+}
 
 @custom-variant dark (&:is(.dark *));
 

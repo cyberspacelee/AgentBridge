@@ -18,7 +18,27 @@ test("settings persist models, skills and MCP with masked secrets", async ({
     .getByLabel("Base URL", { exact: true })
     .fill("http://127.0.0.1:8888/v1");
   await page.getByLabel("API Key", { exact: true }).fill("browser-secret");
-  await page.getByLabel("模型 ID（每行一个）").fill("model-one\nmodel-two");
+  await page
+    .getByRole("group", { name: "模型 1", exact: true })
+    .getByLabel("模型 ID", { exact: true })
+    .fill("model-one");
+  await page
+    .getByRole("group", { name: "模型 1", exact: true })
+    .getByLabel("上下文长度")
+    .fill("32000");
+  await page
+    .getByRole("group", { name: "模型 1", exact: true })
+    .getByLabel("最大输出长度")
+    .fill("4096");
+  await page.getByRole("button", { name: "添加模型", exact: true }).click();
+  await page
+    .getByRole("group", { name: "模型 2", exact: true })
+    .getByLabel("模型 ID", { exact: true })
+    .fill("model-two");
+  await page
+    .getByRole("group", { name: "模型 2", exact: true })
+    .getByLabel("上下文长度")
+    .fill("200000");
   await captureQa(page, `settings-model-form-${suffix}`);
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
@@ -26,12 +46,29 @@ test("settings persist models, skills and MCP with masked secrets", async ({
   ).toBeVisible();
   const settingsResponse = await request.get("/api/settings");
   expect(await settingsResponse.text()).not.toContain("browser-secret");
+  expect(
+    (await settingsResponse.json()).settings.providers.find(
+      (item: { id: string }) => item.id === provider,
+    ).models,
+  ).toMatchObject([
+    { id: "model-one", contextWindow: 32000, maxTokens: 4096 },
+    { id: "model-two", contextWindow: 200000, maxTokens: 16384 },
+  ]);
   await page
     .getByRole("button", { name: `编辑 ${provider}`, exact: true })
     .click();
   await expect(page.getByLabel("API Key", { exact: true })).toHaveValue(
     "********",
   );
+  await expect(
+    page
+      .getByRole("group", { name: "模型 1", exact: true })
+      .getByLabel("上下文长度"),
+  ).toHaveValue("32000");
+  await page
+    .getByRole("group", { name: "模型 2", exact: true })
+    .getByLabel("上下文长度")
+    .fill("256000");
   await page
     .getByLabel("Base URL", { exact: true })
     .fill("http://127.0.0.1:8889/v1");
@@ -41,6 +78,21 @@ test("settings persist models, skills and MCP with masked secrets", async ({
   ).toBeVisible();
   await page.reload();
   await expect(page.getByText(/8889/)).toBeVisible();
+  await page
+    .getByRole("button", { name: `编辑 ${provider}`, exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("group", { name: "模型 2", exact: true })
+      .getByLabel("上下文长度"),
+  ).toHaveValue("256000");
+  await page.getByRole("button", { name: "删除模型 1", exact: true }).click();
+  await expect(
+    page
+      .getByRole("group", { name: "模型 1", exact: true })
+      .getByLabel("模型 ID", { exact: true }),
+  ).toHaveValue("model-two");
+  await page.getByRole("button", { name: "取消编辑", exact: true }).click();
   await captureQa(page, `settings-models-${suffix}`);
   await page.getByRole("tab", { name: "Skills", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();

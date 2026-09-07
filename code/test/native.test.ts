@@ -74,11 +74,25 @@ for (const engine of ["pi", "opencode"] as const)
       );
       const output = path.join(directory, "result.txt");
       let toolRequests = 0;
+      let rejectModel = false;
       const server = createServer(async (req, res) => {
         try {
           const chunks: Buffer[] = [];
           for await (const chunk of req) chunks.push(Buffer.from(chunk));
           const body = JSON.parse(Buffer.concat(chunks).toString());
+          if (rejectModel) {
+            res.writeHead(401, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: {
+                  code: "invalid_api_key",
+                  message:
+                    "Provider rejected configured key native-test-secret",
+                },
+              }),
+            );
+            return;
+          }
           const hasTool = body.messages.some(
             (m: { role: string }) => m.role === "tool",
           );
@@ -171,7 +185,7 @@ for (const engine of ["pi", "opencode"] as const)
             {
               id: "bridge",
               baseUrl,
-              apiKey: "fixture",
+              apiKey: "native-test-secret",
               models: [
                 { id: "bridge-test", contextWindow: 32000, maxTokens: 4000 },
               ],
@@ -231,6 +245,34 @@ for (const engine of ["pi", "opencode"] as const)
         );
         assert.equal(messages.at(-1)?.finishReason, "stop");
         assert.ok(messages.at(-1)?.parts.some((p) => p.type === "step-finish"));
+        rejectModel = true;
+        const rejected = await runtime.submit(
+          createTaskSchema.parse({
+            submissionId: randomUUID(),
+            directory,
+            title: "Provider rejection",
+            model: { providerID: "bridge", modelID: "bridge-test" },
+            parts: [{ type: "text", text: "Test rejected model request" }],
+          }),
+        );
+        const failure = await within(runtime.wait(rejected.runId), 20000);
+        assert.equal(failure.state, "failed");
+        assert.match(
+          failure.error!.message,
+          /Provider rejected configured key/,
+        );
+        assert.ok(!failure.error!.message.includes("native-test-secret"));
+        assert.equal(
+          runtime.run(rejected.runId).error?.message,
+          failure.error!.message,
+        );
+        const log = store.db
+          .prepare(
+            "SELECT message FROM runtime_logs WHERE runId=? AND level='error'",
+          )
+          .get(rejected.runId);
+        assert.match(String(log?.message), /Provider rejected configured key/);
+        assert.ok(!String(log?.message).includes("native-test-secret"));
         await runtime.deleteSession(accepted.sessionId);
       } finally {
         await runtime.stop();

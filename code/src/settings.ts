@@ -60,6 +60,19 @@ export function configuredProviders(
   }
   return providers;
 }
+export function diagnosticSecrets(config: Config): string[] {
+  const values = [
+    config.opencode.password,
+    config.compatibleProvider?.apiKey ?? "",
+  ];
+  // Invalid settings must not hide the error we are trying to report.
+  try {
+    values.push(
+      ...readSettings(config).providers.map((provider) => provider.apiKey),
+    );
+  } catch {}
+  return values;
+}
 export function piProviders(config: Config) {
   return Object.fromEntries(
     configuredProviders(config).map((provider) => [
