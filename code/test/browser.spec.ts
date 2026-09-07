@@ -7,11 +7,18 @@ test("settings persist models, skills and MCP with masked secrets", async ({
 }, info) => {
   const suffix = info.project.name;
   const provider = `compatible-${suffix}`;
+  const initialViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: initialViewport.width, height: 540 });
   expect((await page.goto("/settings"))?.status()).toBe(200);
   await expect(
     page.getByRole("heading", { name: "配置", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "添加", exact: true }).click();
+  const editor = page.getByRole("dialog");
+  await expect(
+    editor.getByRole("button", { name: /关闭|取消编辑/ }),
+  ).toHaveCount(1);
+  await expect(editor).toHaveCSS("overflow-y", "hidden");
   await page.getByLabel("名称", { exact: true }).fill(provider);
   await page
     .getByLabel("Base URL", { exact: true })
@@ -39,7 +46,25 @@ test("settings persist models, skills and MCP with masked secrets", async ({
     .getByLabel("上下文长度")
     .fill("200000");
   await captureQa(page, `settings-model-form-${suffix}`);
+  const editorViewport = editor.locator('[data-slot="scroll-area-viewport"]');
+  await expect(editorViewport).toHaveCSS("scrollbar-width", "none");
+  await expect
+    .poll(() =>
+      editorViewport.evaluate((el) => el.scrollHeight > el.clientHeight),
+    )
+    .toBe(true);
+  await editorViewport.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  expect(
+    await editorViewport.evaluate((el) => el.scrollWidth <= el.clientWidth),
+  ).toBe(true);
+  await expect(
+    editor.getByRole("button", { name: "保存配置", exact: true }),
+  ).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: info.outputPath("settings-scroll.png") });
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await page.setViewportSize(initialViewport);
   await expect(
     page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
   ).toBeVisible();
@@ -97,7 +122,11 @@ test("settings persist models, skills and MCP with masked secrets", async ({
       .getByRole("group", { name: "模型 1", exact: true })
       .getByLabel("模型 ID", { exact: true }),
   ).toHaveValue("model-two");
-  await page.getByRole("button", { name: "取消编辑", exact: true }).click();
+  await editor.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
+  ).toBeFocused();
   await captureQa(page, `settings-models-${suffix}`);
   await page.getByRole("tab", { name: "Skills", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();
@@ -426,6 +455,11 @@ test("task list search, history, filters, pagination, empty state and create for
   await page.getByRole("button", { name: "分派任务", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await captureQa(page, `create-${info.project.name}`);
+  await expect(dialog).toHaveCSS("overflow-y", "hidden");
+  await expect(dialog.locator('[data-slot="scroll-area-viewport"]')).toHaveCSS(
+    "scrollbar-width",
+    "none",
+  );
   await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
   await expect(dialog).toBeVisible();
   expect(
@@ -733,11 +767,117 @@ test("task rounds, follow mode, information panel and narrow dialogs", async ({
   expect(rect!.x).toBeGreaterThanOrEqual(0);
   expect(Math.abs(rect!.x + rect!.width - 320)).toBeLessThan(1);
   await expect(dialog).toHaveAttribute("data-slot", "sheet-content");
+  await expect(dialog).toHaveCSS("overflow-y", "hidden");
+  const viewport = dialog.locator('[data-slot="scroll-area-viewport"]');
+  await expect(viewport).toHaveCSS("scrollbar-width", "none");
+  await viewport.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(
+    dialog.getByText("费用 (USD)", { exact: true }),
+  ).toBeInViewport();
   await captureQa(page, `task-info-${info.project.name}`);
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("button", { name: "任务信息", exact: true }),
   ).toBeFocused();
+});
+
+test("diagnostics and file previews scroll without compressing content", async ({
+  page,
+}, info) => {
+  const detail = designFixture();
+  const at = detail.runs[0].startedAt;
+  let logs = Array.from({ length: 30 }, (_, id) => ({
+    id,
+    occurredAt: at,
+    code: `ERROR_${id}`,
+    message: `诊断日志 ${id}`,
+  }));
+  await page.route("**/api/observability/runs/design-run", (route) =>
+    route.fulfill({
+      json: {
+        spans: Array.from({ length: 30 }, (_, i) => ({
+          name: `stage-${i}`,
+          startedAt: at,
+          finishedAt: at,
+        })),
+        logs,
+      },
+    }),
+  );
+  detail.artifacts[0].availability = "available";
+  await page.route("**/api/artifacts/file-sample/content?*", (route) =>
+    route.fulfill({
+      body: Array.from({ length: 200 }, (_, i) => `Preview line ${i}`).join(
+        "\n",
+      ),
+      contentType: "text/plain",
+    }),
+  );
+  await mockTask(page, detail);
+  await page.getByRole("tab", { name: "诊断", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "诊断", exact: true });
+  const viewport = panel.locator('[data-slot="scroll-area-viewport"]');
+  await expect(panel.getByRole("row")).toHaveCount(31);
+  await expect(panel).toHaveCSS("overflow-y", "hidden");
+  await expect(viewport).toHaveCSS("scrollbar-width", "none");
+  expect(
+    await panel
+      .locator('[data-slot="table-container"]')
+      .evaluate(
+        (el) => el.clientHeight >= el.querySelector("table")!.clientHeight,
+      ),
+  ).toBe(true);
+  expect(
+    await viewport.evaluate((el) => el.scrollHeight > el.clientHeight),
+  ).toBe(true);
+  await expect(
+    panel.getByRole("cell", { name: "stage-0", exact: true }),
+  ).toBeInViewport();
+  await page.screenshot({ path: info.outputPath("diagnostics-top.png") });
+  await viewport.hover();
+  await page.mouse.wheel(0, 5000);
+  await expect(
+    panel.getByText("诊断日志 29", { exact: true }),
+  ).toBeInViewport();
+  await page.screenshot({ path: info.outputPath("diagnostics-bottom.png") });
+  logs = [];
+  await page.reload();
+  await viewport.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(panel.getByText("本轮暂无错误日志")).toBeInViewport();
+  await page.getByRole("tab", { name: "交付物", exact: true }).click();
+  await page.getByRole("button", { name: "预览 report.md" }).click();
+  const preview = page.getByRole("dialog");
+  const fileViewport = preview.locator('[data-slot="scroll-area-viewport"]');
+  await expect(preview).toHaveCSS("overflow-y", "hidden");
+  await expect(preview.locator("pre")).toContainText("Preview line 199");
+  await expect(fileViewport).toHaveCSS("scrollbar-width", "none");
+  expect(
+    await preview.evaluate(
+      (el) => el.getBoundingClientRect().height <= innerHeight * 0.9 + 1,
+    ),
+  ).toBe(true);
+  expect(
+    await fileViewport.evaluate((el) => el.scrollHeight > el.clientHeight),
+  ).toBe(true);
+  await fileViewport.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  expect(
+    await fileViewport.evaluate(
+      (el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: info.outputPath("preview-bottom.png") });
+  await preview.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(preview).not.toBeVisible();
+  detail.runs = [];
+  await page.reload();
+  await page.getByRole("tab", { name: "诊断", exact: true }).click();
+  await expect(panel.getByText("暂无执行记录")).toBeInViewport();
 });
 
 test("every detail and observation subview has responsive screenshot evidence", async ({

@@ -53,7 +53,7 @@
 }
 @media (max-width: 640px) {
   .settings-model-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) 36px;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
   }
   .settings-model-row > :first-child {
     grid-column: 1 / -1;
@@ -538,15 +538,11 @@
   min-height: 100%;
 }
 .diagnostics-view {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  min-height: 100%;
-}
-.diagnostics-view > [data-slot="empty"] {
   flex: 1;
+  min-height: 0;
 }
-.task-tabs > [data-slot="tabs-content"][data-execution] {
+.task-tabs > [data-slot="tabs-content"][data-execution],
+.task-tabs > [data-slot="tabs-content"][data-diagnostics] {
   display: flex;
   flex-direction: column;
   overflow: hidden;

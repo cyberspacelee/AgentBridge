@@ -337,7 +337,7 @@ export function Task() {
                     ) && <Blank>本轮没有交互请求</Blank>}
                   </div>
                 </TabsContent>
-                <TabsContent value="diagnostics">
+                <TabsContent value="diagnostics" data-diagnostics>
                   {selected ? (
                     <Diagnostics run={selected} revision={revision} />
                   ) : (
@@ -424,39 +424,41 @@ export function Task() {
       />
       <Sheet open={infoOpen} onOpenChange={setInfoOpen}>
         <SheetContent
-          className="overflow-y-auto"
+          className="overflow-hidden"
           finalFocus={() =>
             document.querySelector<HTMLButtonElement>(
               'button[aria-label="任务信息"]'
             )
           }
         >
-          <SheetHeader>
+          <SheetHeader className="shrink-0">
             <SheetTitle>任务信息</SheetTitle>
           </SheetHeader>
-          <dl className="metadata px-4 pb-4">
-            <dt>工作目录</dt>
-            <dd className="font-mono">{detail?.task.directory}</dd>
-            <dt>引擎</dt>
-            <dd>{detail?.task.engineId}</dd>
-            <dt>模型</dt>
-            <dd>
-              {selected?.model
-                ? `${selected.model.providerID} / ${selected.model.modelID}`
-                : "引擎默认"}
-            </dd>
-            <dt>创建时间</dt>
-            <dd>{date(detail?.task.createdAt)}</dd>
-            <dt>排队轮次</dt>
-            <dd>{detail?.task.queuedCount}</dd>
-            <dt>输入 / 输出 Token</dt>
-            <dd>
-              {number(selected?.usage?.input)} /{" "}
-              {number(selected?.usage?.output)}
-            </dd>
-            <dt>费用 (USD)</dt>
-            <dd>{number(selected?.usage?.costUsd)}</dd>
-          </dl>
+          <ScrollArea className="min-h-0 flex-1">
+            <dl className="metadata px-4 pb-4">
+              <dt>工作目录</dt>
+              <dd className="font-mono">{detail?.task.directory}</dd>
+              <dt>引擎</dt>
+              <dd>{detail?.task.engineId}</dd>
+              <dt>模型</dt>
+              <dd>
+                {selected?.model
+                  ? `${selected.model.providerID} / ${selected.model.modelID}`
+                  : "引擎默认"}
+              </dd>
+              <dt>创建时间</dt>
+              <dd>{date(detail?.task.createdAt)}</dd>
+              <dt>排队轮次</dt>
+              <dd>{detail?.task.queuedCount}</dd>
+              <dt>输入 / 输出 Token</dt>
+              <dd>
+                {number(selected?.usage?.input)} /{" "}
+                {number(selected?.usage?.output)}
+              </dd>
+              <dt>费用 (USD)</dt>
+              <dd>{number(selected?.usage?.costUsd)}</dd>
+            </dl>
+          </ScrollArea>
         </SheetContent>
       </Sheet>
     </div>
@@ -1012,30 +1014,31 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
           if (!open) setPreview(null)
         }}
       >
-        <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90svh] flex-col overflow-hidden sm:max-w-3xl">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="pr-6 break-all">
               {preview?.displayName}
             </DialogTitle>
           </DialogHeader>
-          {content?.id === preview?.id ? (
-            <>
-              <Failure error={content?.error} />
-              <ScrollArea
-                viewportProps={{
-                  className: "max-h-[65svh]",
-                  tabIndex: 0,
-                  "aria-label": "文件预览",
-                }}
-              >
+          <ScrollArea
+            className="flex min-h-0 flex-1 flex-col"
+            viewportProps={{
+              className: "min-h-0",
+              tabIndex: 0,
+              "aria-label": "文件预览",
+            }}
+          >
+            {content?.id === preview?.id ? (
+              <>
+                <Failure error={content?.error} />
                 <pre className="text-xs break-words whitespace-pre-wrap">
                   {content?.text}
                 </pre>
-              </ScrollArea>
-            </>
-          ) : (
-            <Skeleton className="h-64" />
-          )}
+              </>
+            ) : (
+              <Skeleton className="h-64" />
+            )}
+          </ScrollArea>
         </DialogContent>
       </Dialog>
     </>
@@ -1053,66 +1056,65 @@ function Diagnostics({ run, revision }: { run: Run; revision: number }) {
     logs: { id: number; occurredAt: string; code: string; message: string }[]
   }>(`/api/observability/runs/${run.id}`, revision)
   return (
-    <div className="diagnostics-view">
-      <dl className="diagnostic-ids">
-        <dt>Run ID</dt>
-        <dd>
-          {run.id}
-          <CopyText text={run.id} />
-        </dd>
-        <dt>Trace ID</dt>
-        <dd>
-          {run.traceId}
-          <CopyText text={run.traceId} />
-        </dd>
-      </dl>
-      <Failure error={query.error} />
-      <h3 className="font-medium">执行阶段</h3>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>阶段</TableHead>
-            <TableHead>开始</TableHead>
-            <TableHead>耗时</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {query.data?.spans.map((span, index) => (
-            <TableRow key={index}>
-              <TableCell className="max-w-64 truncate">{span.name}</TableCell>
-              <TableCell>{date(span.startedAt)}</TableCell>
-              <TableCell>
-                {duration(
-                  span.startedAt && span.finishedAt
-                    ? Date.parse(span.finishedAt) - Date.parse(span.startedAt)
-                    : null
-                )}
-              </TableCell>
+    <ScrollArea
+      className="diagnostics-view"
+      viewportProps={{ tabIndex: 0, "aria-label": "诊断信息" }}
+    >
+      <div className="grid gap-6">
+        <dl className="diagnostic-ids">
+          <dt>Run ID</dt>
+          <dd>
+            {run.id}
+            <CopyText text={run.id} />
+          </dd>
+          <dt>Trace ID</dt>
+          <dd>
+            {run.traceId}
+            <CopyText text={run.traceId} />
+          </dd>
+        </dl>
+        <Failure error={query.error} />
+        <h3 className="font-medium">执行阶段</h3>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>阶段</TableHead>
+              <TableHead>开始</TableHead>
+              <TableHead>耗时</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      <h3 className="font-medium">错误日志</h3>
-      {query.data?.logs.length ? (
-        <ScrollArea
-          viewportProps={{
-            className: "max-h-96",
-            tabIndex: 0,
-            "aria-label": "错误日志",
-          }}
-        >
-          {query.data.logs.map((log) => (
-            <div key={log.id} className="border-b py-3">
-              <div className="mb-1 text-xs text-muted-foreground">
-                {date(log.occurredAt)} · {log.code}
+          </TableHeader>
+          <TableBody>
+            {query.data?.spans.map((span, index) => (
+              <TableRow key={index}>
+                <TableCell className="max-w-64 truncate">{span.name}</TableCell>
+                <TableCell>{date(span.startedAt)}</TableCell>
+                <TableCell>
+                  {duration(
+                    span.startedAt && span.finishedAt
+                      ? Date.parse(span.finishedAt) - Date.parse(span.startedAt)
+                      : null
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <h3 className="font-medium">错误日志</h3>
+        {query.data?.logs.length ? (
+          <section aria-label="错误日志">
+            {query.data.logs.map((log) => (
+              <div key={log.id} className="border-b py-3">
+                <div className="mb-1 text-xs text-muted-foreground">
+                  {date(log.occurredAt)} · {log.code}
+                </div>
+                <p className="break-words">{log.message}</p>
               </div>
-              <p className="break-words">{log.message}</p>
-            </div>
-          ))}
-        </ScrollArea>
-      ) : (
-        <Blank>本轮暂无错误日志</Blank>
-      )}
-    </div>
+            ))}
+          </section>
+        ) : (
+          <Blank>本轮暂无错误日志</Blank>
+        )}
+      </div>
+    </ScrollArea>
   )
 }

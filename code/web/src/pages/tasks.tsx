@@ -57,6 +57,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -317,16 +318,21 @@ export function Tasks() {
         </Pagination>
       </div>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90svh] flex-col overflow-hidden sm:max-w-xl">
+          <DialogHeader className="shrink-0">
             <DialogTitle>分派任务</DialogTitle>
           </DialogHeader>
-          <CreateTask
-            onAccepted={(id) => {
-              setOpen(false)
-              navigate(`/tasks/${id}`)
-            }}
-          />
+          <ScrollArea
+            className="-m-1 flex min-h-0 flex-1 flex-col"
+            viewportProps={{ className: "min-h-0 p-1" }}
+          >
+            <CreateTask
+              onAccepted={(id) => {
+                setOpen(false)
+                navigate(`/tasks/${id}`)
+              }}
+            />
+          </ScrollArea>
         </DialogContent>
       </Dialog>
     </div>

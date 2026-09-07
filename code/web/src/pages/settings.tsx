@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Save,
   Trash2,
-  X,
   MoreHorizontal,
   LoaderCircle,
 } from "lucide-react"
@@ -64,6 +63,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ScrollArea } from "@/components/ui/scroll-area"
 
 export function Settings() {
   const query = useQuery<SettingsView>("/api/settings")
@@ -311,11 +311,11 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
             }}
           >
             <DialogContent
-              className="max-h-[90svh] overflow-y-auto sm:max-w-2xl"
+              className="flex max-h-[90svh] flex-col overflow-hidden sm:max-w-2xl"
               showCloseButton={!busy}
               finalFocus={() => actionTrigger.current}
             >
-              <DialogHeader>
+              <DialogHeader className="shrink-0">
                 <DialogTitle>
                   {editing.id ? `编辑 ${editing.id}` : "添加配置"}
                 </DialogTitle>
@@ -323,32 +323,38 @@ function SettingsEditor({ initial }: { initial: SettingsView }) {
                   保存后应用到网关配置，具体生效范围见页面状态。
                 </DialogDescription>
               </DialogHeader>
-              <Failure error={error} />
-              <EntryEditor
-                key={`${kind}:${editing.id ?? "new"}`}
-                kind={kind}
-                entry={items.find((item) => item.id === editing.id)}
-                existingIds={items.map((item) => item.id)}
-                busy={busy}
-                cancel={() => setEditing(undefined)}
-                submit={async (entry) => {
-                  if (
-                    !editing.id &&
-                    items.some((item) => item.id === entry.id)
-                  ) {
-                    setError(new Error("名称已存在"))
-                    return
-                  }
-                  await save({
-                    ...settings,
-                    [kind]: editing.id
-                      ? items.map((item) =>
-                          item.id === editing.id ? entry : item
-                        )
-                      : [...items, entry],
-                  })
-                }}
-              />
+              <ScrollArea
+                className="-m-1 flex min-h-0 flex-1 flex-col"
+                viewportProps={{ className: "min-h-0 p-1" }}
+              >
+                <div className="flex flex-col gap-4">
+                  <Failure error={error} />
+                  <EntryEditor
+                    key={`${kind}:${editing.id ?? "new"}`}
+                    kind={kind}
+                    entry={items.find((item) => item.id === editing.id)}
+                    existingIds={items.map((item) => item.id)}
+                    busy={busy}
+                    submit={async (entry) => {
+                      if (
+                        !editing.id &&
+                        items.some((item) => item.id === entry.id)
+                      ) {
+                        setError(new Error("名称已存在"))
+                        return
+                      }
+                      await save({
+                        ...settings,
+                        [kind]: editing.id
+                          ? items.map((item) =>
+                              item.id === editing.id ? entry : item
+                            )
+                          : [...items, entry],
+                      })
+                    }}
+                  />
+                </div>
+              </ScrollArea>
             </DialogContent>
           </Dialog>
         )}
@@ -559,14 +565,12 @@ function EntryEditor({
   kind,
   entry,
   busy,
-  cancel,
   submit,
   existingIds,
 }: {
   kind: "providers" | "skills" | "mcp"
   entry?: Entry
   busy: boolean
-  cancel: () => void
   submit: (entry: Entry) => Promise<void>
   existingIds: string[]
 }) {
@@ -691,16 +695,6 @@ function EntryEditor({
   }
   return (
     <form className="flex flex-col gap-4" onSubmit={(e) => void onSubmit(e)}>
-      <div className="settings-section-heading">
-        <IconButton
-          label="取消编辑"
-          type="button"
-          disabled={busy}
-          onClick={cancel}
-        >
-          <X />
-        </IconButton>
-      </div>
       <Failure error={error} />
       <FieldSet disabled={busy}>
         <FieldGroup>
