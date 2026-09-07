@@ -9,8 +9,8 @@ destination = root / "solution.zip"
 temporary = destination.with_suffix(".zip.tmp")
 excluded = {"node_modules", ".git", "dist", ".venv", ".agentbridge", "__pycache__", "test-results", "playwright-report"}
 extensions = {".ts", ".tsx", ".js", ".mjs", ".css", ".html", ".json", ".yaml", ".md", ".txt", ".py", ".ps1"}
-root_files = {"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", "playwright.config.ts", ".gitignore", "README.md", "ARCHITECTURE.md", "DEVELOPMENT.md"}
-config_files = {".gitignore", ".prettierrc", ".prettierignore"}
+root_files = {"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", "playwright.config.ts", ".gitignore", "README.md", "ARCHITECTURE.md", "DEVELOPMENT.md", ".env.example"}
+config_files = {".gitignore", ".prettierrc", ".prettierignore", ".env.example"}
 try:
     with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(root / "INSTRUCTION.md", "INSTRUCTION.md")
@@ -23,7 +23,7 @@ try:
                 dirs[:] = [d for d in dirs if d in {"src", "public"}]
             for name in files:
                 source = Path(directory) / name
-                if source.is_symlink() or name.startswith(".env") or (source.suffix not in extensions and name not in config_files):
+                if source.is_symlink() or (name.startswith(".env") and name != ".env.example") or (source.suffix not in extensions and name not in config_files):
                     continue
                 archive_name = "code/" + source.relative_to(code).as_posix()
                 if source == code / "web/README.md":

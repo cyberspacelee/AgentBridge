@@ -20,6 +20,7 @@ import { engineError } from "../../errors.js";
 import { within } from "../../async.js";
 import { startProcess, stopProcess } from "../process.js";
 import { toolInstructions } from "../tool-instructions.js";
+import { opencodeEnvironment } from "../../settings.js";
 
 const object = (v: unknown) => z.record(z.string(), z.unknown()).parse(v);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -152,6 +153,7 @@ export class OpenCodeAdapter implements EngineAdapter {
         this.config.dataDirectory,
         {
           ...process.env,
+          ...opencodeEnvironment(this.config),
           OPENCODE_SERVER_USERNAME: this.config.opencode.username,
           OPENCODE_SERVER_PASSWORD: this.password,
         },

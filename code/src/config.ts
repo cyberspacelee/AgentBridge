@@ -2,6 +2,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { modelSchema } from "../shared/contracts.js";
+import { providerSchema } from "../shared/settings.js";
 
 export const limitsSchema = z
   .object({
@@ -60,6 +61,17 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     model: env.AGENT_MODEL
       ? modelSchema.parse(JSON.parse(env.AGENT_MODEL))
       : null,
+    compatibleProvider: env.AGENT_OPENAI_BASE_URL
+      ? providerSchema.parse({
+          id: env.AGENT_OPENAI_PROVIDER ?? "compatible",
+          baseUrl: env.AGENT_OPENAI_BASE_URL,
+          apiKey: env.AGENT_OPENAI_API_KEY ?? env.OPENAI_API_KEY ?? "",
+          api: env.AGENT_OPENAI_API ?? "openai-completions",
+          models: (env.AGENT_OPENAI_MODELS ?? "")
+            .split(",")
+            .map((id) => ({ id: id.trim() })),
+        })
+      : null,
     limits: limitsSchema.parse(
       env.AGENT_LIMITS ? JSON.parse(env.AGENT_LIMITS) : {},
     ),
@@ -68,13 +80,21 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
       "Use the available context and proceed with a reasonable default.",
     opencode: {
       command: env.ENGINE_A_COMMAND ?? "opencode",
-      url: env.ENGINE_A_URL ?? "http://127.0.0.1:4096",
+      url:
+        env.ENGINE_A_URL ??
+        `http://127.0.0.1:${z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(65535)
+          .parse(env.ENGINE_A_PORT ?? 4096)}`,
       managed: !env.ENGINE_A_URL,
       username: env.ENGINE_A_USERNAME ?? "opencode",
       password: env.ENGINE_A_PASSWORD ?? "",
     },
     pi: {
       command: env.ENGINE_B_COMMAND ?? "pi",
+      configDirectory: env.ENGINE_B_CONFIG_DIR ?? "",
       args: env.ENGINE_B_ARGS
         ? z.array(z.string()).parse(JSON.parse(env.ENGINE_B_ARGS))
         : [],

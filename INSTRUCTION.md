@@ -6,7 +6,7 @@ AgentBridge 提供统一任务网关、OpenCode/Pi 适配器、任务工作台�
 
 ## 1. 环境准备
 
-安装 Node.js 22.23.0、Python 3.13、pnpm 10.33.2。Windows 使用 PowerShell 和 NTFS 工作目录；Pi 的 bash 工具需要安装 Git for Windows，并确保 `bash.exe` 可用。Outlook 场景另外需要已安装且可启动的 Outlook。安装期间需要访问 npm/PyPI 和引擎二进制下载源。
+安装 Node.js 22.23.0、pnpm 10.33.2。Windows 使用 PowerShell；Pi 的 bash 工具需要安装 Git for Windows，并确保 `bash.exe` 可用。安装期间需要访问 npm 和引擎二进制下载源。办公 skill/MCP 的外部依赖按其自身说明安装。
 
 已有 Corepack 时，可用以下命令启用固定 pnpm：
 
@@ -20,22 +20,11 @@ pnpm --version
 
 ```powershell
 pnpm install --frozen-lockfile
-py -3.13 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r tools\requirements.txt
 pnpm build
 pnpm web:build
 pnpm exec opencode --version
 pnpm exec pi --version
 ```
-
-Linux/macOS 将 Python 两条命令替换为：
-
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -r tools/requirements.txt
-```
-
-本地 Debian 缺少 ensurepip 时已使用 `uv venv --python /usr/bin/python3 .venv` 和 `uv pip install --python .venv/bin/python -r tools/requirements.txt` 验证。Windows 的依赖安装仍需在目标系统独立执行。
 
 引擎固定为 `opencode-ai@1.18.29` 与 `@earendil-works/pi-coding-agent@0.85.1`，通过项目本地命令启动。workspace 已放行必要的 esbuild/OpenCode 安装脚本，不需要交互式 `pnpm approve-builds`。不要使用 `--ignore-scripts` 跳过 OpenCode 安装。
 
@@ -46,6 +35,107 @@ python3 -m venv .venv
 OpenCode 使用其官方 provider 配置和环境变量。Pi 默认隔离个人配置，读取 `AGENT_DATA_DIR/pi/` 下的配置；需要自定义 provider/base URL 时，将准备好的 Pi 配置目录通过 `ENGINE_B_CONFIG_DIR` 指定。Pi 的模型注册格式以锁定版本的 `node_modules/@earendil-works/pi-coding-agent/docs/models.md` 为准。模型配置文件可包含秘密，不应提交到源码或打包。
 
 不要用“引擎就绪”推断模型鉴权成功：就绪检查验证进程和协议连接，真实模型请求必须另外验收。
+
+### 配置页面与 env
+
+`/settings` 可添加、编辑、禁用和删除 OpenAI 兼容供应商及模型，支持 Chat Completions 和 Responses。密钥保存在 `AGENT_DATA_DIR/settings.json`（POSIX 权限 0600），接口仅返回掩码；保留掩码表示不更改，清空表示移除密钥。配置更新带版本校验，冲突时刷新后重新编辑。
+
+启动时自动加载当前工作目录 `.env`，已有进程环境变量优先。见 [env 示例](code/.env.example)。`AGENT_OPENAI_BASE_URL`、`AGENT_OPENAI_MODELS`（逗号分隔）、`AGENT_OPENAI_API_KEY`、`AGENT_OPENAI_PROVIDER` 可配置两个引擎共用的兼容模型；`AGENT_OPENAI_API` 默认为 `openai-completions`，也可设为 `openai-responses`。同名供应商 env 优先于页面配置。供应商列表仍在新建任务时选择。
+
+OpenCode 自动读取用户原生 JSON/JSONC 配置及认证，也可在页面指定额外配置文件。Pi 页面可选择用户 `~/.pi/agent` 或其他目录，直接复用该目录的模型、认证、skills 和插件；`ENGINE_B_CONFIG_DIR` 优先于页面选择。页面添加的模型通过扩展注册，不改写用户的 `models.json`。
+
+Skills 管理登记本地目录，支持两个引擎或单一引擎、启用/禁用和移除引用，保留原目录和附件；目录内容遵循原生 `SKILL.md` 格式。原生配置已加载的资源仍由原生配置管理。OpenCode MCP 支持 stdio 命令数组与环境变量，或远程 HTTP URL 与请求头。MCP 的环境变量和请求头保存后均被掩码。
+
+Pi 插件页调用锁定版本的 `pi install/remove`，支持 `npm:`、`git:`、HTTPS 或本地绝对路径；写入当前显示的 Pi 配置目录。选个人目录时安装/卸载也作用于该目录。Pi 的 MCP/subagent 由插件提供，插件的配置格式、RPC 兼容性和能力以插件自身文档为准；网关不内置 MCP 客户端或 subagent 调度器。
+
+Pi 配置和插件变更对新建任务生效；OpenCode 变更需重启网关并新建任务，页面显示待重启状态。外部 `ENGINE_A_URL` 服务需在其部署端应用配置。重启会终止运行中的任务并使旧会话不可继续，先完成当前任务。内置 Office 工具及 Python 依赖已移除，办公任务需要自行接入 skill 或 MCP。
+
+### 配置使用示例
+
+在 `code/.env` 中配置一个兼容服务，以下地址、模型 ID 和密钥需替换为实际值。Base URL 填 API 根路径，通常以 `/v1` 结尾，不填 `/chat/completions`；无鉴权的本地服务可省略密钥。
+
+```dotenv
+AGENT_OPENAI_BASE_URL=https://api.example.com/v1
+AGENT_OPENAI_PROVIDER=company
+AGENT_OPENAI_MODELS=model-one,model-two
+AGENT_OPENAI_API=openai-completions
+AGENT_OPENAI_API_KEY=replace-with-your-key
+AGENT_MODEL={"providerID":"company","modelID":"model-one"}
+```
+
+`.env` 相对启动时的工作目录读取，不自动向父目录查找；修改后重启进程才生效。路径变量必须填写实际绝对路径，不会执行 shell 的 `$HOME` 或 `~` 展开。只创建配置文件不会启动服务。
+
+| 设置 | 优先级与范围 |
+| --- | --- |
+| 网关启动参数 | CLI 的 engine/host/port 高于对应环境变量；进程环境高于 `.env` |
+| 共用兼容供应商 | env 同名供应商覆盖页面项；页面删除或禁用该项不移除 env 配置 |
+| 兼容服务密钥 | `AGENT_OPENAI_API_KEY` 优先，否则回退到 `OPENAI_API_KEY`；显式空字符串表示无密钥 |
+| Pi 配置目录 | `ENGINE_B_CONFIG_DIR` > 页面目录 > `AGENT_DATA_DIR/pi` |
+| OpenCode 额外配置文件 | 页面非空路径传给托管子进程的 `OPENCODE_CONFIG`，否则继承该环境变量；原生全局/项目配置仍由 OpenCode 合并 |
+| 模型选择 | 新建任务选定的模型优先；`AGENT_MODEL` 只为默认引擎提供兜底，不自动指定供应商可用列表 |
+
+页面“模型”中添加供应商时，名称填 `company`，模型 ID 每行一个。URL、模型 ID、协议和密钥应与供应商一致。供应商名称只能使用字母、数字、下划线或连字符；名称在编辑时保持不变。清空密钥后，兼容服务会收到用于无鉴权服务的占位值 `not-required`。页面新建模型默认上下文为 128000、最大输出为 16384；需调整时可通过下述 API 的模型字段 `contextWindow`、`maxTokens` 指定。
+
+本地 Skill 目录示例：
+
+```text
+/absolute/path/company-skills/
+  office/
+    SKILL.md
+    scripts/
+    references/
+```
+
+在“Skills”中登记 `/absolute/path/company-skills`，选择 `OpenCode + Pi` 或单一引擎。`SKILL.md` 按原生格式提供名称、描述和任务说明，脚本与附件留在原目录。移除引用只停止网关显式加载该目录；若原生配置也引用了它，仍须在原生配置中移除。网关不下载或自动编写 Skill 文件。
+
+OpenCode MCP 本地连接表单分别填写命令数组和环境变量对象，例如：
+
+```json
+["node", "/absolute/path/office-mcp/server.mjs"]
+```
+
+```json
+{"OFFICE_WORKSPACE":"/absolute/path/documents"}
+```
+
+远程连接填写 `https://mcp.example.com/mcp`，请求头可填 `{"Authorization":"Bearer replace-with-token"}`。这些示例不包含 MCP 实现，必须准备实际可用的服务；页面保存成功只表示配置已写入，不表示 MCP 连接或办公功能已通过验证。OAuth 登录等操作仍由原生服务处理。
+
+Pi 插件来源支持 `npm:package-name@version`、`git:github.com/owner/repo@tag` 或本地包绝对路径。先保存 Pi 配置目录，再安装插件；以页面显示的“当前目录”为准，特别注意环境变量可能覆盖输入值。安装调用原生包管理器，可能下载依赖并执行包的安装脚本；卸载遵循 Pi 的原生语义，本地包只移除引用。安装失败会返回错误，安装操作最长等待 120 秒。插件需兼容 Pi 的 RPC 模式，其工具调用在手动权限模式下仍须经网关审批。
+
+### 配置管理 API
+
+| 接口 | 请求与结果 |
+| --- | --- |
+| `GET /api/settings` | 返回 `settings`、`revision`、`restartRequired`、本地默认路径、实际 Pi 目录、环境来源标志和已安装 `packages`；敏感字段为掩码 |
+| `PUT /api/settings` | 请求 `{"revision":"上次读取的值","settings":{...完整配置...}}`；成功返回更新后的视图 |
+| `POST /api/settings/pi/packages` | 请求 `{"action":"install或remove","source":"插件来源"}`；完成后返回更新后的配置视图 |
+
+`PUT` 是整个网关配置的替换，不是局部 PATCH。读取最新视图后修改其中的 `settings`，保留其余字段并带回 `revision`；从相应数组移除条目即为删除。供应商密钥、MCP 环境变量及请求头的 `********` 表示保留原值，不能用于一个没有旧值的新字段。版本冲突返回 409，输入不合法返回 400；失败时应先处理错误，不应假定变更已经生效。
+
+一个完整 `settings` 对象示例（路径和服务必须先存在）：
+
+```json
+{
+  "piConfigDirectory": "",
+  "opencodeConfigFile": "",
+  "providers": [{
+    "id": "company",
+    "baseUrl": "https://api.example.com/v1",
+    "api": "openai-completions",
+    "apiKey": "replace-with-your-key",
+    "models": [{"id":"model-one","name":"Model One","contextWindow":32000,"maxTokens":4096}],
+    "enabled": true
+  }],
+  "skills": [{"id":"office","path":"/absolute/path/company-skills","engine":"both","enabled":true}],
+  "mcp": [{
+    "id": "office",
+    "enabled": true,
+    "config": {"type":"local","command":["node","/absolute/path/office-mcp/server.mjs"],"environment":{}}
+  }]
+}
+```
+
+页面登记的配置和个人原生文件分别管理；删除网关供应商不会删除个人配置、认证或模型缓存。POSIX 文件权限不等于加密，备份 `settings.json` 时按密钥文件处理。办公能力迁移后不再执行原来的 `tools/office.py`，也无需安装旧的 Python requirements；由所选 Skill/MCP 提供文档生成、编辑与校验能力。
 
 ## 3. 启动服务
 
@@ -81,7 +171,7 @@ CLI 通道同样有效：
 pnpm start --engine pi --host 127.0.0.1 --port 3000
 ```
 
-工作台 `http://127.0.0.1:3000/tasks`；观测 `http://127.0.0.1:3000/observability`。生产构建由同一个网关提供页面。开发时分别运行 `pnpm dev --engine pi` 和 `pnpm web:dev --host 127.0.0.1 --port 5173`，前端代理到 3000。
+工作台 `http://127.0.0.1:3000/tasks`；观测 `http://127.0.0.1:3000/observability`；配置 `http://127.0.0.1:3000/settings`。生产构建由同一个网关提供页面。开发时分别运行 `pnpm dev --engine pi` 和 `pnpm web:dev --host 127.0.0.1 --port 5173`，前端代理到 3000。
 
 ## 4. 配置表
 
@@ -96,14 +186,16 @@ pnpm start --engine pi --host 127.0.0.1 --port 3000
 | `AGENT_ALLOWED_DIRECTORIES` | JSON 绝对路径数组；空数组允许任意可访问工作目录 |
 | `AGENT_LIMITS` | JSON，见下方限制；未知字段应避免使用 |
 | `AGENT_QUESTION_ANSWER` | 无选项反问的自动回答文本 |
-| `AGENT_TOOLS_PYTHON` | 默认项目 `.venv` 下的 Python；可指定其他已准备环境 |
+| `AGENT_OPENAI_BASE_URL` / `AGENT_OPENAI_MODELS` | 兼容服务 URL / 逗号分隔的模型 ID |
+| `AGENT_OPENAI_API_KEY` / `AGENT_OPENAI_PROVIDER` | 服务端密钥 / 供应商名称，默认 compatible |
+| `AGENT_OPENAI_API` | openai-completions 或 openai-responses |
 | `ENGINE_A_COMMAND` | opencode；pnpm 会优先解析本地版本 |
 | `ENGINE_A_URL` | 未设置时托管 127.0.0.1:4096；设置时连接外部 OpenCode 服务 |
+| `ENGINE_A_PORT` | 托管 OpenCode 端口，默认 4096；已有服务占用时可改为其他空闲端口 |
 | `ENGINE_A_USERNAME` / `ENGINE_A_PASSWORD` | 原生服务 Basic Auth；托管模式无密码时生成进程私有密码 |
 | `ENGINE_B_COMMAND` | pi；pnpm 会优先解析本地版本 |
 | `ENGINE_B_ARGS` | JSON 参数数组；只用于受信任部署配置 |
 | `ENGINE_B_CONFIG_DIR` | 指定 Pi 配置目录，默认隔离个人全局配置 |
-| `BRAVE_SEARCH_API_KEY` | 共用搜索工具的服务端密钥，可选 |
 
 `AGENT_LIMITS` 支持：`runTimeoutMs=600000`、`startupTimeoutMs=30000`、`abortTimeoutMs=10000`、`maxConcurrentRuns=4`、`maxQueuedPerSession=16`、`maxSessions=100`、`maxSseConnections=100`、`maxArtifactDownloads=2`、`maxEvents=100000`、`maxEventBytes=134217728`、`eventRetentionMs=86400000`、`maxPartBytes=1048576`。执行总预算包含排队与交互等待。未知配置键会被拒绝。
 
@@ -145,7 +237,7 @@ pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-办公工具检查：Windows 为 `.\.venv\Scripts\python.exe -m unittest discover -s tools -p "test_*.py" -v`；Linux 为 `.venv/bin/python -m unittest discover -s tools -p 'test_*.py' -v`。
+办公 skill/MCP 的验证按所安装集成的测试说明执行。
 
 原生 smoke 不发起模型调用，验证创建、RPC/HTTP、强停、恢复和删除。PowerShell：
 
@@ -157,7 +249,7 @@ pnpm exec tsx --test test/native.test.ts
 Remove-Item Env:AGENT_NATIVE_SMOKE
 ```
 
-真实引擎与本地模型响应 fixture 的集成测试：验证人工审批前不会写文件、审批后实际执行 write 工具、工具状态和最终 assistant/step-finish 快照。无需外部模型密钥；模型响应由测试 HTTP 服务生成，不用于评估模型能力。OpenCode 测试使用 4096 端口，运行前停止占用该端口的测试实例。
+真实引擎与本地模型响应 fixture 的集成测试：验证人工审批前不会写文件、审批后实际执行 write 工具、工具状态和最终 assistant/step-finish 快照。无需外部模型密钥；模型响应由测试 HTTP 服务生成，不用于评估模型能力。OpenCode 测试默认使用 4096 端口；若已占用，用 `ENGINE_A_PORT` 选择其他空闲端口，例如 Linux/macOS 的 `ENGINE_A_PORT=4097 AGENT_NATIVE_MODEL=opencode pnpm exec tsx --test test/native.test.ts`。测试会临时启动并清理测试进程。
 
 ```powershell
 $env:AGENT_NATIVE_MODEL = "opencode"
@@ -169,6 +261,6 @@ Remove-Item Env:AGENT_NATIVE_MODEL
 
 浏览器测试使用仅在测试服务器中注册的可控引擎，验证真实网关、数据库、SSE、文件下载及前端操作。它不替代真实模型成功执行验收。
 
-`python tools/pack.py` 生成上级目录 `solution.zip`，顶层为 `INSTRUCTION.md` 和 `code/`。源码、统一锁文件、工具、测试与设计文档包含在包中；不包含 node_modules、.venv、密钥、日志、数据库和浏览器测试产物。
+`python tools/pack.py` 生成上级目录 `solution.zip`，顶层为 `INSTRUCTION.md` 和 `code/`。源码、统一锁文件、工具、测试、`.env.example` 与设计文档包含在包中；不包含实际 `.env`、node_modules、.venv、密钥、日志、数据库和浏览器测试产物。Python 仅为该可选打包脚本所需，不是网关运行依赖。
 
 尚需补充的外部验收：两版赛题原始协议、Windows 10/11 干净安装、真实模型配置、10 个样本双引擎运行、Outlook 环境、WeLink 租户/发送接口及搜索密钥。WeLink 发送尚未实现，不能将其计为已通过。

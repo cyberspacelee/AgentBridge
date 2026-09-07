@@ -1,9 +1,10 @@
 import { Type } from "typebox";
 
 export default function bridgeInteractions(pi) {
+  for (const [id, provider] of Object.entries(JSON.parse(process.env.AGENT_BRIDGE_PROVIDERS || "{}"))) pi.registerProvider(id, provider);
   let always = process.env.AGENT_BRIDGE_PERMISSION_POLICY !== "manual";
   pi.on("tool_call", async (event, context) => {
-    if (always || !["bash", "write", "edit"].includes(event.toolName)) return;
+    if (always || ["read", "grep", "find", "ls", "bridge_question"].includes(event.toolName)) return;
     const decision = await context.ui.select(`AgentBridge permission: ${event.toolName}\n${JSON.stringify(event.input).slice(0, 6000)}`, ["once", "always", "reject"], { signal: context.signal });
     if (decision === "always") always = true;
     if (decision !== "once" && decision !== "always") return { block: true, reason: "The gateway declined this tool call." };

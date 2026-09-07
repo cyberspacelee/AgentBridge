@@ -22,6 +22,7 @@ import { isTerminal } from "../domain/transitions.js";
 import { artifactPath } from "../runtime/artifacts.js";
 import { Telemetry } from "../observability/metrics.js";
 import { evaluationEvent, evaluationMessage } from "./serialization.js";
+import { SettingsManager } from "../settings.js";
 
 const id = (params: unknown) =>
   z.object({ id: z.string().min(1).max(300) }).parse(params).id;
@@ -51,6 +52,7 @@ const timeRange = z
 
 export function createServer(runtime: SessionRuntime) {
   const { store, config } = runtime;
+  const settings = new SettingsManager(config);
   const transport = pino.transport({
     targets: [
       { target: "pino/file", options: { destination: 1 } },
@@ -229,6 +231,15 @@ export function createServer(runtime: SessionRuntime) {
     );
     return { models };
   });
+
+  server.get("/api/settings", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return settings.view();
+  });
+  server.put("/api/settings", async (request) => settings.save(request.body));
+  server.post("/api/settings/pi/packages", async (request) =>
+    settings.packageOperation(request.body),
+  );
 
   function page<T extends { id: string }>(
     items: T[],
@@ -757,7 +768,7 @@ export function createServer(runtime: SessionRuntime) {
   server.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?")[0]!;
     const appRoute =
-      pathname === "/" || /^\/(tasks|observability)(\/|$)/.test(pathname);
+      pathname === "/" || /^\/(tasks|observability|settings)(\/|$)/.test(pathname);
     const browserPage =
       request.headers.accept?.includes("text/html") &&
       !/^\/(api|session|event|permission|question|health|metrics)(\/|$)/.test(

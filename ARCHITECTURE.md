@@ -121,10 +121,8 @@ code/
       components/ui/            # shadcn Base UI 组件
       lib/                      # HTTP 客户端、共享 SSE 与恢复
   tools/
-    requirements.txt            # 锁定 Python 依赖
-    office.py                  # 已验证的文档操作
-    search.py                  # 两引擎共用的搜索入口（需要时实现）
-    README.md                  # 引擎可加载的工具说明和参数
+    pi-extension.mjs           # 网关交互、权限与兼容模型注册
+    pack.py                    # 源码交付包；办公能力通过 skill/MCP 提供
   config/
     opencode.json
     pi-settings.json

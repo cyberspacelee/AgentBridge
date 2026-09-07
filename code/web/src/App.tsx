@@ -14,6 +14,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings as SettingsIcon,
 } from "lucide-react"
 import type { RuntimeInfo } from "../../shared/contracts"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -42,6 +43,9 @@ const Observability = lazy(() =>
 const Task = lazy(() =>
   import("@/pages/task").then((module) => ({ default: module.Task }))
 )
+const Settings = lazy(() =>
+  import("@/pages/settings").then((module) => ({ default: module.Settings }))
+)
 
 export default function App() {
   const events = useEvents()
@@ -61,6 +65,7 @@ export default function App() {
       {[
         { to: "/tasks", label: "任务工作台", icon: ListTodo },
         { to: "/observability", label: "网关观测", icon: Activity },
+        { to: "/settings", label: "配置", icon: SettingsIcon },
       ].map(({ to, label, icon: Icon }) => (
         <Tooltip key={to}>
           <TooltipTrigger
@@ -176,6 +181,7 @@ export default function App() {
                   <Route path="/tasks" element={<Tasks />} />
                   <Route path="/tasks/:id" element={<Task />} />
                   <Route path="/observability" element={<Observability />} />
+                  <Route path="/settings" element={<Settings />} />
                   <Route path="/" element={<Navigate to="/tasks" replace />} />
                   <Route
                     path="*"

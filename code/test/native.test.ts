@@ -13,6 +13,7 @@ import type { Session } from "../shared/contracts.js";
 import { createTaskSchema } from "../shared/contracts.js";
 import { SessionRuntime, within } from "../src/runtime/sessions.js";
 import { Store } from "../src/storage/sqlite.js";
+import { SettingsManager } from "../src/settings.js";
 
 for (const engine of ["pi", "opencode"] as const)
   test(
@@ -148,37 +149,11 @@ for (const engine of ["pi", "opencode"] as const)
       };
       const piConfig = path.join(directory, "pi-config");
       await mkdir(piConfig);
-      await writeFile(
-        path.join(piConfig, "models.json"),
-        JSON.stringify({
-          providers: {
-            bridge: {
-              baseUrl,
-              api: "openai-completions",
-              apiKey: "fixture",
-              models: [{ id: "bridge-test" }],
-            },
-          },
-        }),
-      );
       process.env.ENGINE_B_CONFIG_DIR = piConfig;
       process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
         enabled_providers: ["bridge"],
         model: "bridge/bridge-test",
         small_model: "bridge/bridge-test",
-        provider: {
-          bridge: {
-            npm: "@ai-sdk/openai-compatible",
-            name: "Local fixture",
-            options: { baseURL: baseUrl, apiKey: "fixture" },
-            models: {
-              "bridge-test": {
-                name: "Local fixture",
-                limit: { context: 32000, output: 4000 },
-              },
-            },
-          },
-        },
       });
       const config = readConfig(["--engine", engine], {
         ...process.env,
@@ -186,6 +161,24 @@ for (const engine of ["pi", "opencode"] as const)
         AGENT_LIMITS: JSON.stringify({ runTimeoutMs: 45000 }),
       });
       const store = new Store(":memory:");
+      const settings = new SettingsManager(config);
+      const initial = settings.view();
+      settings.save({
+        revision: initial.revision,
+        settings: {
+          ...initial.settings,
+          providers: [
+            {
+              id: "bridge",
+              baseUrl,
+              apiKey: "fixture",
+              models: [
+                { id: "bridge-test", contextWindow: 32000, maxTokens: 4000 },
+              ],
+            },
+          ],
+        },
+      });
       const adapter =
         engine === "pi" ? new PiAdapter(config) : new OpenCodeAdapter(config);
       const runtime = new SessionRuntime(store, adapter, config);

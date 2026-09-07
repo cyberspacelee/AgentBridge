@@ -19,6 +19,7 @@ import { engineError } from "../../errors.js";
 import { within } from "../../async.js";
 import { readJsonLines, startProcess, stopProcess } from "../process.js";
 import { codeRoot, toolInstructions } from "../tool-instructions.js";
+import { piDirectory, piProviders, readSettings } from "../../settings.js";
 
 const object = (v: unknown) => z.record(z.string(), z.unknown()).parse(v);
 const text = (v: unknown) => (typeof v === "string" ? v : "");
@@ -80,10 +81,7 @@ export class PiAdapter implements EngineAdapter {
   private generation = 0;
   constructor(private config: Config) {}
   private get configDirectory() {
-    return (
-      process.env.ENGINE_B_CONFIG_DIR ??
-      path.join(this.config.dataDirectory, "pi")
-    );
+    return piDirectory(this.config);
   }
   async models() {
     const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
@@ -93,9 +91,11 @@ export class PiAdapter implements EngineAdapter {
       modelsStorePath: path.join(this.configDirectory, "models-store.json"),
       allowModelNetwork: false,
     });
+    for (const [id, provider] of Object.entries(piProviders(this.config)))
+      models.registerProvider(id, provider);
     if (models.getError())
       throw engineError("Pi model configuration could not be loaded");
-    return models.getAvailableSnapshot().map((model) => ({
+    return (await models.getAvailable()).map((model) => ({
       providerID: model.provider,
       modelID: model.id,
       name: model.name,
@@ -168,10 +168,13 @@ export class PiAdapter implements EngineAdapter {
           "pi-sessions",
           `${session.id}.jsonl`,
         ),
-        "--no-extensions",
         "--extension",
         path.join(codeRoot, "tools/pi-extension.mjs"),
-        "--no-skills",
+        ...readSettings(this.config)
+          .skills.filter(
+            (skill) => skill.enabled && skill.engine !== "opencode",
+          )
+          .flatMap((skill) => ["--skill", skill.path]),
         "--no-prompt-templates",
         "--no-context-files",
         "--offline",
@@ -185,6 +188,7 @@ export class PiAdapter implements EngineAdapter {
         PI_CODING_AGENT_DIR: this.configDirectory,
         PI_TELEMETRY: "0",
         AGENT_BRIDGE_PERMISSION_POLICY: session.interactionPolicy.permission,
+        AGENT_BRIDGE_PROVIDERS: JSON.stringify(piProviders(this.config)),
       },
     );
     const rpc: RpcSession = {

@@ -29,7 +29,7 @@ implemented 仅表示代码存在；verified_local 表示相关本地检查通�
 | `pnpm test` | 15 项通过，4 项原生检查默认跳过，需下列环境变量单独运行 |
 | `AGENT_NATIVE_SMOKE=pi/opencode pnpm exec tsx --test test/native.test.ts` | 分别通过真实进程创建、强停、恢复、取消和清理，无模型调用 |
 | `AGENT_NATIVE_MODEL=pi/opencode pnpm exec tsx --test test/native.test.ts` | 分别通过真实引擎 + 本地模型 fixture：人工审批前文件不存在，批准后 write 实际落盘，工具状态完成，最后 assistant 含 stop/step-finish；不证明真实模型任务能力 |
-| `.venv/bin/python -m unittest discover -s tools -p test_office.py` | 4 项通过，含办公格式和文件边界 |
+| 历史内置 Office 工具检查 | 原有 4 项检查随内置实现移除；办公能力改由 skill/MCP 验证 |
 | `pnpm test:browser` | 桌面 1440x1000、手机 390x844 两项通过；分派、审批、消息/工具、预览下载、四类观测、浅深色、取消、删除；无 JS 错误或横向溢出，截图已人工检查 |
 | HTTP 文件与请求错误检查 | 原文件下载正确，同长度篡改返回 409，丢失返回 404；非法 JSON 返回 400，不支持的内容类型返回 415，错误正文统一 |
 

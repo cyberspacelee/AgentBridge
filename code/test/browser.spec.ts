@@ -1,6 +1,91 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 
+test("settings persist models, skills and MCP with masked secrets", async ({
+  page,
+  request,
+}, info) => {
+  const suffix = info.project.name;
+  const provider = `compatible-${suffix}`;
+  page.on("dialog", (dialog) => void dialog.accept());
+  expect((await page.goto("/settings"))?.status()).toBe(200);
+  await expect(
+    page.getByRole("heading", { name: "配置", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await page.getByLabel("名称", { exact: true }).fill(provider);
+  await page
+    .getByLabel("Base URL", { exact: true })
+    .fill("http://127.0.0.1:8888/v1");
+  await page.getByLabel("API Key", { exact: true }).fill("browser-secret");
+  await page.getByLabel("模型 ID（每行一个）").fill("model-one\nmodel-two");
+  await captureQa(page, `settings-model-form-${suffix}`);
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: `编辑 ${provider}`, exact: true }),
+  ).toBeVisible();
+  const settingsResponse = await request.get("/api/settings");
+  expect(await settingsResponse.text()).not.toContain("browser-secret");
+  await page
+    .getByRole("button", { name: `编辑 ${provider}`, exact: true })
+    .click();
+  await expect(page.getByLabel("API Key", { exact: true })).toHaveValue(
+    "********",
+  );
+  await page
+    .getByLabel("Base URL", { exact: true })
+    .fill("http://127.0.0.1:8889/v1");
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: `编辑 ${provider}`, exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText(/8889/)).toBeVisible();
+  await captureQa(page, `settings-models-${suffix}`);
+  await page.getByRole("tab", { name: "Skills", exact: true }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  const { directory } = await (await request.get("/__test/directory")).json();
+  await page.getByLabel("名称", { exact: true }).fill(`office-${suffix}`);
+  await page.getByLabel("Skill 目录", { exact: true }).fill(directory);
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(
+    page.getByRole("switch", { name: `启用 office-${suffix}` }),
+  ).toBeChecked();
+  await page.getByRole("switch", { name: `启用 office-${suffix}` }).click();
+  await expect(
+    page.getByRole("switch", { name: `启用 office-${suffix}` }),
+  ).not.toBeChecked();
+  await page.getByRole("tab", { name: "MCP", exact: true }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await page.getByLabel("名称", { exact: true }).fill(`office-mcp-${suffix}`);
+  await page
+    .getByLabel("命令和参数（JSON 数组）")
+    .fill('["node", "office-server.mjs"]');
+  await page.getByLabel("环境变量（JSON 对象）").fill('{"TOKEN":"mcp-secret"}');
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(
+    page.getByRole("button", {
+      name: `编辑 office-mcp-${suffix}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await captureQa(page, `settings-mcp-${suffix}`);
+  await page.getByRole("tab", { name: "Pi 插件", exact: true }).click();
+  await expect(page.getByLabel("插件来源", { exact: true })).toBeVisible();
+  await captureQa(page, `settings-pi-${suffix}`);
+  for (const [tab, id] of [
+    ["模型", provider],
+    ["Skills", `office-${suffix}`],
+    ["MCP", `office-mcp-${suffix}`],
+  ]) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    await page.getByRole("button", { name: `删除 ${id}`, exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: `删除 ${id}`, exact: true }),
+    ).toHaveCount(0);
+  }
+});
+
 function designFixture() {
   const at = "2026-09-06T06:00:00.000Z";
   const run = {

@@ -7,6 +7,7 @@ AgentBridge 将 Pi 和 OpenCode 接入同一个任务工作台，提供统一 HT
 ## 功能
 
 - 按任务选择 Pi 或 OpenCode，并从对应引擎的可用目录中选择供应商和模型。
+- 配置页面管理 OpenAI 兼容模型、Skill 目录、OpenCode MCP 和 Pi 插件；支持 `.env` 及用户原生配置。
 - 创建、搜索、筛选任务，查看流式输出、工具调用、交互记录和诊断，支持追加执行、停止与删除。
 - 查看和下载交付物，处理权限审批与反问。
 - 按引擎查看执行结果、资源、工具、Token/费用和异常，提供 Prometheus 指标。
@@ -46,7 +47,9 @@ pnpm start --engine pi
 
 打开 [任务工作台](http://127.0.0.1:3000/tasks) 或 [运行观测](http://127.0.0.1:3000/observability)。服务同时注册两个引擎，`--engine` 只指定未显式选择时的默认引擎，默认值为 `opencode`；新任务切换引擎无需重启。
 
-办公文档工具另需 Python 3.11–3.13 及依赖，安装和使用见 [工具说明](code/tools/README.md)。Windows 安装步骤、完整配置及评测调用见 [安装与验收](INSTRUCTION.md)。
+访问 `/settings` 管理 OpenAI 兼容模型、Skill 目录、OpenCode MCP 和 Pi 插件。也可在 `code/.env` 配置，字段见 [env 示例](code/.env.example)。办公能力由安装的 skill 或 MCP 提供，网关不再内置 Office/Python 工具。完整配置见 [安装与验收](INSTRUCTION.md)。
+
+页面配置保存在 `AGENT_DATA_DIR/settings.json`，API Key 保存后只返回掩码。Pi 变更对新建任务生效；OpenCode 变更需要重启网关并新建任务。Pi 的 MCP/subagent 需安装对应插件并遵循插件自身的配置格式；本地 Skill 管理仅增删目录引用，不删除原文件。配置优先级、示例和接口见[配置使用示例](INSTRUCTION.md#配置使用示例)与[配置管理-api](INSTRUCTION.md#配置管理-api)。
 
 ## 局域网访问
 
@@ -69,6 +72,10 @@ ENGINE_B_CONFIG_DIR="$HOME/.pi/agent" pnpm start --engine pi --host 0.0.0.0 --po
 | `AGENT_DATA_DIR` | 默认当前目录下 `.agentbridge`，存放 SQLite、日志和引擎数据 |
 | `ENGINE_B_CONFIG_DIR` | Pi 模型和认证配置目录，默认 `AGENT_DATA_DIR/pi` |
 | `ENGINE_A_URL` | 外部 OpenCode 服务地址；未设置时自动托管 `127.0.0.1:4096` |
+| `ENGINE_A_PORT` | 托管 OpenCode 的端口，默认 4096；端口冲突时可指定其他空闲端口 |
+| `AGENT_OPENAI_BASE_URL` / `AGENT_OPENAI_MODELS` | 共用兼容服务地址 / 逗号分隔的模型 ID |
+| `AGENT_OPENAI_API_KEY` / `AGENT_OPENAI_PROVIDER` | 兼容服务密钥 / 供应商 ID，默认 compatible |
+| `AGENT_OPENAI_API` | openai-completions（默认）或 openai-responses |
 | `AGENT_MODEL` | 默认引擎的兜底模型，JSON 格式 `{"providerID":"...","modelID":"..."}`；请求指定的模型优先 |
 | `AGENT_ALLOWED_DIRECTORIES` | 可访问工作目录的绝对路径 JSON 数组，默认空数组不限制目录选择 |
 | `AGENT_LIMITS` | 超时、并发和事件保留等限制，详见安装说明 |
@@ -130,7 +137,7 @@ Hallmark 是可选的个人设计工具，本项目忽略其安装目录 `.agent
 | `code/src/gateway/` | HTTP、SSE 和评测接口 |
 | `code/src/storage/`、`code/src/observability/` | SQLite 持久化、指标和观测 |
 | `code/web/` | React 工作台 |
-| `code/tools/` | 共用办公文档与搜索工具 |
+| `code/tools/` | Pi 交互扩展与源码打包脚本 |
 | `code/test/` | 运行时、原生引擎与 Playwright 测试 |
 | `code/artifacts/ui/` | UI 截图与 QA 记录 |
 

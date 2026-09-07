@@ -36,11 +36,15 @@ test("Pi manual permission blocks rejection and retains always for later tools",
       block: true,
       reason: "The gateway declined this tool call.",
     });
+    assert.deepEqual(await handler({ toolName: "plugin_mcp_write", input: {} }, context), {
+      block: true,
+      reason: "The gateway declined this tool call.",
+    });
     decision = "always";
     assert.equal(await handler(event, context), undefined);
     decision = "reject";
     assert.equal(await handler(event, context), undefined);
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     assert.ok(tool);
     assert.equal(command, "bridge_health");
   } finally {

@@ -1,6 +1,16 @@
 <!-- Hallmark pre-emit critique: Philosophy 4, Hierarchy 4, Execution 4, Specificity 4, Restraint 5, Variety 3. -->
 # 逐页 QA 与问题记录
 
+## 2026-09-07 配置页面
+
+新增 `/settings`，覆盖兼容模型增删改、密钥掩码与保留、Skill 目录启停、OpenCode MCP 配置和 Pi 插件目录/安装入口。桌面 1440 × 1000、手机 390 × 844 的保存、刷新、编辑和删除流程通过，截图检查无横向溢出。浏览器完整回归 33 passed / 3 skipped，后端 19 passed / 4 skipped；另外分别启用两个原生引擎的本地模型测试，均完成真实进程的工具调用和手动权限交互。临时本地 Pi 插件完成安装、实际加载和卸载验证。第三方 MCP/subagent 插件及真实供应商未逐一验收。
+
+构建、前端 lint 和差异格式检查通过。此轮曾通过 <http://127.0.0.1:3000/settings> 验证真实页面入口，托管 OpenCode 使用 4097，避免占用已有的 4096 服务；验证服务已按要求停止。下文旧局域网地址和临时目录属于历史验收记录，不表示目前仍有服务运行。
+
+截图：[模型桌面](settings-models-desktop.png)、[模型手机](settings-models-mobile.png)、[表单桌面](settings-model-form-desktop.png)、[表单手机](settings-model-form-mobile.png)、[MCP 桌面](settings-mcp-desktop.png)、[MCP 手机](settings-mcp-mobile.png)、[Pi 插件桌面](settings-pi-desktop.png)、[Pi 插件手机](settings-pi-mobile.png)。使用隔离测试数据，未显示真实密钥。
+
+## 2026-09-06 历史验证
+
 日期：2026-09-06。页面测试数据为隔离测试引擎和显式样本；另对真实 Pi 0.85.1 网关完成浏览器检查，并在修正认证配置后完成真实模型最小请求验证。
 
 结果：累计记录的 17 项功能/布局和局域网兼容问题已修复并复测。本轮完整回归与修正后的定向复测合并覆盖 31 个通过的浏览器用例、3 个按项目规则跳过的用例；最后的布局与任务流程定向回归为 7 passed / 1 skipped。后端测试 17 passed / 4 skipped，补充的双引擎观测复测 2 passed；前后端构建、前端 lint、`git diff --check` 均通过。

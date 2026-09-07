@@ -4,6 +4,64 @@
 @import "@fontsource-variable/geist";
 @import "./tokens.css";
 
+.settings-page {
+  max-width: 1040px;
+}
+.settings-page .workspace-empty {
+  min-height: 120px;
+  padding-block: 24px;
+}
+.settings-section {
+  padding-block: 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.settings-section h2,
+.settings-section-heading h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 20px;
+}
+.settings-section .settings-section-heading {
+  padding-block: 0;
+}
+.settings-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-list > li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-block: 16px;
+  border-top: 1px solid var(--border);
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.settings-status {
+  min-height: 28px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.settings-page [data-slot="field"] {
+  min-width: 0;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
