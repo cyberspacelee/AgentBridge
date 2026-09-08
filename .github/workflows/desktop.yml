@@ -38,6 +38,17 @@ jobs:
       - run: pnpm desktop:dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Allow the Electron test to create its sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo tee /etc/apparmor.d/agentbridge-ci > /dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile agentbridge-ci "/tmp/AgentBridge desktop smoke */application/agentbridge" flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser --replace /etc/apparmor.d/agentbridge-ci
       - if: runner.os == 'Linux'
         run: xvfb-run -a pnpm test:desktop
         env:
