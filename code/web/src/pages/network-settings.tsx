@@ -1,5 +1,12 @@
 import { useContext, useRef, useState, type FormEvent } from "react"
-import { FileInput, RefreshCw, Save, Trash2, Zap } from "lucide-react"
+import {
+  ChevronDown,
+  FileInput,
+  RefreshCw,
+  Save,
+  Trash2,
+  Zap,
+} from "lucide-react"
 import { desktop } from "@/lib/desktop"
 import type {
   NetworkSettings,
@@ -17,6 +24,19 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from "@/components/ui/card"
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
@@ -44,10 +64,12 @@ export function NetworkSettingsPanel() {
   )
   return (
     <section
-      className="settings-section min-w-0"
+      className="flex min-w-0 flex-col gap-4"
       aria-labelledby="network-heading"
     >
-      <h2 id="network-heading">网络与代理</h2>
+      <h2 id="network-heading" className="sr-only">
+        网络与代理
+      </h2>
       <Failure error={system.error ?? network.error} />
       {network.data ? (
         <NetworkForm
@@ -69,7 +91,8 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
   const [view, setView] = useState(initial)
   const [draft, setDraft] = useState(initial.settings)
   const [password, setPassword] = useState<string>()
-  const [target, setTarget] = useState("https://registry.npmjs.org/")
+  const [targetDraft, setTarget] = useState<string>()
+  const target = targetDraft ?? draft.npmRegistry
   const [busy, setBusy] = useState<
     "save" | "test" | "certificate" | "restart" | "refresh"
   >()
@@ -106,6 +129,9 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
       }
     }
     if (draft.mode === "manual") checkUrl(draft.proxyUrl, "proxyUrl")
+    checkUrl(draft.npmRegistry, "npmRegistry")
+    if (!/^https:\/\/[^\s/?#\\@]+(?:\/[^\s?#\\]*)?$/i.test(draft.npmRegistry))
+      fields.npmRegistry = "请输入 HTTPS 源地址，不含认证信息、查询参数或片段"
     if (testing) checkUrl(target, "target")
     setInvalid(fields)
     return !Object.keys(fields).length
@@ -186,11 +212,7 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
     }
   }
   return (
-    <form
-      onSubmit={save}
-      noValidate
-      className="flex w-full max-w-2xl min-w-0 flex-col gap-5"
-    >
+    <form onSubmit={save} noValidate className="flex min-w-0 flex-col gap-4">
       <Failure
         error={error ?? (initial.error ? new Error(initial.error) : undefined)}
       />
@@ -222,189 +244,343 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
             .finally(() => setBusy(undefined))
         }}
       />
-      <FieldSet className="min-w-0" disabled={!!busy}>
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="network-mode">代理模式</FieldLabel>
-            <Choice
-              id="network-mode"
-              label="代理模式"
-              value={draft.mode}
-              disabled={!!busy}
-              options={[
-                { value: "environment", label: "继承环境代理" },
-                { value: "manual", label: "手动代理" },
-                { value: "direct", label: "不使用代理" },
-              ]}
-              onChange={(mode) =>
-                change({ mode: mode as NetworkSettings["mode"] })
-              }
-            />
-            {draft.mode === "environment" && (
-              <FieldDescription>
-                使用启动应用时的 HTTP_PROXY、HTTPS_PROXY 和 NO_PROXY 环境变量。
-              </FieldDescription>
-            )}
-          </Field>
-          {draft.mode === "manual" && (
-            <>
-              <Field data-invalid={!!invalid.proxyUrl}>
-                <FieldLabel htmlFor="network-proxy">代理地址</FieldLabel>
-                <Input
-                  id="network-proxy"
-                  value={draft.proxyUrl}
-                  onChange={(event) => change({ proxyUrl: event.target.value })}
-                  aria-invalid={!!invalid.proxyUrl}
-                  aria-describedby={
-                    invalid.proxyUrl ? "network-proxy-error" : undefined
+      <FieldSet className="min-w-0 gap-4" disabled={!!busy}>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h3>CLI 下载源</h3>
+            </CardTitle>
+            <CardDescription>
+              选择安装和更新 Agent CLI 使用的软件源。
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Field data-invalid={!!invalid.npmRegistry}>
+              <FieldLabel htmlFor="network-npm-registry">npm 源</FieldLabel>
+              <Input
+                id="network-npm-registry"
+                type="url"
+                value={draft.npmRegistry}
+                onChange={(event) =>
+                  change({ npmRegistry: event.target.value })
+                }
+                aria-invalid={!!invalid.npmRegistry}
+                aria-describedby="network-npm-description network-npm-error"
+                placeholder="https://registry.npmjs.org/"
+                autoComplete="off"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    change({ npmRegistry: "https://registry.npmjs.org/" })
                   }
-                  placeholder="http://proxy.example.com:8080"
-                  autoComplete="off"
+                >
+                  npm 官方源
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    change({ npmRegistry: "https://registry.npmmirror.com/" })
+                  }
+                >
+                  npmmirror 国内源
+                </Button>
+              </div>
+              <FieldDescription id="network-npm-description">
+                用于 Pi、OpenCode、Codex 的版本查询与安装，可填写自定义 HTTPS
+                源。Grok 使用独立下载源。保存并重启后生效。
+              </FieldDescription>
+              <FieldError id="network-npm-error">
+                {invalid.npmRegistry}
+              </FieldError>
+            </Field>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h3>网络代理</h3>
+            </CardTitle>
+            <CardDescription>配置网关和受管 CLI 的代理连接。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="network-mode">代理模式</FieldLabel>
+                <Choice
+                  id="network-mode"
+                  label="代理模式"
+                  value={draft.mode}
+                  disabled={!!busy}
+                  options={[
+                    { value: "environment", label: "继承环境代理" },
+                    { value: "manual", label: "手动代理" },
+                    { value: "direct", label: "不使用代理" },
+                  ]}
+                  onChange={(mode) =>
+                    change({ mode: mode as NetworkSettings["mode"] })
+                  }
                 />
-                <FieldError id="network-proxy-error">
-                  {invalid.proxyUrl}
-                </FieldError>
+                {draft.mode === "environment" && (
+                  <FieldDescription>
+                    使用启动应用时的 HTTP_PROXY、HTTPS_PROXY 和 NO_PROXY
+                    环境变量。
+                  </FieldDescription>
+                )}
               </Field>
-              <FieldGroup className="sm:grid sm:grid-cols-2">
-                <Field>
-                  <FieldLabel htmlFor="network-username">代理用户名</FieldLabel>
-                  <Input
-                    id="network-username"
-                    value={draft.proxyUsername}
-                    onChange={(event) =>
-                      change({ proxyUsername: event.target.value })
-                    }
-                    autoComplete="off"
-                    placeholder="可选"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="network-password">代理密码</FieldLabel>
-                  <InputGroup>
-                    <InputGroupInput
-                      id="network-password"
-                      type="password"
-                      value={password ?? ""}
-                      autoComplete="new-password"
-                      placeholder={
-                        password === ""
-                          ? "保存后清除密码"
-                          : view.hasPassword
-                            ? "已配置，留空保留"
-                            : "未配置"
+              {draft.mode === "manual" && (
+                <>
+                  <Field data-invalid={!!invalid.proxyUrl}>
+                    <FieldLabel htmlFor="network-proxy">代理地址</FieldLabel>
+                    <Input
+                      id="network-proxy"
+                      value={draft.proxyUrl}
+                      onChange={(event) =>
+                        change({ proxyUrl: event.target.value })
                       }
-                      onChange={(event) => {
-                        setPassword(event.target.value || undefined)
-                        setResult(undefined)
-                        setSaved(false)
-                      }}
+                      aria-invalid={!!invalid.proxyUrl}
+                      aria-describedby={
+                        invalid.proxyUrl ? "network-proxy-error" : undefined
+                      }
+                      placeholder="http://proxy.example.com:8080"
+                      autoComplete="off"
                     />
-                    {(view.hasPassword || !!password) && (
-                      <InputGroupAddon align="inline-end">
-                        <IconButton
-                          type="button"
-                          label="清除代理密码"
-                          disabled={!!busy}
-                          onClick={() => {
-                            setPassword("")
+                    <FieldError id="network-proxy-error">
+                      {invalid.proxyUrl}
+                    </FieldError>
+                  </Field>
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="network-username">
+                        代理用户名
+                      </FieldLabel>
+                      <Input
+                        id="network-username"
+                        value={draft.proxyUsername}
+                        onChange={(event) =>
+                          change({ proxyUsername: event.target.value })
+                        }
+                        autoComplete="off"
+                        placeholder="可选"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="network-password">
+                        代理密码
+                      </FieldLabel>
+                      <InputGroup>
+                        <InputGroupInput
+                          id="network-password"
+                          type="password"
+                          value={password ?? ""}
+                          autoComplete="new-password"
+                          placeholder={
+                            password === ""
+                              ? "保存后清除密码"
+                              : view.hasPassword
+                                ? "已配置，留空保留"
+                                : "未配置"
+                          }
+                          onChange={(event) => {
+                            setPassword(event.target.value || undefined)
                             setResult(undefined)
                             setSaved(false)
                           }}
+                        />
+                        {(view.hasPassword || !!password) && (
+                          <InputGroupAddon align="inline-end">
+                            <IconButton
+                              type="button"
+                              label="清除代理密码"
+                              disabled={!!busy}
+                              onClick={() => {
+                                setPassword("")
+                                setResult(undefined)
+                                setSaved(false)
+                              }}
+                            >
+                              <Trash2 />
+                            </IconButton>
+                          </InputGroupAddon>
+                        )}
+                      </InputGroup>
+                    </Field>
+                  </FieldGroup>
+                </>
+              )}
+              <Field>
+                <FieldLabel htmlFor="network-no-proxy">
+                  绕过代理的地址
+                </FieldLabel>
+                <Input
+                  id="network-no-proxy"
+                  value={draft.noProxy}
+                  onChange={(event) => change({ noProxy: event.target.value })}
+                  placeholder=".example.com,10.0.0.1"
+                />
+                <FieldDescription>
+                  多个地址以逗号分隔；localhost 和本地回环地址始终直连。
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+        <Card>
+          <Collapsible defaultOpen={!!initial.settings.caFile}>
+            <CardHeader>
+              <CardTitle>
+                <h3>
+                  <CollapsibleTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="group w-full justify-between px-0 text-base"
+                      />
+                    }
+                  >
+                    证书与 TLS
+                    <ChevronDown
+                      data-icon="inline-end"
+                      className="transition-transform group-data-panel-open:rotate-180"
+                    />
+                  </CollapsibleTrigger>
+                </h3>
+              </CardTitle>
+              <CardDescription>
+                系统证书与企业自签名证书，按需配置。
+              </CardDescription>
+            </CardHeader>
+            <CollapsibleContent>
+              <CardContent className="pt-4">
+                <FieldGroup>
+                  <Field orientation="horizontal">
+                    <Checkbox
+                      id="network-system-ca"
+                      checked={draft.useSystemCa}
+                      disabled={!!busy}
+                      onCheckedChange={(useSystemCa) =>
+                        change({ useSystemCa: !!useSystemCa })
+                      }
+                    />
+                    <FieldLabel htmlFor="network-system-ca">
+                      信任系统证书（含企业 CA）
+                    </FieldLabel>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="network-ca">附加 CA 证书</FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id="network-ca"
+                        value={draft.caFile}
+                        onChange={(event) =>
+                          change({ caFile: event.target.value })
+                        }
+                        placeholder="PEM 证书文件的绝对路径，可选"
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <IconButton
+                          type="button"
+                          label="选择 CA 证书"
+                          disabled={!!busy}
+                          onClick={() => void certificate()}
                         >
-                          <Trash2 />
+                          <FileInput />
                         </IconButton>
                       </InputGroupAddon>
-                    )}
-                  </InputGroup>
+                    </InputGroup>
+                    <FieldDescription>
+                      证书设置用于 Node 网关和连接测试；附加 CA 也用于支持 Node
+                      证书设置的 Agent。应用更新的企业根证书需安装到操作系统。
+                    </FieldDescription>
+                  </Field>
+                </FieldGroup>
+              </CardContent>
+            </CollapsibleContent>
+          </Collapsible>
+        </Card>
+        <Card>
+          <Collapsible>
+            <CardHeader>
+              <CardTitle>
+                <h3>
+                  <CollapsibleTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="group w-full justify-between px-0 text-base"
+                      />
+                    }
+                  >
+                    连接测试
+                    <ChevronDown
+                      data-icon="inline-end"
+                      className="transition-transform group-data-panel-open:rotate-180"
+                    />
+                  </CollapsibleTrigger>
+                </h3>
+              </CardTitle>
+              <CardDescription>
+                使用当前表单验证连接，无需先保存。
+              </CardDescription>
+            </CardHeader>
+            <CollapsibleContent>
+              <CardContent className="flex flex-col gap-4 py-4">
+                <Field data-invalid={!!invalid.target}>
+                  <FieldLabel htmlFor="network-target">测试目标 URL</FieldLabel>
+                  <Input
+                    id="network-target"
+                    value={target}
+                    onChange={(event) => {
+                      setTarget(event.target.value)
+                      setResult(undefined)
+                      setInvalid({})
+                    }}
+                    aria-invalid={!!invalid.target}
+                    aria-describedby={
+                      invalid.target ? "network-target-error" : undefined
+                    }
+                  />
+                  <FieldError id="network-target-error">
+                    {invalid.target}
+                  </FieldError>
+                  <FieldDescription>
+                    使用当前表单测试，不改变正在运行的网络设置。
+                  </FieldDescription>
                 </Field>
-              </FieldGroup>
-            </>
-          )}
-          <Field>
-            <FieldLabel htmlFor="network-no-proxy">绕过代理的地址</FieldLabel>
-            <Input
-              id="network-no-proxy"
-              value={draft.noProxy}
-              onChange={(event) => change({ noProxy: event.target.value })}
-              placeholder=".example.com,10.0.0.1"
-            />
-            <FieldDescription>
-              多个地址以逗号分隔；localhost 和本地回环地址始终直连。
-            </FieldDescription>
-          </Field>
-          <Field orientation="horizontal">
-            <Checkbox
-              id="network-system-ca"
-              checked={draft.useSystemCa}
-              disabled={!!busy}
-              onCheckedChange={(useSystemCa) =>
-                change({ useSystemCa: !!useSystemCa })
-              }
-            />
-            <FieldLabel htmlFor="network-system-ca">
-              信任系统证书（含企业 CA）
-            </FieldLabel>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="network-ca">附加 CA 证书</FieldLabel>
-            <InputGroup>
-              <InputGroupInput
-                id="network-ca"
-                value={draft.caFile}
-                onChange={(event) => change({ caFile: event.target.value })}
-                placeholder="PEM 证书文件的绝对路径，可选"
-              />
-              <InputGroupAddon align="inline-end">
-                <IconButton
+                {result && (
+                  <Notice
+                    title={
+                      result.status >= 200 && result.status < 400
+                        ? "连接成功"
+                        : "服务器返回错误"
+                    }
+                    variant={result.status >= 400 ? "destructive" : "default"}
+                  >
+                    网关连接：HTTP {result.status} · {result.durationMs}{" "}
+                    ms。Agent 的模型连接请在模型页单独测试。
+                  </Notice>
+                )}
+              </CardContent>
+              <CardFooter>
+                <Button
                   type="button"
-                  label="选择 CA 证书"
+                  variant="outline"
                   disabled={!!busy}
-                  onClick={() => void certificate()}
+                  onClick={() => void testConnection()}
                 >
-                  <FileInput />
-                </IconButton>
-              </InputGroupAddon>
-            </InputGroup>
-            <FieldDescription>
-              证书设置用于 Node 网关和连接测试；附加 CA 也用于支持 Node
-              证书设置的 Agent。应用更新的企业根证书需安装到操作系统。
-            </FieldDescription>
-          </Field>
-          <Field data-invalid={!!invalid.target}>
-            <FieldLabel htmlFor="network-target">测试目标 URL</FieldLabel>
-            <Input
-              id="network-target"
-              value={target}
-              onChange={(event) => {
-                setTarget(event.target.value)
-                setResult(undefined)
-                setInvalid({})
-              }}
-              aria-invalid={!!invalid.target}
-              aria-describedby={
-                invalid.target ? "network-target-error" : undefined
-              }
-            />
-            <FieldError id="network-target-error">{invalid.target}</FieldError>
-            <FieldDescription>
-              使用当前表单测试，不改变正在运行的网络设置。
-            </FieldDescription>
-          </Field>
-        </FieldGroup>
+                  <Zap data-icon="inline-start" />
+                  {busy === "test" ? "测试中" : "测试连接"}
+                </Button>
+              </CardFooter>
+            </CollapsibleContent>
+          </Collapsible>
+        </Card>
       </FieldSet>
-      {result && (
-        <Notice
-          title={
-            result.status >= 200 && result.status < 400
-              ? "连接成功"
-              : "服务器返回错误"
-          }
-          variant={result.status >= 400 ? "destructive" : "default"}
-        >
-          网关连接：HTTP {result.status} · {result.durationMs} ms。Agent
-          的模型连接请在模型页单独测试。
-        </Notice>
-      )}
       {(saved || view.restartRequired) && (
         <Notice
           title={
@@ -417,53 +593,53 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
             "重启会进入现有退出流程，可等待任务完成或停止任务。"}
         </Notice>
       )}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!!busy}
-          onClick={() => void testConnection()}
-        >
-          <Zap data-icon="inline-start" />
-          {busy === "test" ? "测试中" : "测试连接"}
-        </Button>
-        <Button type="submit" disabled={!!busy || !dirty}>
-          <Save data-icon="inline-start" />
-          {busy === "save" ? "保存中" : "保存"}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!!busy}
-          onClick={async () => {
-            setBusy("refresh")
-            try {
-              const next = await api<NetworkView>("/api/system/network")
-              setView(next)
-              setDraft(next.settings)
-              setPassword(undefined)
-              setError(undefined)
-              setSaved(false)
-            } catch (error) {
-              setError(error as Error)
-            } finally {
-              setBusy(undefined)
-            }
-          }}
-        >
-          重新加载
-        </Button>
-        {
+      <div className="config-action-bar">
+        <span role="status" className="text-sm text-muted-foreground">
+          {dirty
+            ? "有未保存的更改"
+            : view.restartRequired
+              ? "待重启应用"
+              : "设置已生效"}
+        </span>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={!!busy || !dirty}>
+            <Save data-icon="inline-start" />
+            {busy === "save" ? "保存中" : "保存"}
+          </Button>
           <Button
             type="button"
             variant="outline"
-            disabled={!!busy || dirty}
-            onClick={() => setConfirmRestart(true)}
+            disabled={!!busy}
+            onClick={async () => {
+              setBusy("refresh")
+              try {
+                const next = await api<NetworkView>("/api/system/network")
+                setView(next)
+                setDraft(next.settings)
+                setPassword(undefined)
+                setError(undefined)
+                setSaved(false)
+              } catch (error) {
+                setError(error as Error)
+              } finally {
+                setBusy(undefined)
+              }
+            }}
           >
-            <RefreshCw data-icon="inline-start" />
-            {view.restartRequired ? "应用设置并重启服务" : "重启服务"}
+            重新加载
           </Button>
-        }
+          {
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!!busy || dirty}
+              onClick={() => setConfirmRestart(true)}
+            >
+              <RefreshCw data-icon="inline-start" />
+              {view.restartRequired ? "应用设置并重启服务" : "重启服务"}
+            </Button>
+          }
+        </div>
       </div>
       <p className="text-sm text-muted-foreground">
         代理凭据保护：

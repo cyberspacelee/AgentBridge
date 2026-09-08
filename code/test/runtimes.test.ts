@@ -20,7 +20,10 @@ test("runtime promotion retries temporary locks, bounds persistent locks and pre
     fetch: async () => Response.json({ version: "1.2.3", dist: { tarball: "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.2.3.tgz", integrity: "sha512-Zml4dHVyZQ==" } }),
     freeBytes: async () => 4 * 1024 ** 3,
     install: async (_id, _release, destination) => { await writeFile(path.join(destination, "cli"), "binary"); return "cli"; },
-    probe: async () => {},
+    probe: async (_id, command, destination) => {
+      assert.equal(path.basename(path.dirname(destination)), "versions", "CLI must only execute after promotion to avoid Windows executable locks");
+      assert.equal(await readFile(command, "utf8"), "binary");
+    },
   });
   const rename = fs.rename;
   let failures: string[] = [], attempts = 0;
@@ -87,7 +90,11 @@ test("managed runtimes resolve each requested latest, isolate failed updates, ca
       if (waitInstall) await new Promise<void>((_resolve, reject) => { if (signal.aborted) reject(signal.reason); else signal.addEventListener("abort", () => reject(signal.reason), { once: true }); });
       await writeFile(path.join(destination, "cli"), release.version); return "cli";
     },
-    probe: async () => { if (failProbe) throw new Error("incompatible protocol"); },
+    probe: async (_id, command, destination) => {
+      assert.equal(path.basename(path.dirname(destination)), "versions");
+      assert.equal(await readFile(command, "utf8"), latest);
+      if (failProbe) throw new Error("incompatible protocol");
+    },
   });
   try {
     assert.equal(manager.installed("opencode"), false);
@@ -104,6 +111,7 @@ test("managed runtimes resolve each requested latest, isolate failed updates, ca
     manager.action("opencode", "update"); await manager.idle();
     assert.equal(config.opencode.command, installedCommand);
     assert.match(manager.view("opencode").error!, /incompatible/);
+    assert.equal((await readdir(path.join(directory, "runtimes", "opencode", "versions"))).length, 1);
     failProbe = false; waitInstall = true;
     manager.action("opencode", "update");
     assert.throws(() => manager.action("opencode", "uninstall"), /already in progress/);
@@ -172,4 +180,112 @@ test("interrupted runtime switch restores the previous binary and native snapsho
     assert.equal(await readFile(path.join(native, "history"), "utf8"), "old state");
     await manager.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Grok allows a 30 minute download while metadata stays bounded and cancellation still aborts the stream", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-grok-download-"));
+  const config = readConfig([], { AGENT_DATA_DIR: directory, AGENT_MANAGED_RUNTIMES: "true" });
+  const timeouts: number[] = [];
+  const timeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, "timeout", (ms: number) => { timeouts.push(ms); return timeout(ms); });
+  let downloadSignal: AbortSignal | undefined;
+  const downloading = Promise.withResolvers<void>();
+  const manager = new RuntimeManager(config, {
+    runningVersion: () => null,
+    switch: async () => assert.fail("cancelled download must not activate"),
+  }, {
+    freeBytes: async () => 4 * 1024 ** 3,
+    fetch: async (input, options) => {
+      if (String(input).endsWith("/stable")) return new Response("1.0.0");
+      if (options?.method === "HEAD") return new Response(null, { headers: {
+        "x-goog-hash": "md5=Zml4dHVyZQ==", "x-goog-generation": "12345", "content-length": "1024",
+      } });
+      downloadSignal = options!.signal!;
+      return new Response(new ReadableStream({
+        start(controller) {
+          downloadSignal!.addEventListener("abort", () => controller.error(downloadSignal!.reason), { once: true });
+          downloading.resolve();
+        },
+      }));
+    },
+    probe: async () => assert.fail("cancelled download must not execute"),
+  });
+  try {
+    manager.action("grok", "install");
+    await downloading.promise;
+    assert.deepEqual(timeouts, [120000, 120000, 30 * 60 * 1000]);
+    manager.action("grok", "cancel"); await manager.idle();
+    assert.equal(downloadSignal!.aborted, true);
+    assert.match(manager.view("grok").error!, /cancelled/);
+    assert.equal(manager.installed("grok"), false);
+    assert.equal(manager.busy("grok"), false);
+    await assert.rejects(readdir(path.join(directory, "runtimes", "grok", "staging")), { code: "ENOENT" });
+  } finally { await manager.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Pi, OpenCode and Codex use the configured registry in metadata, npm and integrity checks", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-npm-download-"));
+  const npm = path.join(directory, "npm-fixture.mjs");
+  await writeFile(npm, `
+    import assert from "node:assert/strict";
+    import { mkdir, readFile, writeFile } from "node:fs/promises";
+    import path from "node:path";
+    assert.ok(process.argv.includes("--fetch-timeout=1800000"));
+    const registry = process.env.npm_config_registry;
+    assert.ok(process.argv.includes("--registry=" + registry));
+    assert.ok((await readFile(".npmrc", "utf8")).includes("registry=" + registry));
+    const dependencies = JSON.parse(await readFile("package.json", "utf8")).dependencies;
+    const packages = {};
+    for (const [name, version] of Object.entries(dependencies)) {
+      packages["node_modules/" + name] = { version, resolved: registry + "fixture.tgz", integrity: "sha512-Zml4dHVyZQ==" };
+    }
+    if (process.argv[2] === "install") {
+      await writeFile("package-lock.json", JSON.stringify({ packages }));
+    } else {
+      assert.equal(process.argv[2], "ci");
+      const name = Object.keys(dependencies)[0];
+      const command = name.startsWith("opencode-")
+        ? path.join("node_modules", name, "bin", process.platform === "win32" ? "opencode.exe" : "opencode")
+        : path.join("node_modules", ".bin", (name === "@openai/codex" ? "codex" : "pi") + (process.platform === "win32" ? ".cmd" : ""));
+      await mkdir(path.dirname(command), { recursive: true });
+      await writeFile(command, "fixture");
+    }
+  `);
+  const config = readConfig([], { AGENT_DATA_DIR: directory, AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NODE: process.execPath, AGENT_RUNTIME_NPM: npm });
+  const manager = new RuntimeManager(config, {
+    runningVersion: () => null,
+    switch: async (_id, activate, rollback) => {
+      try { await activate(); } catch (error) { await rollback(); throw error; }
+    },
+  }, {
+    fetch: async (url) => {
+      assert.ok(String(url).startsWith(config.npmRegistry));
+      return Response.json({ version: "1.2.3", dist: { tarball: config.npmRegistry + "fixture.tgz", integrity: "sha512-Zml4dHVyZQ==" } });
+    },
+    freeBytes: async () => 4 * 1024 ** 3,
+    probe: async (_id, command) => { assert.equal(await readFile(command, "utf8"), "fixture"); },
+  });
+  try {
+    for (const registry of ["https://registry.npmjs.org/", "https://registry.npmmirror.com/", "https://packages.example.com/repository/npm/"]) {
+      config.npmRegistry = registry;
+      for (const id of ["pi", "opencode", "codex"] as const) {
+        manager.action(id, "install"); await manager.idle(id);
+        assert.equal(manager.view(id).error, null);
+        assert.equal(manager.view(id).installedVersion, "1.2.3");
+        assert.equal(manager.view(id).source, registry + "fixture.tgz");
+        assert.equal(manager.installed(id), true);
+      }
+    }
+    const installedCommand = config.codex.command;
+    const script = await readFile(npm, "utf8");
+    for (const [replacement, expected] of [
+      [script.replace('registry + "fixture.tgz"', '"https://untrusted.invalid/fixture.tgz"'), /unverified distribution source/],
+      [script.replace("sha512-Zml4dHVyZQ==", "sha512-bW9kaWZpZWQ="), /artifact changed/],
+    ] as const) {
+      await writeFile(npm, replacement);
+      manager.action("codex", "install"); await manager.idle();
+      assert.match(manager.view("codex").error!, expected);
+      assert.equal(config.codex.command, installedCommand);
+    }
+  } finally { await manager.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const networkSchema = z.object({
+  npmRegistry: z.string().max(2048).default("https://registry.npmjs.org/"),
   mode: z.enum(["environment", "direct", "manual"]),
   proxyUrl: z.string().max(2048),
   proxyUsername: z.string().max(512),

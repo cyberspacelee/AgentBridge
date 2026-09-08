@@ -21,6 +21,7 @@ const packages = { pi: "@earendil-works/pi-coding-agent", opencode: "opencode-ai
 const stableVersion = z.string().regex(/^\d+\.\d+\.\d+$/);
 const maxDownload = 512 * 1024 * 1024;
 const maxInstallation = 2 * 1024 * 1024 * 1024;
+const downloadTimeoutMs = 30 * 60 * 1000;
 const timestamp = () => new Date().toISOString();
 // Windows may briefly lock runtime files after a CLI exits or while a scanner reads them.
 const removeOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 };
@@ -291,11 +292,16 @@ export class RuntimeManager {
     for (const [id, operation] of this.operations) if (this.view(id).cancelable) operation.controller.abort(new Error("Gateway is shutting down"));
     await this.idle();
   }
-  private async response(url: string, signal: AbortSignal, method = "GET") {
+  private npmSource(url: string) {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || !["registry.npmjs.org", "storage.googleapis.com"].includes(parsed.hostname)) throw new Error("Runtime source is not an official distribution URL");
-    const response = await this.dependencies.fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]), method, redirect: "error" });
-    if (!response.ok) throw new Error(`Official runtime source returned HTTP ${response.status}${response.status === 404 ? "; no artifact is available for this platform" : ""}`);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password &&
+      ["https://registry.npmjs.org", new URL(this.config.npmRegistry).origin].includes(parsed.origin);
+  }
+  private async response(url: string, signal: AbortSignal, method = "GET", timeoutMs = 120000) {
+    const parsed = new URL(url);
+    if (!this.npmSource(url) && parsed.origin !== "https://storage.googleapis.com") throw new Error("Runtime source is not an allowed distribution URL");
+    const response = await this.dependencies.fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]), method, redirect: "error" });
+    if (!response.ok) throw new Error(`Runtime source returned HTTP ${response.status}${response.status === 404 ? "; no artifact is available for this platform" : ""}`);
     return response;
   }
   private async metadata(url: string, signal: AbortSignal) {
@@ -306,8 +312,8 @@ export class RuntimeManager {
     return Buffer.concat(chunks).toString("utf8");
   }
   private async npmRelease(name: string, signal: AbortSignal, version = "latest") {
-    const data = z.object({ version: stableVersion, dist: z.object({ tarball: z.url(), integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+=*$/) }) }).parse(JSON.parse(await this.metadata(`https://registry.npmjs.org/${name}/${version}`, signal)));
-    if (new URL(data.dist.tarball).hostname !== "registry.npmjs.org") throw new Error("Unexpected npm artifact source");
+    const data = z.object({ version: stableVersion, dist: z.object({ tarball: z.url(), integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+=*$/) }) }).parse(JSON.parse(await this.metadata(`${this.config.npmRegistry}${name}/${version}`, signal)));
+    if (!this.npmSource(data.dist.tarball)) throw new Error("Unexpected npm artifact source");
     return { version: data.version, source: data.dist.tarball, integrity: data.dist.integrity };
   }
   private async resolve(id: AgentId, signal: AbortSignal): Promise<Release> {
@@ -333,7 +339,7 @@ export class RuntimeManager {
     manifest.latestVersion = release.version; manifest.checkedAt = timestamp(); manifest.checkError = null; this.persist(id);
     return release;
   }
-  private async command(command: string, args: string[], directory: string, signal: AbortSignal, env: NodeJS.ProcessEnv = process.env) {
+  private async command(command: string, args: string[], directory: string, signal: AbortSignal, env: NodeJS.ProcessEnv = process.env, timeoutMs = 10 * 60 * 1000) {
     signal.throwIfAborted();
     const child = startProcess(command, args, directory, env);
     let output = "";
@@ -342,7 +348,7 @@ export class RuntimeManager {
     const abort = () => { void stopProcess(child, 5000).catch(() => {}); };
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await within(new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`Runtime process failed (${code}): ${output}`))); }), 10 * 60 * 1000);
+      await within(new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`Runtime process failed (${code}): ${output}`))); }), timeoutMs);
       signal.throwIfAborted(); return output;
     } finally { signal.removeEventListener("abort", abort); await stopProcess(child, 5000); }
   }
@@ -350,7 +356,7 @@ export class RuntimeManager {
     if (this.dependencies.install) return this.dependencies.install(id, release, directory, signal);
     if (id === "grok") {
       const command = process.platform === "win32" ? "grok.exe" : "grok";
-      const response = await this.response(release.source, signal);
+      const response = await this.response(release.source, signal, "GET", downloadTimeoutMs);
       const output = await open(path.join(directory, command), "wx", 0o700);
       const digest = createHash("md5"); let downloaded = 0;
       try {
@@ -364,6 +370,7 @@ export class RuntimeManager {
       if (downloaded !== release.bytes || `md5-${digest.digest("base64")}` !== release.integrity) throw new Error("Runtime integrity verification failed");
       await chmod(path.join(directory, command), 0o700); return command;
     }
+    signal = AbortSignal.any([signal, AbortSignal.timeout(downloadTimeoutMs)]);
     const packageName = id === "opencode" ? opencodePackage() : packages[id];
     const dependencies: Record<string, string> = { [packageName]: release.version };
     if (id === "pi") {
@@ -371,11 +378,11 @@ export class RuntimeManager {
     }
     await writeFile(path.join(directory, "package.json"), JSON.stringify({ private: true, dependencies }));
     const npm = this.config.runtimeNpm || createRequire(import.meta.url).resolve("npm/bin/npm-cli.js");
-    const env = { ...process.env, PATH: `${path.dirname(this.config.runtimeNode)}${path.delimiter}${process.env.PATH ?? ""}`, npm_config_cache: path.join(directory, ".npm-cache"), npm_config_userconfig: path.join(directory, ".npmrc"), npm_config_globalconfig: path.join(directory, ".npmrc-global"), npm_config_registry: "https://registry.npmjs.org/", npm_config_update_notifier: "false", npm_config_ignore_scripts: "true" };
-    await writeFile(env.npm_config_userconfig, "registry=https://registry.npmjs.org/\nignore-scripts=true\n");
+    const env = { ...process.env, PATH: `${path.dirname(this.config.runtimeNode)}${path.delimiter}${process.env.PATH ?? ""}`, npm_config_cache: path.join(directory, ".npm-cache"), npm_config_userconfig: path.join(directory, ".npmrc"), npm_config_globalconfig: path.join(directory, ".npmrc-global"), npm_config_registry: this.config.npmRegistry, npm_config_update_notifier: "false", npm_config_ignore_scripts: "true" };
+    await writeFile(env.npm_config_userconfig, `registry=${this.config.npmRegistry}\nignore-scripts=true\n`);
     await writeFile(env.npm_config_globalconfig, "");
-    const args = [npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--global=false", "--registry=https://registry.npmjs.org/", "--cache", env.npm_config_cache, "--userconfig", env.npm_config_userconfig, "--globalconfig", env.npm_config_globalconfig, "--prefix", directory];
-    await this.command(this.config.runtimeNode, [...args, "--package-lock-only"], directory, signal, env);
+    const args = [npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--global=false", `--registry=${this.config.npmRegistry}`, `--fetch-timeout=${downloadTimeoutMs}`, "--cache", env.npm_config_cache, "--userconfig", env.npm_config_userconfig, "--globalconfig", env.npm_config_globalconfig, "--prefix", directory];
+    await this.command(this.config.runtimeNode, [...args, "--package-lock-only"], directory, signal, env, downloadTimeoutMs);
     const lock = JSON.parse(await readFile(path.join(directory, "package-lock.json"), "utf8"));
     for (const [name, entry] of Object.entries(lock.packages) as [string, { version: string; resolved?: string; integrity?: string; inBundle?: boolean }][]) {
       if (!name) continue;
@@ -386,7 +393,7 @@ export class RuntimeManager {
         if (dependency.source !== entry.resolved) throw new Error(`Dependency source changed: ${name}`);
         entry.integrity = dependency.integrity;
       }
-      if (!entry.resolved || new URL(entry.resolved).protocol !== "https:" || new URL(entry.resolved).hostname !== "registry.npmjs.org" || !entry.integrity?.match(/^sha(?:512|256|1)-[A-Za-z0-9+/]+=*$/)) throw new Error(`Dependency lock contains an unverified distribution source: ${name}`);
+      if (!entry.resolved || !this.npmSource(entry.resolved) || !entry.integrity?.match(/^sha(?:512|256|1)-[A-Za-z0-9+/]+=*$/)) throw new Error(`Dependency lock contains an unverified distribution source: ${name}`);
     }
     if (lock.packages[`node_modules/${packageName}`]?.integrity !== release.integrity) throw new Error("npm artifact changed after latest resolution");
     await writeFile(path.join(directory, "package-lock.json"), JSON.stringify(lock));
@@ -396,7 +403,7 @@ export class RuntimeManager {
       if (monitoring) return; monitoring = true;
       void directorySize(directory).catch((error) => budget.abort(error)).finally(() => { monitoring = false; });
     }, 500);
-    try { await this.command(this.config.runtimeNode, [npm, "ci", ...args.slice(2)], directory, AbortSignal.any([signal, budget.signal]), env); }
+    try { await this.command(this.config.runtimeNode, [npm, "ci", ...args.slice(2)], directory, AbortSignal.any([signal, budget.signal]), env, downloadTimeoutMs); }
     finally { clearInterval(timer); }
     await rm(path.join(directory, ".npm-cache"), removeOptions);
     if (id === "opencode") {
@@ -439,13 +446,20 @@ export class RuntimeManager {
     const requiredBytes = release.bytes ? release.bytes + 64 * 1024 * 1024 : maxInstallation;
     if (freeBytes < requiredBytes) throw new Error(`At least ${Math.ceil(requiredBytes / 1024 / 1024)} MiB of free disk space is required to install this runtime`);
     const command = await this.installFiles(id, release, directory, signal);
-    await this.probe(id, path.join(directory, command), directory, signal, release.version);
-    const size = await directorySize(directory); signal.throwIfAborted();
+    const destination = path.join(this.directory(id), "versions", operation);
+    let size: number;
+    try {
+      // Move before executing the CLI: Windows can retain locks after a probe exits.
+      await mkdir(path.dirname(destination), { recursive: true }); await renameDirectory(directory, destination);
+      await this.probe(id, path.join(destination, command), destination, signal, release.version);
+      size = await directorySize(destination); signal.throwIfAborted();
+    } catch (error) {
+      await rm(destination, removeOptions);
+      throw error;
+    }
     this.states.set(id, { ...this.states.get(id), cancelable: false, updateStatus: "switching", progress: 100 });
     const previous = manifest.current;
-    const destination = path.join(this.directory(id), "versions", operation);
     if (externalSource) {
-      await mkdir(path.dirname(destination), { recursive: true }); await renameDirectory(directory, destination);
       manifest.current = { version: release.version, directory: operation, command, size, source: release.source, integrity: release.integrity };
       this.persist(id);
       for (const entry of await readdir(path.dirname(destination))) if (entry !== operation) await rm(path.join(path.dirname(destination), entry), removeOptions);
@@ -461,7 +475,6 @@ export class RuntimeManager {
         await mkdir(path.dirname(backup), { recursive: true }); await cp(native, backup, { recursive: true }); snapshot = true;
       }
       manifest.rollback = { previous, directory: operation, snapshot, bindings: this.hooks.snapshotBindings?.(id) ?? [] }; this.persist(id);
-      await mkdir(path.dirname(destination), { recursive: true }); await renameDirectory(directory, destination);
       manifest.current = { version: release.version, directory: operation, command, size, source: release.source, integrity: release.integrity };
       this.persist(id); this.select(id);
     }, async () => {

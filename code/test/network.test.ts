@@ -9,6 +9,23 @@ import os from "node:os";
 import path from "node:path";
 import type { Socket } from "node:net";
 import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment, proxyAddress } from "../host/network.mjs";
+import { readConfig } from "../src/config.js";
+
+test("npm registry configuration validates URLs, preserves repository paths and overrides inherited npm settings", () => {
+  for (const registry of ["https://registry.npmjs.org", "https://registry.npmmirror.com", "https://packages.example.com:8443/repository/npm"]) {
+    const settings = validateNetworkSettings({ npmRegistry: registry });
+    assert.equal(settings.npmRegistry, registry + "/");
+    const env = networkEnvironment(settings, { NPM_CONFIG_REGISTRY: "https://old.invalid/", Npm_Config_Registry: "https://mixed.invalid/", AGENT_NPM_REGISTRY: "https://other.invalid/" });
+    assert.equal(env.NPM_CONFIG_REGISTRY, undefined);
+    assert.equal(env.Npm_Config_Registry, undefined);
+    assert.equal(env.npm_config_registry, registry + "/");
+    assert.equal(readConfig([], env).npmRegistry, registry + "/");
+  }
+  for (const npmRegistry of [null, "", "http://mirror.invalid", "file:///tmp/npm", "https://user:password@mirror.invalid", "https://@mirror.invalid", "https://mirror.invalid?token=secret", "https://mirror.invalid#fragment", "https://mirror.invalid\\path", "https://mirror.invalid/\nignore-scripts=false", "https://mirror.invalid:0", "https://mirror.invalid/" + "x".repeat(2048)]) {
+    assert.throws(() => validateNetworkSettings({ npmRegistry }), /npm 源必须/);
+  }
+  assert.equal(readConfig([], {}).npmRegistry, "https://registry.npmjs.org/");
+});
 
 test("network settings validate fixed fields, proxy addresses, bypass rules and secret preservation", () => {
   assert.deepEqual(validateNetworkSettings({}), { ...defaultNetworkSettings, proxyPassword: "" });

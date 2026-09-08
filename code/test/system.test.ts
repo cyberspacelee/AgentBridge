@@ -43,8 +43,9 @@ test("shared host authenticates Web, confines paths, imports CA, preserves draft
     assert.equal(await readFile(cert.path, "utf8"), rootCertificates[0]);
     assert.equal((await fetch(origin + "/api/system/certificates", { method: "POST", headers, body: JSON.stringify({ pem: "secret private key" }) })).status, 400);
     const network = await (await fetch(origin + "/api/system/network", { headers })).json() as NetworkView;
-    const saved = await (await fetch(origin + "/api/system/network", { method: "PUT", headers, body: JSON.stringify({ revision: network.revision, settings: { ...network.settings, mode: "direct", proxyPassword: "private-password" } }) })).json() as NetworkView;
+    const saved = await (await fetch(origin + "/api/system/network", { method: "PUT", headers, body: JSON.stringify({ revision: network.revision, settings: { ...network.settings, mode: "direct", npmRegistry: "https://registry.npmmirror.com", proxyPassword: "private-password" } }) })).json() as NetworkView;
     assert.equal(saved.hasPassword, true); assert.equal(saved.restartRequired, true); assert.ok(!JSON.stringify(saved).includes("private-password"));
+    assert.equal(saved.settings.npmRegistry, "https://registry.npmmirror.com/");
     assert.equal((await fetch(origin + "/api/system/network", { method: "PUT", headers, body: JSON.stringify({ revision: network.revision, settings: network.settings }) })).status, 409);
     const pid = host.child!.pid;
     assert.equal((await fetch(origin + "/api/system/lifecycle", { method: "POST", headers, body: JSON.stringify({ action: "restart", mode: "wait" }) })).status, 202);
@@ -52,6 +53,7 @@ test("shared host authenticates Web, confines paths, imports CA, preserves draft
     const second = await (await fetch(origin + "/api/runtime", { headers })).json();
     assert.equal(second.storeId, first.storeId); assert.notEqual(second.instanceId, first.instanceId);
     await eventually(async () => !(await (await fetch(origin + "/api/system/network", { headers })).json()).restartRequired);
+    assert.equal((await (await fetch(origin + "/api/system/network", { headers })).json()).settings.npmRegistry, "https://registry.npmmirror.com/");
   } finally { await host.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 

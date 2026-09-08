@@ -1,3 +1,4 @@
+/* Hallmark · Workbench · design-system: design.md · pre-emit critique: P4 H4 E4 S4 R5 V3 */
 import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useEffect, useRef, useState } from "react"
@@ -9,6 +10,7 @@ import { agentNames } from "@/lib/agent-draft"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
   bytes,
   date,
@@ -49,7 +51,9 @@ export function RuntimeInstaller({
   const [actionError, setActionError] = useState<Error>()
   const [confirming, setConfirming] = useState(false)
   const checked = useRef(false)
-  const [command, setCommand] = useState("")
+  const [commandDraft, setCommand] = useState<string>()
+  const command =
+    commandDraft ?? (!runtime?.managed ? runtime?.executable : "") ?? ""
   const [sourceBusy, setSourceBusy] = useState(false)
   async function source(mode: "managed" | "external") {
     setSourceBusy(true)
@@ -59,7 +63,7 @@ export function RuntimeInstaller({
         method: "PUT",
         body: JSON.stringify({
           mode,
-          ...(mode === "external" ? { command } : {}),
+          ...(mode === "external" ? { command: command.trim() } : {}),
         }),
       })
     } catch (error) {
@@ -146,6 +150,122 @@ export function RuntimeInstaller({
           </span>
         </Notice>
       )}
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">
+          当前使用：
+          {runtime.managed ? "AgentBridge 自动安装的 CLI" : "已有 CLI"}
+          。选择一种方式配置。
+        </p>
+        <Tabs
+          defaultValue={runtime.managed ? "managed" : "external"}
+          className="gap-4"
+        >
+          <TabsList aria-label="CLI 配置方式">
+            <TabsTrigger value="managed">自动安装</TabsTrigger>
+            <TabsTrigger value="external">使用已有 CLI</TabsTrigger>
+          </TabsList>
+          <TabsContent value="managed" className="flex flex-col gap-3">
+            <p className="text-sm text-muted-foreground">
+              由 AgentBridge 下载、更新和卸载，无需填写命令或路径。
+            </p>
+            {runtime.managed && (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={
+                    busy || (runtime.usable && isLatest && !runtime.error)
+                  }
+                  onClick={() =>
+                    void perform(
+                      runtime.installedVersion && runtime.usable
+                        ? "update"
+                        : "install"
+                    )
+                  }
+                >
+                  <Download data-icon="inline-start" />
+                  {runtime.installedVersion
+                    ? runtime.usable
+                      ? "更新到最新版"
+                      : "重新安装最新版"
+                    : "安装最新版"}
+                </Button>
+                {(runtime.installedVersion || runtime.status === "failed") && (
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => setConfirming(true)}
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    卸载
+                  </Button>
+                )}
+              </div>
+            )}
+            {!runtime.managed && (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  {runtime.managedVersion
+                    ? `已下载版本 ${runtime.managedVersion}，点击使用后切换。`
+                    : "先下载，再切换使用；已有 CLI 保持原样。"}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant={runtime.managedVersion ? "outline" : "default"}
+                    disabled={busy}
+                    onClick={() => void perform("install")}
+                  >
+                    <Download data-icon="inline-start" />
+                    下载最新版
+                  </Button>
+                  {runtime.managedVersion && (
+                    <Button
+                      disabled={busy}
+                      onClick={() => void source("managed")}
+                    >
+                      使用已下载版本
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
+          </TabsContent>
+          <TabsContent value="external" className="flex flex-col gap-3">
+            <Field>
+              <FieldLabel htmlFor={`runtime-command-${agent.id}`}>
+                CLI 命令或绝对路径
+              </FieldLabel>
+              <Input
+                id={`runtime-command-${agent.id}`}
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder={`例如：${agent.id}`}
+                disabled={busy}
+              />
+              <FieldDescription>
+                使用网关所在电脑上已安装的 CLI，AgentBridge 不负责更新或卸载。
+                验证成功后，等待当前任务结束再切换。
+              </FieldDescription>
+            </Field>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                disabled={busy || !command.trim()}
+                onClick={() => void source("external")}
+              >
+                验证并使用
+              </Button>
+              {!runtime.managed && (
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void perform("detect")}
+                >
+                  检测当前 CLI
+                </Button>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
       <dl className="agent-facts">
         <div>
           <dt>平台</dt>
@@ -192,7 +312,7 @@ export function RuntimeInstaller({
         {runtime.source && (
           <div>
             <dt>安装来源</dt>
-            <dd>{runtime.source}</dd>
+            <dd className="break-all">{runtime.source}</dd>
           </div>
         )}
       </dl>
@@ -255,80 +375,6 @@ export function RuntimeInstaller({
           </dd>
         </div>
       </dl>
-      {!runtime.managed && (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => void perform("detect")}
-          >
-            检测外部 CLI
-          </Button>
-          <Button disabled={busy} onClick={() => void perform("install")}>
-            安装受管最新版
-          </Button>
-          <Button
-            disabled={busy || !runtime.managedVersion}
-            onClick={() => void source("managed")}
-          >
-            切换到受管版本
-            {runtime.managedVersion ? ` ${runtime.managedVersion}` : ""}
-          </Button>
-        </div>
-      )}
-      <Field>
-        <FieldLabel htmlFor={`runtime-command-${agent.id}`}>
-          外部 CLI 命令或绝对路径
-        </FieldLabel>
-        <Input
-          id={`runtime-command-${agent.id}`}
-          value={command}
-          onChange={(event) => setCommand(event.target.value)}
-          placeholder={runtime.executable ?? agent.id}
-          disabled={busy}
-        />
-        <FieldDescription>
-          先验证版本与协议，等待当前任务结束后切换。不会修改或卸载外部程序。
-        </FieldDescription>
-        <Button
-          variant="outline"
-          disabled={busy || !command.trim()}
-          onClick={() => void source("external")}
-        >
-          验证并切换到外部 CLI
-        </Button>
-      </Field>
-      {runtime.managed && (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            disabled={busy || (runtime.usable && isLatest && !runtime.error)}
-            onClick={() =>
-              void perform(
-                runtime.installedVersion && runtime.usable
-                  ? "update"
-                  : "install"
-              )
-            }
-          >
-            <Download data-icon="inline-start" />
-            {runtime.installedVersion
-              ? runtime.usable
-                ? "更新到最新版"
-                : "重新安装最新版"
-              : "安装最新版"}
-          </Button>
-          {(runtime.installedVersion || runtime.status === "failed") && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => setConfirming(true)}
-            >
-              <Trash2 data-icon="inline-start" />
-              卸载
-            </Button>
-          )}
-        </div>
-      )}
       {runtime.cancelable && (
         <Button
           variant="outline"

@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import path from "node:path";
 
 export const defaultNetworkSettings = Object.freeze({
+  npmRegistry: "https://registry.npmjs.org/",
   mode: "environment",
   proxyUrl: "",
   proxyUsername: "",
@@ -14,6 +15,15 @@ export const defaultNetworkSettings = Object.freeze({
 const controls = /[\x00-\x1f\x7f]/;
 const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"];
 const proxyVariable = /^(?:https?_proxy|all_proxy|no_proxy|npm_config_(?:proxy|https_proxy|noproxy))$/i;
+
+export function normalizeNpmRegistry(value) {
+  try {
+    if (typeof value !== "string" || value.length > 2048 || !/^https:\/\/[^\s/?#\\@]+(?:\/[^\s?#\\]*)?$/i.test(value)) throw new Error();
+    const url = new URL(value);
+    if (!url.hostname || url.username || url.password || url.port === "0") throw new Error();
+    return url.href.endsWith("/") ? url.href : `${url.href}/`;
+  } catch { throw new Error("npm 源必须是 HTTPS 地址，不能包含用户名、密码、查询参数或片段"); }
+}
 
 function bypassList(value) {
   if (!value) return [];
@@ -42,6 +52,7 @@ export function validateNetworkSettings(input, previousPassword = "", validateCe
   const allowed = [...Object.keys(defaultNetworkSettings), "proxyPassword"];
   if (Object.keys(input).some((key) => !allowed.includes(key))) throw new Error("Network settings contain an unknown field");
   const settings = { ...defaultNetworkSettings, ...input, proxyPassword: input.proxyPassword === undefined ? previousPassword : input.proxyPassword };
+  settings.npmRegistry = normalizeNpmRegistry(settings.npmRegistry);
   if (!["environment", "manual", "direct"].includes(settings.mode)) throw new Error("Invalid proxy mode");
   if (typeof settings.useSystemCa !== "boolean") throw new Error("System CA setting must be a boolean");
   for (const [key, maximum] of Object.entries({ proxyUrl: 2048, proxyUsername: 512, proxyPassword: 4096, noProxy: 4096, caFile: 4096 })) {
@@ -83,6 +94,8 @@ export function proxyAddress(settings) {
 
 export function networkEnvironment(settings, baseEnv = process.env) {
   const env = { ...baseEnv };
+  for (const key of Object.keys(env)) if (/^(?:AGENT_NPM_REGISTRY|npm_config_registry)$/i.test(key)) delete env[key];
+  env.AGENT_NPM_REGISTRY = env.npm_config_registry = settings.npmRegistry;
   const inheritedBypass = Object.entries(baseEnv)
     .filter(([key]) => /^(?:no_proxy|npm_config_noproxy)$/i.test(key))
     .flatMap(([, value]) => String(value ?? "").split(",").map((entry) => entry.trim()).filter(Boolean));

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { modelSchema } from "../shared/contracts.js";
 import { providerSchema } from "../shared/settings.js";
 import { agentIdSchema } from "../shared/settings.js";
+import { defaultNetworkSettings, normalizeNpmRegistry } from "../host/network.mjs";
 
 export const limitsSchema = z
   .object({
@@ -51,6 +52,7 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     managedRuntimes: env.AGENT_MANAGED_RUNTIMES === "true",
     runtimeNode: env.AGENT_RUNTIME_NODE ?? process.execPath,
     runtimeNpm: env.AGENT_RUNTIME_NPM ?? "",
+    npmRegistry: normalizeNpmRegistry(env.AGENT_NPM_REGISTRY ?? defaultNetworkSettings.npmRegistry),
     port: z.coerce
       .number()
       .int()

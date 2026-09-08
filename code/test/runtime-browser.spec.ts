@@ -192,3 +192,58 @@ test("a runtime waiting for active tasks can be stopped explicitly", async ({ pa
   await expect(dialog).not.toBeVisible();
   expect(stopped).toBe(true);
 });
+
+test("CLI setup separates automatic installation from using an existing command", async ({ page }, info) => {
+  const runtime = runtimeFixture();
+  const actions: RuntimeAction[] = [];
+  const sources: unknown[] = [];
+  await runtimeRoutes(page, runtime);
+  await page.route("**/api/runtimes/pi/actions", (route) => {
+    const { action } = route.request().postDataJSON() as { action: RuntimeAction };
+    actions.push(action);
+    if (action === "install") runtime.managedVersion = "1.2.3";
+    return route.fulfill({ status: 202, json: { runtime } });
+  });
+  await page.route("**/api/runtimes/pi/source", (route) => {
+    const source = route.request().postDataJSON();
+    sources.push(source);
+    Object.assign(runtime, {
+      managed: source.mode === "managed", usable: true, status: "installed",
+      executable: source.command ?? "/data/runtimes/pi/versions/fixture/cli",
+      installedVersion: "1.2.3", detection: "present", compatibility: "compatible",
+    });
+    return route.fulfill({ status: 202, json: { runtime } });
+  });
+  await page.goto("/agents/pi?tab=installation");
+  const pane = page.getByRole("region", { name: "安装与版本", exact: true });
+  await expect(pane.getByRole("button", { name: "安装最新版", exact: true })).toBeEnabled();
+  await expect(pane.getByRole("textbox")).toHaveCount(0);
+  await pane.getByRole("tab", { name: "使用已有 CLI", exact: true }).click();
+  await expect(pane.getByRole("button", { name: "安装最新版", exact: true })).toHaveCount(0);
+  await expect(pane.getByRole("button", { name: "验证并使用", exact: true })).toBeDisabled();
+  expect(actions).toEqual(["check"]);
+  expect(sources).toEqual([]);
+  await pane.getByLabel("CLI 命令或绝对路径", { exact: true }).fill("  C:\\Program Files\\Pi\\pi.cmd  ");
+  for (const width of [320, 375, 414, 768]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await assertLayout(page);
+    await page.screenshot({ path: info.outputPath(`runtime-external-${width}.png`), fullPage: true });
+  }
+  await pane.getByRole("button", { name: "验证并使用", exact: true }).click();
+  await expect(pane.getByText("当前使用：已有 CLI。选择一种方式配置。", { exact: true })).toBeVisible();
+  expect(sources).toEqual([{ mode: "external", command: "C:\\Program Files\\Pi\\pi.cmd" }]);
+  await pane.getByRole("tab", { name: "自动安装", exact: true }).click();
+  await expect(pane.getByRole("textbox")).toHaveCount(0);
+  await expect(pane.getByText("先下载，再切换使用；已有 CLI 保持原样。", { exact: true })).toBeVisible();
+  await pane.getByRole("button", { name: "下载最新版", exact: true }).click();
+  await expect(pane.getByRole("button", { name: "使用已下载版本", exact: true })).toBeEnabled();
+  expect(sources).toHaveLength(1);
+  await pane.getByRole("button", { name: "使用已下载版本", exact: true }).click();
+  await expect(pane.getByText("当前使用：AgentBridge 自动安装的 CLI。选择一种方式配置。", { exact: true })).toBeVisible();
+  expect(sources).toEqual([{ mode: "external", command: "C:\\Program Files\\Pi\\pi.cmd" }, { mode: "managed" }]);
+  for (const width of [320, 375, 414, 768]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await assertLayout(page);
+    await page.screenshot({ path: info.outputPath(`runtime-managed-${width}.png`), fullPage: true });
+  }
+});
