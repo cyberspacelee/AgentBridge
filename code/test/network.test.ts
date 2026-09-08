@@ -47,8 +47,10 @@ test("network modes override inherited proxies without mutating the environment 
   const base = { KEEP: "yes", HTTP_PROXY: "http://upper.invalid", http_proxy: "http://lower.invalid", Https_Proxy: "http://mixed.invalid", ALL_PROXY: "http://all.invalid", NO_PROXY: "legacy.invalid", no_proxy: "second.invalid", NPM_CONFIG_PROXY: "http://npm.invalid", NPM_CONFIG_NOPROXY: "npm-bypass.invalid", NODE_EXTRA_CA_CERTS: "/inherited-ca.pem", NODE_TLS_REJECT_UNAUTHORIZED: "0", NPM_CONFIG_STRICT_SSL: "false" };
   const original = { ...base };
   const inherited = networkEnvironment(validateNetworkSettings({ noProxy: ".custom.invalid", useSystemCa: false }), base);
-  assert.equal(inherited.HTTP_PROXY, base.HTTP_PROXY);
+  assert.equal(inherited.HTTP_PROXY, base.http_proxy);
   assert.equal(inherited.http_proxy, base.http_proxy);
+  assert.equal(inherited.HTTPS_PROXY, base.Https_Proxy);
+  assert.equal(inherited.https_proxy, base.Https_Proxy);
   assert.equal(inherited.NODE_EXTRA_CA_CERTS, base.NODE_EXTRA_CA_CERTS);
   assert.equal(inherited.NODE_USE_SYSTEM_CA, "0");
   for (const host of ["localhost", "127.0.0.1", "::1", "[::1]", "legacy.invalid", "second.invalid", "npm-bypass.invalid", ".custom.invalid"]) assert.ok(inherited.NO_PROXY.split(",").includes(host));

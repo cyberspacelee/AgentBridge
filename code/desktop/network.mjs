@@ -81,6 +81,15 @@ export function networkEnvironment(settings, baseEnv = process.env) {
   const inheritedBypass = Object.entries(baseEnv)
     .filter(([key]) => /^(?:no_proxy|npm_config_noproxy)$/i.test(key))
     .flatMap(([, value]) => String(value ?? "").split(",").map((entry) => entry.trim()).filter(Boolean));
+  if (settings.mode === "environment") {
+    // Windows collapses case-insensitive names at spawn; resolve precedence before that happens.
+    for (const key of ["http_proxy", "https_proxy", "all_proxy", "npm_config_proxy", "npm_config_https_proxy"]) {
+      const names = Object.keys(env).filter((name) => name.toLowerCase() === key);
+      const value = env[key] ?? env[key.toUpperCase()] ?? (names.length ? env[names[0]] : undefined);
+      for (const name of names) delete env[name];
+      if (value !== undefined) env[key] = env[key.toUpperCase()] = value;
+    }
+  }
   if (settings.mode !== "environment") {
     for (const key of Object.keys(env)) if (proxyVariable.test(key)) delete env[key];
     if (settings.mode === "manual") {
