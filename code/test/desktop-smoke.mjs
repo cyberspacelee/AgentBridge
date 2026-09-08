@@ -61,7 +61,7 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForURL(/\/agents$/);
-  await expect(page.getByRole("link", { name: "Agent 管理", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agent 管理", exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
   const { storeId } = await page.evaluate(async () => (await fetch("/api/runtime")).json());
   assert.equal((await fetch(`${origin}/api/settings`)).status, 403);
