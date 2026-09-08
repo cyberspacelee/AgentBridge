@@ -324,7 +324,7 @@ async function createWindow() {
         })
         .then(({ response }) =>
           response === 0 ? window.loadURL(`${origin}/agents`) : requestQuit(),
-        );
+        ).catch((error) => dialog.showErrorBox("无法恢复工作台", error.message));
   });
   window.once("ready-to-show", showWindow);
   void window
@@ -339,6 +339,7 @@ async function launchBackend() {
     protection: secure ? "os" : "file",
     encrypt: secure ? (value) => safeStorage.encryptStringAsync(value) : undefined,
     decrypt: async (value) => (await safeStorage.decryptStringAsync(value)).result,
+    // Desktop selects the saved Agent; do not inherit a shell-only engine override.
     env: { AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm, AGENT_ENGINE: undefined },
     onReady: (url) => {
       const changed = origin && origin !== url;

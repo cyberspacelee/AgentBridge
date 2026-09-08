@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type {
   AcceptedRun,
   CreateTaskInput,
@@ -29,7 +29,9 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
-    signal: init?.signal ?? AbortSignal.timeout(45000),
+    signal: init?.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(45000)])
+      : AbortSignal.timeout(45000),
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
@@ -41,6 +43,21 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     )
   }
   return response.status === 204 ? (undefined as T) : response.json()
+}
+// Lazily allocate per-page cancellation; StrictMode cleanup can safely discard an unused scope.
+export function useRequestSignal(key: unknown = null) {
+  const controller = useRef<AbortController | null>(null)
+  useEffect(
+    () => () => {
+      controller.current?.abort()
+      controller.current = null
+    },
+    [key]
+  )
+  return useCallback(
+    () => (controller.current ??= new AbortController()).signal,
+    []
+  )
 }
 export function useQuery<T>(url: string | null, revision = 0, queryKey = url) {
   const [result, setResult] = useState<{
@@ -54,7 +71,9 @@ export function useQuery<T>(url: string | null, revision = 0, queryKey = url) {
     if (!url) return
     const controller = new AbortController()
     void api<T>(url, { signal: controller.signal })
-      .then((data) => setResult({ url: queryKey, data }))
+      .then((data) => {
+        if (!controller.signal.aborted) setResult({ url: queryKey, data })
+      })
       .catch((error) => {
         if (!controller.signal.aborted)
           setResult((previous) => ({
@@ -79,8 +98,10 @@ export async function submit(
     | Omit<CreateTaskInput, "submissionId">
     | Omit<SubmitRunInput, "submissionId">,
   storeId: string,
-  sessionId?: string
+  sessionId?: string,
+  signal?: AbortSignal
 ) {
+  signal?.throwIfAborted()
   const key = `agentbridge:submission:${storeId}:${sessionId ?? "create"}`
   const fingerprint = JSON.stringify(input)
   let record: {
@@ -107,23 +128,32 @@ export async function submit(
   try {
     const result = await api<AcceptedRun>(
       sessionId ? `/api/tasks/${sessionId}/runs` : "/api/tasks",
-      { method: "POST", body: JSON.stringify(record.body) }
+      { method: "POST", body: JSON.stringify(record.body), signal }
     )
-    sessionStorage.removeItem(key)
+    signal?.throwIfAborted()
+    if (sessionStorage.getItem(key) === JSON.stringify(record))
+      sessionStorage.removeItem(key)
     return result
   } catch (error) {
+    signal?.throwIfAborted()
     const query = new URLSearchParams({
       operation: sessionId ? "append" : "create",
       sessionId: sessionId ?? "",
     })
     const outcome = await api<Submission>(
-      `/api/submissions/${record.body.submissionId}?${query}`
+      `/api/submissions/${record.body.submissionId}?${query}`,
+      { signal }
     ).catch(() => null)
+    signal?.throwIfAborted()
     if (outcome?.status === "accepted" && outcome.result) {
-      sessionStorage.removeItem(key)
+      if (sessionStorage.getItem(key) === JSON.stringify(record))
+        sessionStorage.removeItem(key)
       return outcome.result
     }
-    if (outcome?.status === "rejected" || outcome?.status === "gone")
+    if (
+      (outcome?.status === "rejected" || outcome?.status === "gone") &&
+      sessionStorage.getItem(key) === JSON.stringify(record)
+    )
       sessionStorage.removeItem(key)
     throw error
   }
@@ -134,7 +164,9 @@ export function useEvents() {
     "connecting"
   )
   useEffect(() => {
-    const source = new EventSource("/event")
+    let source: EventSource
+    let reconnect: ReturnType<typeof setTimeout> | undefined
+    let attempts = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     const invalidate = () => {
       if (!timer)
@@ -143,15 +175,32 @@ export function useEvents() {
           setRevision((r) => r + 1)
         }, 250)
     }
-    source.onopen = () => {
-      setState("live")
-      invalidate()
+    const connect = () => {
+      source = new EventSource("/event")
+      source.onopen = () => {
+        attempts = 0
+        setState("live")
+        invalidate()
+      }
+      source.onerror = () => {
+        setState("reconnecting")
+        // CONNECTING is retried by the browser; CLOSED (e.g. HTTP 503) is terminal.
+        if (source.readyState === EventSource.CLOSED) {
+          source.close()
+          clearTimeout(reconnect)
+          reconnect = setTimeout(
+            connect,
+            Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5))
+          )
+        }
+      }
+      source.onmessage = invalidate
     }
-    source.onerror = () => setState("reconnecting")
-    source.onmessage = invalidate
+    connect()
     const polling = setInterval(invalidate, 5000)
     return () => {
       source.close()
+      clearTimeout(reconnect)
       clearTimeout(timer)
       clearInterval(polling)
     }

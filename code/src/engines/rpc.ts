@@ -72,6 +72,8 @@ export class RpcProcess {
         } else if (typeof message.id === "number") {
           const pending = this.pending.get(message.id);
           if (!pending) return;
+          // Validate before removing the waiter so malformed results reject it in fail().
+          const result = message.error ? undefined : message.result ? record(message.result) : {};
           this.pending.delete(message.id);
           clearTimeout(pending.timer);
           if (message.error)
@@ -81,7 +83,7 @@ export class RpcProcess {
                 JSON.stringify(message.error),
               ),
             );
-          else pending.resolve(message.result ? record(message.result) : {});
+          else pending.resolve(result!);
         }
       },
       (error) => {
@@ -92,12 +94,13 @@ export class RpcProcess {
   }
   send(message: Record<string, unknown>) {
     if (this.closed) throw engineError("Agent RPC connection is closed");
-    this.child.stdin.write(
-      JSON.stringify({
-        ...(this.jsonrpc ? { jsonrpc: "2.0" } : {}),
-        ...message,
-      }) + "\n",
-    );
+    const frame = JSON.stringify({
+      ...(this.jsonrpc ? { jsonrpc: "2.0" } : {}),
+      ...message,
+    }) + "\n";
+    if (this.child.stdin.writableLength + Buffer.byteLength(frame) > 8 * 1024 * 1024)
+      throw engineError("Agent RPC write buffer exceeded 8 MiB");
+    this.child.stdin.write(frame);
   }
   request(
     method: string,
@@ -105,6 +108,10 @@ export class RpcProcess {
     timeoutMs = 30000,
   ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
+      if (this.pending.size >= 1024) {
+        reject(engineError("Too many pending Agent RPC requests"));
+        return;
+      }
       const id = ++this.nextId;
       const timer = setTimeout(() => {
         this.pending.delete(id);

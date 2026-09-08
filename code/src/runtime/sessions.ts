@@ -83,7 +83,10 @@ export class SessionRuntime {
   private submissions = new Map<string, Promise<AcceptedRun>>();
   private deleting = new Map<string, Promise<void>>();
   private creating = 0;
+  private logsSincePrune = 99;
+  onFatal: () => void = () => {};
   private closed = false;
+  private stopping?: Promise<void>;
   private tick?: NodeJS.Timeout;
   private waiting = new Map<string, Set<(run: Run) => void>>();
   private isolations = new Map<string, Promise<void>>();
@@ -102,6 +105,7 @@ export class SessionRuntime {
     message: string;
     sessionId?: string;
     runId?: string;
+    traceId?: string;
   }) => void = () => {};
 
   constructor(
@@ -149,16 +153,13 @@ export class SessionRuntime {
   }
   agentViews(): AgentView[] {
     const settings = readSettings(this.config);
+    const counts = this.store.runCounts();
     return settings.agents
       .filter((a) => this.adapters.some((adapter) => adapter.id === a.id))
       .map((a) => {
         const savedRevision = agentRevision(this.config, a.id, settings);
         const appliedRevision = this.appliedRevisions.get(a.id) ?? null;
-        const runs = this.store
-          .list("runs")
-          .filter(
-            (r) => this.store.get("sessions", r.sessionId)?.engineId === a.id,
-          );
+        const count = (...states: Run["state"][]) => counts.filter((r) => r.engineId === a.id && states.includes(r.state)).reduce((n, r) => n + r.count, 0);
         return {
           id: a.id,
           enabled: a.enabled,
@@ -170,10 +171,8 @@ export class SessionRuntime {
           pendingChanges: savedRevision !== appliedRevision,
           operation: this.agentOperations.get(a.id)?.action ?? null,
           error: this.agentErrors.get(a.id) ?? null,
-          activeRuns: runs.filter(
-            (r) => r.state === "running" || r.state === "stopping",
-          ).length,
-          queuedRuns: runs.filter((r) => r.state === "queued").length,
+          activeRuns: count("running", "stopping"),
+          queuedRuns: count("queued"),
           models: configuredModels(this.config, a.id),
           capabilities: this.engine(a.id).capabilities?.() ?? {
             permissions: true,
@@ -211,7 +210,7 @@ export class SessionRuntime {
         void this.agentAction(
           agent.id,
           agent.enabled ? "enable" : "disable",
-        ).catch(() => {});
+        ).catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
     this.publishAgents();
     return view;
   }
@@ -320,7 +319,7 @@ export class SessionRuntime {
           id,
           errorDetail(error, diagnosticSecrets(this.config)),
         );
-        await adapter.stop().catch(() => {});
+        await adapter.stop().catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
       } finally {
         this.agentOperations.delete(id);
         try {
@@ -477,14 +476,8 @@ export class SessionRuntime {
             Date.now() - this.config.limits.eventRetentionMs,
           ).toISOString(),
         );
-      } catch {
-        this.store.healthy = false;
-        this.log(
-          "error",
-          "storage",
-          "INTERNAL_ERROR",
-          "Event retention maintenance failed",
-        );
+      } catch (error) {
+        this.storageFailure(error, true);
       }
     }, 60000);
     this.maintenance.unref();
@@ -505,20 +498,29 @@ export class SessionRuntime {
     ]);
   }
   summary(id: string): TaskSummary {
-    const session = this.session(id);
-    const runs = this.runs(id);
-    const interactions = this.store.list("interactions", "sessionId=?", [id]);
-    return {
-      ...session,
-      status: taskStatus(session, runs, interactions),
-      lastRun: runs.at(-1) ?? null,
-      queuedCount: runs.filter((r) => r.state === "queued").length,
-      messageCount: Number(
-        this.store.db
-          .prepare("SELECT COUNT(*) AS n FROM messages WHERE sessionId=?")
-          .get(id)?.n ?? 0,
-      ),
-    };
+    return this.summaries([this.session(id)])[0]!;
+  }
+  summaries(sessions = this.store.list("sessions")): TaskSummary[] {
+    if (!sessions.length) return [];
+    const placeholders = sessions.map(() => "?").join(",");
+    const ids = sessions.map((s) => s.id);
+    const runs = new Map(sessions.map((s) => [s.id, [] as Run[]]));
+    for (const run of this.store.list("runs", `sessionId IN (${placeholders}) AND (state IN ('queued','running','stopping') OR sequence=(SELECT MAX(sequence) FROM runs latest WHERE latest.sessionId=runs.sessionId)) ORDER BY sequence`, ids))
+      runs.get(run.sessionId)!.push(run);
+    const interactions = new Map(sessions.map((s) => [s.id, [] as Interaction[]]));
+    for (const interaction of this.store.list("interactions", `sessionID IN (${placeholders}) AND state IN ('pending','replying')`, ids))
+      interactions.get(interaction.sessionID)!.push(interaction);
+    const counts = new Map(this.store.db.prepare(`SELECT sessionId,COUNT(*) AS n FROM messages WHERE sessionId IN (${placeholders}) GROUP BY sessionId`).all(...ids).map((r) => [String(r.sessionId), Number(r.n)]));
+    return sessions.map((session) => {
+      const history = runs.get(session.id)!;
+      return {
+        ...session,
+        status: taskStatus(session, history, interactions.get(session.id)!),
+        lastRun: history.at(-1) ?? null,
+        queuedCount: history.filter((r) => r.state === "queued").length,
+        messageCount: counts.get(session.id) ?? 0,
+      };
+    });
   }
   detail(id: string): TaskDetail {
     return {
@@ -618,7 +620,7 @@ export class SessionRuntime {
       ).catch((error) => {
         void creation
           .then(() => adapter.disposeSession(owned.id))
-          .catch(() => {});
+          .catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
         throw error;
       });
       this.store.transaction(() => {
@@ -747,7 +749,7 @@ export class SessionRuntime {
             error: { code: e.code, message: e.message, stage: e.stage },
           }),
         );
-        if (created) await this.deleteSession(created.id).catch(() => {});
+        if (created) await this.deleteSession(created.id).catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
         throw error;
       } finally {
         this.submissions.delete(key);
@@ -883,9 +885,7 @@ export class SessionRuntime {
                     stage: "engine",
                   });
               })
-              .catch(() => {
-                this.store.healthy = false;
-              });
+              .catch((error) => this.storageFailure(error));
           }
         const health = adapter.health().status;
         if (
@@ -1041,7 +1041,7 @@ export class SessionRuntime {
               message: "Execution deadline expired while queued",
               stage: "queue",
             });
-          else void this.stopRun(run.id, "timeout").catch(() => {});
+          else void this.stopRun(run.id, "timeout").catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
           continue;
         }
         if (
@@ -1068,24 +1068,30 @@ export class SessionRuntime {
         this.active.set(run.sessionId, execution);
         void this.execute(run.id)
           .finally(async () => {
-            await execution.stopping?.catch(() => {});
+            await execution.stopping?.catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
             if (this.active.get(run.sessionId) === execution)
               this.active.delete(run.sessionId);
             execution.resolve();
           })
-          .catch((error) => {
-            this.store.healthy = false;
-            this.log(
-              "error",
-              "runtime",
-              "INTERNAL_ERROR",
-              asGatewayError(error).message,
-            );
-          });
+          .catch((error) => this.storageFailure(error));
       }
-    } catch {
-      this.store.healthy = false;
+    } catch (error) {
+      this.storageFailure(error, true);
     }
+  }
+  storageFailure(error: unknown, retryable = false) {
+    if (this.closed) return;
+    const code = error && typeof error === "object" && "errcode" in error ? Number(error.errcode) & 255 : 0;
+    if (retryable && this.store.healthy && (code === 5 || code === 6)) {
+      this.log("warn", "storage", "STORAGE_BUSY", "Storage is busy; the operation will be retried");
+      return;
+    }
+    if (!this.store.healthy) return;
+    this.store.healthy = false;
+    this.lifecycle = "stopping";
+    this.log("error", "storage", "STORAGE_UNAVAILABLE", errorDetail(error, diagnosticSecrets(this.config)));
+    try { this.onFatal(); }
+    catch { process.stderr.write("Gateway recovery request failed; restart manually\n"); }
   }
   private async execute(runId: string) {
     let run = this.run(runId);
@@ -1270,7 +1276,7 @@ export class SessionRuntime {
                 ]),
               };
         void this.reply(interaction.id, reply).catch(() => {
-          void this.stopRun(runId, "user").catch(() => {});
+          void this.stopRun(runId, "user").catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
         });
       }
     }
@@ -1353,7 +1359,8 @@ export class SessionRuntime {
       queueMicrotask(() => {
         for (const resolve of this.waiting.get(runId) ?? []) resolve(finished);
         this.waiting.delete(runId);
-        this.onFinished(finished);
+        try { this.onFinished(finished); }
+        catch (error) { this.log("warn", "observability", "OBSERVER_FAILED", errorDetail(error, diagnosticSecrets(this.config)), finished.sessionId, runId); }
       }),
     );
     if (error)
@@ -1663,8 +1670,10 @@ export class SessionRuntime {
     message: string,
     sessionId?: string,
     runId?: string,
+    traceId?: string,
   ) {
-    this.onLog({ level, stage, code, message, sessionId, runId });
+    try { this.onLog({ level, stage, code, message, sessionId, runId, traceId }); }
+    catch { process.stderr.write("Runtime log transport failed\n"); }
     try {
       this.store.db
         .prepare(
@@ -1678,54 +1687,40 @@ export class SessionRuntime {
           message,
           sessionId ?? null,
           runId ?? null,
-          runId ? (this.store.get("runs", runId)?.traceId ?? null) : null,
+          traceId ?? (runId ? (this.store.get("runs", runId)?.traceId ?? null) : null),
         );
-      this.store.db.exec(
-        "DELETE FROM runtime_logs WHERE id NOT IN (SELECT id FROM runtime_logs ORDER BY id DESC LIMIT 10000)",
-      );
+      // Bound retained rows to 10,099 without scanning the retention boundary on every write.
+      if (++this.logsSincePrune >= 100) {
+        this.store.db.prepare("DELETE FROM runtime_logs WHERE id <= COALESCE((SELECT id FROM runtime_logs ORDER BY id DESC LIMIT 1 OFFSET 10000),0)").run();
+        this.logsSincePrune = 0;
+      }
     } catch {
       process.stderr.write("Runtime log write failed\n");
     }
   }
-  async stop() {
+  stop() {
+    return this.stopping ??= this.shutdown();
+  }
+  private async shutdown() {
     this.closed = true;
     clearInterval(this.tick);
     clearInterval(this.maintenance);
-    const runtimeOperations = this.runtimes.close();
-    await within(
-      Promise.all(
-        [...this.agentOperations.values()].map(
-          (operation) => operation.promise,
-        ),
-      ),
-      this.config.limits.startupTimeoutMs + this.config.limits.abortTimeoutMs,
-    );
-    await within(
-      Promise.all(
-        [...this.recovery.values()].map((recovery) => recovery.pending),
-      ),
-      this.config.limits.startupTimeoutMs + this.config.limits.abortTimeoutMs,
-    );
-    await Promise.all(this.repairs.values());
-    await Promise.allSettled(
-      this.store.list("sessions").map((s) => this.cancel(s.id, "shutdown")),
-    );
-    await within(
-      Promise.allSettled(this.adapters.map((adapter) => adapter.stop())).then(
-        (results) => {
-          const failure = results.find(
-            (result) => result.status === "rejected",
-          );
-          if (failure?.status === "rejected") throw failure.reason;
-        },
-      ),
-      this.config.limits.abortTimeoutMs,
-    );
-    await within(
-      Promise.all([...this.active.values()].map((e) => e.done)),
-      this.config.limits.abortTimeoutMs,
-    );
-    await Promise.all(this.isolations.values());
+    const deadline = Date.now() + this.config.limits.startupTimeoutMs + 2 * this.config.limits.abortTimeoutMs;
+    const errors: unknown[] = [];
+    const settle = async (action: () => Promise<unknown>) => {
+      try { await within(action(), Math.max(1, deadline - Date.now())); }
+      catch (error) { errors.push(error); }
+    };
+    const runtimeOperations = settle(() => this.runtimes.close());
+    await settle(() => Promise.all([...this.agentOperations.values()].map((o) => o.promise)));
+    await settle(() => Promise.all([...this.recovery.values()].map((r) => r.pending)));
+    await settle(() => Promise.all(this.repairs.values()));
+    await settle(() => Promise.all(this.store.list("sessions").map((s) => this.cancel(s.id, "shutdown"))));
+    // Always attempt every adapter, even when an earlier drain or cancellation failed.
+    await Promise.all(this.adapters.map((adapter) => settle(() => adapter.stop())));
+    await settle(() => Promise.all([...this.active.values()].map((e) => e.done)));
+    await settle(() => Promise.all(this.isolations.values()));
     await runtimeOperations;
+    if (errors.length) throw new AggregateError(errors, "Gateway cleanup failed; native processes require supervisor cleanup");
   }
 }

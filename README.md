@@ -72,6 +72,8 @@ pnpm start --host 0.0.0.0 --port 6217
 
 本机和局域网均无需配对、登录或网关 token；Web、Desktop、HTTP/SSE 和下载共用这一规则。完整[网关 API 文档](code/docs/GATEWAY_API.md)也随安装包提供于 `/api/docs`，含配置、任务、兼容评测、SSE、交互和产物接口；可下载 `/api/examples/evaluate.mjs` 运行自动化评测。
 
+此模式面向受信任的设备：可访问网关的客户端可以管理 Agent、浏览允许的主机目录，并通过模型/网络测试访问服务器可达的地址。共享到局域网前设置 `AGENT_ALLOWED_DIRECTORIES` 限定工作目录，并用防火墙限制访问来源；空数组允许选择进程权限范围内的所有目录。
+
 ## 常用配置
 
 | 配置 | 作用 |

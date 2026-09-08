@@ -21,7 +21,7 @@ import type { ModelOption, Page, TaskSummary } from "../../../shared/contracts"
 import { createTaskSchema } from "../../../shared/contracts"
 import { useGateway } from "@/lib/gateway"
 import { agentNames } from "@/lib/agent-draft"
-import { submit, useQuery } from "@/lib/api"
+import { submit, useQuery, useRequestSignal } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { desktop } from "@/lib/desktop"
 import { DirectoryInput } from "@/components/directory-input"
@@ -309,6 +309,7 @@ export function Tasks() {
 }
 
 function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
+  const requestSignal = useRequestSignal()
   const { runtime } = useGateway()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error>()
@@ -382,16 +383,18 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
     }
     setInvalid({})
     setError(undefined)
+    const signal = requestSignal()
     setBusy(true)
     try {
       const { submissionId: _id, ...input } = result.data
       void _id
-      const accepted = await submit(input, runtime!.storeId)
+      const accepted = await submit(input, runtime!.storeId, undefined, signal)
+      signal.throwIfAborted()
       onAccepted(accepted.taskId)
     } catch (e) {
-      setError(e as Error)
+      if (!signal.aborted) setError(e as Error)
     } finally {
-      setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
   return (

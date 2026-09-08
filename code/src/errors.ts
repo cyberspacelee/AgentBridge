@@ -1,17 +1,19 @@
+import { redactDiagnostic } from "../host/diagnostics.mjs";
 export class GatewayError extends Error {
   constructor(
     public code: string,
     message: string,
     public statusCode = 500,
     public stage = "gateway",
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
   }
 }
 export function asGatewayError(error: unknown): GatewayError {
   return error instanceof GatewayError
     ? error
-    : new GatewayError("INTERNAL_ERROR", "An internal operation failed");
+    : new GatewayError("INTERNAL_ERROR", "An internal operation failed", 500, "gateway", { cause: error });
 }
 export function engineError(
   message = "Agent engine operation failed",
@@ -59,26 +61,7 @@ export function errorDetail(value: unknown, secrets: string[] = []): string {
     return [...new Set(fields.filter(Boolean))].join(": ");
   }
   let message = describe(value) || "No diagnostic details were provided";
-  const credentials = [
-    ...secrets,
-    ...Object.entries(process.env)
-      .filter(([name]) => /KEY|TOKEN|SECRET|PASSWORD|AUTHORIZATION/i.test(name))
-      .map(([, value]) => value || ""),
-  ];
-  for (const secret of credentials
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length))
-    message = message.replaceAll(secret, "[REDACTED]");
-  message = message
-    .replace(/\x1b\[[0-9;]*m/g, "")
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/-]+=*/gi, "$1 [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(
-      /(\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|_auth(?:token)?|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi,
-      "$1[REDACTED]",
-    )
-    .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[REDACTED]@")
-    .replace(/[\x00-\x1f\x7f]/g, " ");
+  message = redactDiagnostic(message, secrets).replace(/[\x00-\x1f\x7f]/g, " ");
   return message.length <= 2000
     ? message
     : `${message.slice(0, 1000)}... [truncated] ...${message.slice(-980)}`;

@@ -1339,3 +1339,113 @@ test("one gateway contract drives engine selection, messages, SSE and manual or 
     await rm(f.directory, { recursive: true, force: true });
   }
 });
+
+test("storage contention retries without disabling deadlines; unsafe failures request recovery once", async () => {
+  const f = await fixture();
+  try {
+    let recovery = 0;
+    f.runtime.onFatal = () => recovery++;
+    f.runtime.storageFailure(Object.assign(new Error("database locked"), { errcode: 5 }), true);
+    assert.equal(f.store.healthy, true);
+    const run = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(run.sessionId));
+    f.adapter.complete(run.sessionId);
+    assert.equal((await f.runtime.wait(run.runId)).state, "completed");
+    f.runtime.storageFailure(new Error("uncertain write"));
+    f.runtime.storageFailure(new Error("second failure"));
+    assert.equal(f.store.healthy, false);
+    assert.equal(recovery, 1);
+    assert.throws(() => f.runtime.submit(input(f.directory)), /not accepting/);
+  } finally { await f.close(); }
+});
+
+test("batched summaries retain latest terminal runs and queue counts", async () => {
+  const f = await fixture();
+  f.adapter.id = "pi";
+  try {
+    const first = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(first.sessionId));
+    f.adapter.complete(first.sessionId);
+    await f.runtime.wait(first.runId);
+    const second = await f.runtime.submit({ submissionId: randomUUID(), parts: [{ type: "text", text: "next" }] }, first.sessionId);
+    await until(() => f.adapter.executions.has(first.sessionId));
+    const third = await f.runtime.submit({ submissionId: randomUUID(), parts: [{ type: "text", text: "queued" }] }, first.sessionId);
+    const summary = f.runtime.summaries()[0]!;
+    assert.equal(summary.status, "running");
+    assert.equal(summary.lastRun?.id, third.runId);
+    assert.equal(summary.queuedCount, 1);
+    assert.equal(summary.messageCount, 3);
+    assert.deepEqual(summary, f.runtime.summary(first.sessionId));
+    const counts = f.runtime.agentViews()[0]!;
+    assert.equal(counts.activeRuns, 1);
+    assert.equal(counts.queuedRuns, 1);
+    await f.runtime.cancel(first.sessionId);
+    assert.equal(f.runtime.run(second.runId).state, "cancelled");
+    assert.equal(f.runtime.summary(first.sessionId).status, "cancelled");
+  } finally { await f.close(); }
+});
+
+test("shutdown remains bounded and stops adapters even when a repair never settles", async () => {
+  const f = await fixture();
+  const originalStop = f.adapter.stop.bind(f.adapter);
+  let stopped = false;
+  f.config.limits.startupTimeoutMs = 100;
+  f.config.limits.abortTimeoutMs = 100;
+  f.adapter.stop = async () => { stopped = true; await originalStop(); };
+  Reflect.get(f.runtime, "repairs").set("hung", new Promise(() => {}));
+  try {
+    await assert.rejects(within(f.runtime.stop(), 2000), /cleanup failed/);
+    assert.equal(stopped, true);
+  } finally {
+    f.store.close();
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP failures keep redacted root causes and the request ID in internal logs only", async () => {
+  const f = await fixture();
+  const server = createServer(f.runtime);
+  const original = process.env.REVIEW_TEST_SECRET;
+  process.env.REVIEW_TEST_SECRET = "private-diagnostic-token";
+  server.get("/__test/failure", () => { throw new Error("specific filesystem failure private-diagnostic-token"); });
+  try {
+    const response = await server.inject("/__test/failure");
+    assert.equal(response.statusCode, 500);
+    assert.equal(response.json().message, "An internal operation failed");
+    const log = f.store.db.prepare("SELECT message,traceId FROM runtime_logs WHERE code='INTERNAL_ERROR' ORDER BY id DESC LIMIT 1").get()!;
+    assert.match(String(log.message), /specific filesystem failure/);
+    assert.ok(!String(log.message).includes("private-diagnostic-token"));
+    assert.equal(log.traceId, response.headers["x-request-id"]);
+  } finally {
+    if (original === undefined) delete process.env.REVIEW_TEST_SECRET;
+    else process.env.REVIEW_TEST_SECRET = original;
+    await server.close();
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("log transport failure does not disable the store or admission", async () => {
+  const f = await fixture();
+  const server = createServer(f.runtime);
+  const transport = (server.log as unknown as Record<symbol, { emit(event: string, error: Error): void }>)[pino.symbols.streamSym]!;
+  try {
+    await server.ready();
+    transport.emit("error", new Error("log output unavailable"));
+    assert.equal(f.store.healthy, true);
+    const result = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(result.sessionId));
+    f.adapter.complete(result.sessionId);
+    assert.equal((await f.runtime.wait(result.runId)).state, "completed");
+    assert.equal((await server.inject("/health/ready")).statusCode, 200);
+  } finally { await server.close(); await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test("batched log retention remains bounded and keeps the newest diagnostics", async () => {
+  const f = await fixture();
+  try {
+    for (let i = 0; i < 10250; i++) f.runtime.log("info", "test", "RETENTION", String(i));
+    const count = Number(f.store.db.prepare("SELECT COUNT(*) AS n FROM runtime_logs").get()!.n);
+    assert.ok(count >= 10000 && count <= 10099, String(count));
+    assert.equal(f.store.db.prepare("SELECT message FROM runtime_logs ORDER BY id DESC LIMIT 1").get()!.message, "10249");
+  } finally { await f.close(); }
+});

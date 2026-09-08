@@ -108,6 +108,7 @@ export class Store {
   }
 
   transaction<T>(action: () => T): T {
+    // Nested writes join the outer transaction; a caught inner error is not a savepoint rollback.
     if (this.active) return action();
     this.db.exec("BEGIN IMMEDIATE");
     this.active = true;
@@ -139,13 +140,16 @@ export class Store {
         process.stderr.write("Event subscriber failed after commit\n");
       }
     }
-    for (const action of actions) action();
+    for (const action of actions) this.afterCommit(action);
     return result;
   }
 
   afterCommit(action: () => void) {
     if (this.active) this.committedActions.push(action);
-    else action();
+    else {
+      try { action(); }
+      catch { process.stderr.write("Completion subscriber failed after commit\n"); }
+    }
   }
 
   private assertTransaction() {
@@ -181,6 +185,10 @@ export class Store {
           if (row[key] !== null) row[key] = JSON.parse(String(row[key]));
         return row as unknown as Entities[K];
       });
+  }
+
+  runCounts() {
+    return this.db.prepare("SELECT s.engineId,r.state,COUNT(*) AS count FROM runs r JOIN sessions s ON s.id=r.sessionId GROUP BY s.engineId,r.state").all() as unknown as { engineId: string; state: Run["state"]; count: number }[];
   }
   get<K extends Exclude<Table, "submissions">>(
     table: K,

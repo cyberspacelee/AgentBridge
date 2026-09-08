@@ -196,3 +196,52 @@ test("current source-switch journals recover native state, while historical sett
     assert.equal(await readFile(filename, "utf8"), original);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test("supervisor redacts secrets split across output chunks and persists lifecycle diagnostics", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-host-diagnostics-"));
+  let output = "", reported = "";
+  const secret = "fixture.a+b-key";
+  const program = `const {createServer}=require('node:http');
+    process.stdout.write('fixture.a+');
+    setTimeout(()=>process.stdout.write('b-key\\n'),20);
+    const server=createServer((_,r)=>r.end('ready'));
+    server.listen(0,'127.0.0.1',()=>process.send({type:'ready',url:'http://127.0.0.1:'+server.address().port}));
+    process.on('message',()=>server.close(()=>process.disconnect()));`;
+  const host = new Supervisor({ directory, args: ["-e", program], env: { AGENT_PORT: "0", OPENAI_API_KEY: secret }, onOutput: (value: string) => output += value, onError: (error: Error) => reported = error.message });
+  try {
+    await host.initialize();
+    await host.start();
+    await eventually(async () => output.includes("[REDACTED]"));
+    assert.ok(!output.includes(secret));
+    await host.reportError(new Error("lifecycle failed " + secret));
+    const logs = await readFile(path.join(directory, "host.log"), "utf8");
+    assert.match(logs, /lifecycle failed/);
+    assert.ok(!logs.includes(secret));
+    assert.ok(!reported.includes(secret));
+  } finally { await host.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("unsafe storage failure restarts the supervised gateway and reopens the same store", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-storage-recovery-"));
+  const program = path.join(directory, "gateway.mjs");
+  await writeFile(program, `import {startGateway} from ${JSON.stringify(new URL('../src/main.ts', import.meta.url).href)};
+    const {server,runtime}=await startGateway();
+    const address=server.server.address();
+    process.send({type:'ready',url:'http://127.0.0.1:'+address.port});
+    process.on('message', message=>{
+      if(message.type==='fault') runtime.storageFailure(new Error('uncertain storage operation'));
+      if(message.type==='shutdown') void server.close().finally(()=>process.disconnect());
+    });`);
+  const host = new Supervisor({ directory, args: ["--import", import.meta.resolve("tsx"), program], env: { AGENT_PORT: "0", AGENT_MANAGED_RUNTIMES: "true" } });
+  try {
+    await host.initialize();
+    const origin = await host.start();
+    const first = await (await fetch(origin + "/api/runtime")).json();
+    const pid = host.child!.pid;
+    host.child!.send({ type: "fault" });
+    await eventually(async () => host.child?.pid !== pid && (await (await fetch(origin + "/api/system")).json()).maintenance === "ready");
+    const next = await (await fetch(origin + "/api/runtime")).json();
+    assert.equal(next.storeId, first.storeId);
+    assert.notEqual(next.instanceId, first.instanceId);
+  } finally { await host.stop(); await rm(directory, { recursive: true, force: true }); }
+});

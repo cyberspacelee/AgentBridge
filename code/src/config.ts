@@ -6,6 +6,7 @@ import { modelSchema } from "../shared/contracts.js";
 import { providerSchema } from "../shared/settings.js";
 import { agentIdSchema, defaultAgent } from "../shared/settings.js";
 import { defaultNetworkSettings, normalizeNpmRegistry } from "../host/network.mjs";
+import { GatewayError } from "./errors.js";
 
 export const limitsSchema = z
   .object({
@@ -29,6 +30,10 @@ export const limitsSchema = z
   .strict();
 export type Limits = z.infer<typeof limitsSchema>;
 export function readConfig(args = process.argv.slice(2), env = process.env) {
+  const json = (name: string): unknown => {
+    try { return JSON.parse(env[name]!); }
+    catch { throw new GatewayError("CONFIGURATION_ERROR", `${name} must contain valid JSON`, 400); }
+  };
   const { values } = parseArgs({
     args,
     options: {
@@ -66,10 +71,10 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
             "state.sqlite",
           ),
     allowedDirectories: env.AGENT_ALLOWED_DIRECTORIES
-      ? z.array(z.string()).parse(JSON.parse(env.AGENT_ALLOWED_DIRECTORIES))
+      ? z.array(z.string()).parse(json("AGENT_ALLOWED_DIRECTORIES"))
       : [],
     model: env.AGENT_MODEL
-      ? modelSchema.parse(JSON.parse(env.AGENT_MODEL))
+      ? modelSchema.parse(json("AGENT_MODEL"))
       : null,
     compatibleProvider: env.AGENT_OPENAI_BASE_URL
       ? providerSchema.parse({
@@ -83,7 +88,7 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
         })
       : null,
     limits: limitsSchema.parse(
-      env.AGENT_LIMITS ? JSON.parse(env.AGENT_LIMITS) : {},
+      env.AGENT_LIMITS ? json("AGENT_LIMITS") : {},
     ),
     questionAnswer:
       env.AGENT_QUESTION_ANSWER ??
@@ -102,7 +107,7 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     pi: {
       command: env.ENGINE_B_COMMAND ?? "pi",
       args: env.ENGINE_B_ARGS
-        ? z.array(z.string()).parse(JSON.parse(env.ENGINE_B_ARGS))
+        ? z.array(z.string()).parse(json("ENGINE_B_ARGS"))
         : [],
     },
     codex: { command: env.CODEX_COMMAND ?? "codex" },

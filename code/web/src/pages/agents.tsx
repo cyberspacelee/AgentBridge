@@ -34,7 +34,7 @@ import {
   type AgentConfiguration,
 } from "../../../shared/settings"
 import type { RuntimeView } from "../../../shared/runtimes"
-import { api, ApiError, useQuery } from "@/lib/api"
+import { api, ApiError, useQuery, useRequestSignal } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
 import { agentNames as names, useAgentDraft } from "@/lib/agent-draft"
 import {
@@ -115,7 +115,9 @@ export function Agents() {
               ? names[id]
               : "Agent 管理"}
         </h1>
-        <Button variant="outline" size="sm"
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => {
             query.reload()
             agents.reload()
@@ -158,6 +160,7 @@ function AgentsEditor({
   runtimeError?: Error
   refreshRuntimes: () => void
 }) {
+  const requestSignal = useRequestSignal()
   const { id } = useParams()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
@@ -415,6 +418,7 @@ function AgentsEditor({
                             label={`测试连接 ${item.id}`}
                             disabled={busy || !!testing}
                             onClick={() => {
+                              const signal = requestSignal()
                               setTesting(item.id)
                               setError(undefined)
                               const model = item.models.some(
@@ -426,6 +430,7 @@ function AgentsEditor({
                                 `/api/providers/${encodeURIComponent(item.id)}/test`,
                                 {
                                   method: "POST",
+                                  signal,
                                   body: JSON.stringify({
                                     modelID: model,
                                   }),
@@ -433,6 +438,7 @@ function AgentsEditor({
                               )
                                 .then(
                                   (result) =>
+                                    !signal.aborted &&
                                     setTestResults((previous) => ({
                                       ...previous,
                                       [item.id]: {
@@ -443,6 +449,7 @@ function AgentsEditor({
                                       },
                                     })),
                                   (e) =>
+                                    !signal.aborted &&
                                     setTestResults((previous) => ({
                                       ...previous,
                                       [item.id]: {
@@ -453,7 +460,9 @@ function AgentsEditor({
                                       },
                                     }))
                                 )
-                                .finally(() => setTesting(undefined))
+                                .finally(() => {
+                                  if (!signal.aborted) setTesting(undefined)
+                                })
                             }}
                           >
                             {testing === item.id ? (

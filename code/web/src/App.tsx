@@ -71,10 +71,15 @@ export default function App() {
     return () =>
       window.removeEventListener("agentbridge:preference-error", failed)
   }, [])
-  return <WorkspaceApp />
+  return (
+    <BrowserRouter>
+      <WorkspaceApp />
+    </BrowserRouter>
+  )
 }
 
 function WorkspaceApp() {
+  const { pathname } = useLocation()
   const events = useEvents()
   const { theme, setTheme } = useTheme()
   const runtime = useQuery<RuntimeInfo>("/api/runtime", events.revision)
@@ -89,139 +94,138 @@ function WorkspaceApp() {
   })
   const navigation = <WorkspaceNavigation close={() => setMenuOpen(false)} />
   return (
-    <BrowserRouter>
-      <TooltipProvider delay={800}>
-        <GatewayContext
-          value={{ runtime: runtime.data, revision: events.revision }}
-        >
-          <div className="app-shell" data-collapsed={sidebarCollapsed}>
-            <aside id="desktop-navigation" className="app-sidebar">
-              <NavLink to="/tasks" className="brand" aria-label="AgentBridge">
-                <Network aria-hidden="true" />
-                <span>AgentBridge</span>
-              </NavLink>
-              {navigation}
-              <div className="sidebar-footer">
-                <IconButton
-                  label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-                  className="sidebar-toggle"
-                  aria-expanded={!sidebarCollapsed}
-                  aria-controls="desktop-navigation"
-                  onClick={() => {
-                    const collapsed = !sidebarCollapsed
-                    setSidebarCollapsed(collapsed)
-                    saveDesktopPreference(
+    <TooltipProvider delay={800}>
+      <GatewayContext
+        value={{ runtime: runtime.data, revision: events.revision }}
+      >
+        <div className="app-shell" data-collapsed={sidebarCollapsed}>
+          <aside id="desktop-navigation" className="app-sidebar">
+            <NavLink to="/tasks" className="brand" aria-label="AgentBridge">
+              <Network aria-hidden="true" />
+              <span>AgentBridge</span>
+            </NavLink>
+            {navigation}
+            <div className="sidebar-footer">
+              <IconButton
+                label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                className="sidebar-toggle"
+                aria-expanded={!sidebarCollapsed}
+                aria-controls="desktop-navigation"
+                onClick={() => {
+                  const collapsed = !sidebarCollapsed
+                  setSidebarCollapsed(collapsed)
+                  saveDesktopPreference(
+                    "agentbridge:sidebar-collapsed",
+                    String(collapsed)
+                  )
+                  try {
+                    localStorage.setItem(
                       "agentbridge:sidebar-collapsed",
                       String(collapsed)
                     )
-                    try {
-                      localStorage.setItem(
-                        "agentbridge:sidebar-collapsed",
-                        String(collapsed)
-                      )
-                    } catch {
-                      /* Optional layout preference. */
-                    }
-                  }}
-                >
-                  {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-                </IconButton>
-              </div>
-            </aside>
-            <header className="app-header">
-              <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-                <SheetTrigger
-                  render={<IconButton label="打开导航" className="lg:hidden" />}
-                >
-                  <Menu />
-                </SheetTrigger>
-                <SheetContent side="left" className="navigation-dialog">
-                  <SheetHeader>
-                    <SheetTitle>AgentBridge</SheetTitle>
-                  </SheetHeader>
-                  {navigation}
-                </SheetContent>
-              </Sheet>
-              <span className="header-brand">AgentBridge</span>
-              <span
-                className="connection"
-                role="status"
-                aria-label={`网关事件连接：${events.state}`}
+                  } catch {
+                    /* Optional layout preference. */
+                  }
+                }}
               >
-                <span className="connection-label">网关</span>
-                <Status state={events.state} />
-              </span>
-              <div className="header-runtime">
-                <DropdownMenu>
-                  <DropdownMenuTrigger render={<IconButton label="主题" />}>
-                    <SunMoon />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuRadioGroup
-                      value={theme}
-                      onValueChange={(value) => {
-                        setTheme(value as "light" | "dark" | "system")
-                      }}
-                    >
-                      <DropdownMenuRadioItem value="light" closeOnClick>
-                        浅色
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="dark" closeOnClick>
-                        深色
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="system" closeOnClick>
-                        跟随系统
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </header>
-            {(runtime.error || events.state === "reconnecting") && (
-              <div className="runtime-error flex flex-col gap-2">
-                {events.state === "reconnecting" && (
-                  <Notice title="连接中断，正在重连">
-                    当前显示已接收的数据，连接恢复后自动更新。
-                  </Notice>
-                )}
-                <Failure error={runtime.error} />
-              </div>
-            )}
-            <main id="main-content" tabIndex={-1}>
-              <Suspense
-                fallback={
-                  <div className="page">
-                    <Skeleton className="h-72" />
-                  </div>
-                }
+                {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+              </IconButton>
+            </div>
+          </aside>
+          <header className="app-header">
+            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+              <SheetTrigger
+                render={<IconButton label="打开导航" className="lg:hidden" />}
               >
-                <Routes>
-                  <Route path="/tasks" element={<Conversations />}>
-                    <Route index element={<Tasks />} />
-                    <Route path=":id" element={<Task />} />
-                  </Route>
-                  <Route path="/observability" element={<Observability />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/agents" element={<Agents />} />
-                  <Route path="/agents/:id" element={<Agents />} />
-                  <Route path="/" element={<Navigate to="/tasks" replace />} />
-                  <Route
-                    path="*"
-                    element={
-                      <div className="page">
-                        <h1>页面不存在</h1>
-                        <NavLink to="/tasks">返回会话</NavLink>
-                      </div>
-                    }
-                  />
-                </Routes>
-              </Suspense>
-            </main>
-          </div>
-          <Toaster />
-        </GatewayContext>
-      </TooltipProvider>
-    </BrowserRouter>
+                <Menu />
+              </SheetTrigger>
+              <SheetContent side="left" className="navigation-dialog">
+                <SheetHeader>
+                  <SheetTitle>AgentBridge</SheetTitle>
+                </SheetHeader>
+                {navigation}
+              </SheetContent>
+            </Sheet>
+            <span className="header-brand">AgentBridge</span>
+            <span
+              className="connection"
+              role="status"
+              aria-label={`网关事件连接：${events.state}`}
+            >
+              <span className="connection-label">网关</span>
+              <Status state={events.state} />
+            </span>
+            <div className="header-runtime">
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<IconButton label="主题" />}>
+                  <SunMoon />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuRadioGroup
+                    value={theme}
+                    onValueChange={(value) => {
+                      setTheme(value as "light" | "dark" | "system")
+                    }}
+                  >
+                    <DropdownMenuRadioItem value="light" closeOnClick>
+                      浅色
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="dark" closeOnClick>
+                      深色
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="system" closeOnClick>
+                      跟随系统
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </header>
+          {(runtime.error || events.state === "reconnecting") && (
+            <div className="runtime-error flex flex-col gap-2">
+              {events.state === "reconnecting" && (
+                <Notice title="连接中断，正在重连">
+                  当前显示已接收的数据，连接恢复后自动更新。
+                </Notice>
+              )}
+              <Failure error={runtime.error} />
+            </div>
+          )}
+          <main id="main-content" tabIndex={-1}>
+            <Suspense
+              key={pathname}
+              fallback={
+                <div className="page">
+                  <Skeleton className="h-72" />
+                </div>
+              }
+            >
+              <Routes>
+                <Route path="/tasks" element={<Conversations />}>
+                  <Route index element={<Tasks />} />
+                  <Route path=":id" element={<Task />} />
+                </Route>
+                <Route path="/observability" element={<Observability />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/agents" element={<Agents />} />
+                <Route path="/agents/:id" element={<Agents />} />
+                <Route path="/" element={<Navigate to="/tasks" replace />} />
+                <Route
+                  path="*"
+                  element={
+                    <div className="page">
+                      <h1>页面不存在</h1>
+                      <NavLink to="/tasks">返回会话</NavLink>
+                    </div>
+                  }
+                />
+              </Routes>
+            </Suspense>
+          </main>
+        </div>
+        <Toaster />
+      </GatewayContext>
+    </TooltipProvider>
   )
 }
 

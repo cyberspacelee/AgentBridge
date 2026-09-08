@@ -51,7 +51,7 @@ import {
   QuestionnaireTitle,
 } from "@/components/ui/questionnaire"
 import { AgentMessage } from "@/components/agent-message"
-import { api, submit, useQuery } from "@/lib/api"
+import { api, submit, useQuery, useRequestSignal } from "@/lib/api"
 import {
   Blank,
   bytes,
@@ -107,6 +107,7 @@ import {
 
 export function Task() {
   const { id = "" } = useParams()
+  const requestSignal = useRequestSignal()
   const { revision, runtime } = useGateway()
   const [params, setParams] = useSearchParams()
   const query = useQuery<{ detail: TaskDetail }>(`/api/tasks/${id}`, revision)
@@ -148,20 +149,23 @@ export function Task() {
     })
   async function confirm() {
     if (busy || !action) return
+    const signal = requestSignal()
     setBusy(true)
     setError(undefined)
     try {
       await api(`/session/${id}${action === "stop" ? "/abort" : ""}`, {
         method: action === "stop" ? "POST" : "DELETE",
+        signal,
       })
+      signal.throwIfAborted()
       setAction(null)
       toast.success(action === "delete" ? "任务已删除" : "停止请求已提交")
       if (action === "delete") navigate("/tasks")
       else query.reload()
     } catch (e) {
-      setError(e as Error)
+      if (!signal.aborted) setError(e as Error)
     } finally {
-      setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
   return (
@@ -698,6 +702,7 @@ function FollowUp({
   run?: Run
   onAccepted: (runId: string) => void
 }) {
+  const requestSignal = useRequestSignal(sessionId)
   const { runtime } = useGateway()
   const [text, setText] = useState("")
   const [busy, setBusy] = useState(false)
@@ -705,19 +710,21 @@ function FollowUp({
   async function send(event: FormEvent) {
     event.preventDefault()
     if (busy || disabled) return
+    const signal = requestSignal()
     setBusy(true)
     setError(undefined)
     try {
       const input = promptSchema.parse({
         parts: [{ type: "text", text }],
       })
-      const result = await submit(input, runtime!.storeId, sessionId)
+      const result = await submit(input, runtime!.storeId, sessionId, signal)
+      signal.throwIfAborted()
       setText("")
       onAccepted(result.runId)
     } catch (e) {
-      setError(e as Error)
+      if (!signal.aborted) setError(e as Error)
     } finally {
-      setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
   return (

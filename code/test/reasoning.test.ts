@@ -43,3 +43,15 @@ test("Pi and OpenCode retain thinking deltas and replace final snapshots", () =>
   assert.equal(message.parts.length, 1);
   assert.equal(message.parts[0]!.type === "reasoning" && message.parts[0].content, "Checking inputs");
 });
+
+test("OpenCode rejects a malformed shared event without exposing its content and cancels the body", async () => {
+  const adapter = new OpenCodeAdapter(readConfig([], {}));
+  let cancelled = false;
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('data: {"private-content"\n\n')); },
+    cancel() { cancelled = true; },
+  });
+  await assert.rejects(Reflect.get(adapter, "consume").call(adapter, new Response(body)), (error: Error) =>
+    /Invalid OpenCode event/.test(error.message) && !error.message.includes("private-content"));
+  assert.equal(cancelled, true);
+});

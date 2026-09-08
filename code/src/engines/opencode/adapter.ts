@@ -177,6 +177,7 @@ export class OpenCodeAdapter implements EngineAdapter {
         ).message;
       });
       this.child.on("exit", () => {
+        this.stream.abort();
         this.state.status = "unavailable";
         this.state.processes = 0;
         this.state.message = engineError(
@@ -233,10 +234,11 @@ export class OpenCodeAdapter implements EngineAdapter {
         message: null,
         processes: 1,
       };
-      this.streamJob = this.consume(response).catch(() => {
+      this.streamJob = this.consume(response).catch((error) => {
         if (!this.stream.signal.aborted) {
           this.state.status = "degraded";
-          this.state.message = "OpenCode event stream disconnected";
+          this.state.message = engineError("OpenCode event stream failed", error, diagnosticSecrets(this.config)).message;
+          this.stream.abort();
         }
       });
     } catch (error) {
@@ -257,8 +259,13 @@ export class OpenCodeAdapter implements EngineAdapter {
   private async consume(response: Response) {
     const parser = createParser({
       onEvent: (event) => {
-        const value = object(JSON.parse(event.data));
-        this.event(object(value.payload ?? value));
+        try {
+          const value = object(JSON.parse(event.data));
+          this.event(object(value.payload ?? value));
+        } catch {
+          // Missing a completion or approval would desynchronize every session on this stream.
+          throw engineError("Invalid OpenCode event; sessions must be reconciled before reconnecting");
+        }
       },
     });
     const decoder = new TextDecoder();

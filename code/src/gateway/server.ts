@@ -19,12 +19,12 @@ import {
   type TaskSummary,
 } from "../../shared/contracts.js";
 import type { SessionRuntime } from "../runtime/sessions.js";
-import { asGatewayError, GatewayError } from "../errors.js";
+import { asGatewayError, errorDetail, GatewayError } from "../errors.js";
 import { within } from "../async.js";
 import { isTerminal } from "../domain/transitions.js";
 import { artifactPath } from "../runtime/artifacts.js";
 import { Telemetry } from "../observability/metrics.js";
-import { agentConfiguration } from "../settings.js";
+import { agentConfiguration, diagnosticSecrets } from "../settings.js";
 import { agentIdSchema, defaultInteractionPolicy, agentActionSchema, runtimeSourceSchema } from "../../shared/settings.js";
 import { runtimeActionSchema } from "../../shared/runtimes.js";
 
@@ -83,7 +83,7 @@ export function createServer(runtime: SessionRuntime) {
     ],
   });
   transport.on("error", () => {
-    store.healthy = false;
+    logger.level = "silent";
     process.stderr.write("Gateway log transport failed\n");
   });
   const logger = pino(
@@ -193,7 +193,7 @@ export function createServer(runtime: SessionRuntime) {
             )
           : asGatewayError(error);
     if (failure.statusCode >= 500)
-      runtime.log("error", failure.stage, failure.code, failure.message);
+      runtime.log("error", failure.stage, failure.code, errorDetail(error, diagnosticSecrets(config)), undefined, undefined, request.id);
     request.log.warn({ code: failure.code }, "Request failed");
     void reply
       .code(failure.statusCode)
@@ -349,9 +349,7 @@ export function createServer(runtime: SessionRuntime) {
   }
   server.get("/api/tasks", async (request) => {
     const query = pagination.parse(request.query);
-    const items = store
-      .list("sessions")
-      .map((s) => runtime.summary(s.id))
+    const items = runtime.summaries()
       .filter(
         (s) =>
           (!query.q ||
@@ -844,14 +842,16 @@ export function createServer(runtime: SessionRuntime) {
   });
   server.addHook("onClose", async () => {
     telemetry.close();
-    await runtime.stop();
-    runtime.onLog = () => {};
-    store.close();
-    if (!("closed" in transport && transport.closed)) {
-      const closed = once(transport, "close");
-      // end() flushes buffered records without waiting for a stale worker ready flag.
-      transport.end();
-      await within(closed, config.limits.abortTimeoutMs);
+    try { await runtime.stop(); }
+    finally {
+      runtime.onLog = () => {};
+      store.close();
+      if (!("closed" in transport && transport.closed)) {
+        const closed = once(transport, "close");
+        // end() flushes buffered records without waiting for a stale worker ready flag.
+        transport.end();
+        await within(closed, config.limits.abortTimeoutMs);
+      }
     }
   });
   return server;

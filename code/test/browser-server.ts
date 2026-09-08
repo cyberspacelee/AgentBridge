@@ -192,7 +192,7 @@ await runtime.start();
 for (const id of ["pi", "opencode", "codex", "grok"] as const) await runtime.runtimes.detect(id);
 const server = createServer(runtime);
 server.get("/__test/directory", async () => ({ directory }));
-await server.listen({ host: "127.0.0.1", port: 3010 });
+await server.listen({ host: "127.0.0.1", port: Number(process.env.AGENT_BROWSER_PORT ?? 3010) });
 for (const signal of ["SIGINT", "SIGTERM"])
   process.once(signal, () => {
     void server

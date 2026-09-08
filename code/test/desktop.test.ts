@@ -48,12 +48,16 @@ test("desktop privileges stay with the owned workspace and exact backend origin"
   assert.equal(externalUrl("https://example.com/docs"), "https://example.com/docs");
 });
 
-test("managed process registration cleans up descendants after an Agent crashes", { skip: process.platform !== "linux" }, async () => {
+for (const supervised of [true, false])
+test(`${supervised ? "managed" : "unmanaged"} process cleanup terminates descendants after an Agent crashes`, { skip: process.platform !== "linux" }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-desktop-process-"));
   const helper = path.join(directory, "helper.mjs");
   await writeFile(helper, `import { startProcess } from ${JSON.stringify(new URL("../src/engines/process.ts", import.meta.url).href)};
+const send=process.send.bind(process);
+if (!${supervised}) process.send=undefined;
 const agent = startProcess(process.execPath, ['-e', "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(child.pid); setInterval(()=>{},1000);"], process.cwd());
-agent.stdout.once('data', chunk => process.send({type:'descendant',pid:Number(String(chunk).trim())}));
+if (!${supervised}) send({type:'engine-started',pid:agent.pid});
+agent.stdout.once('data', chunk => send({type:'descendant',pid:Number(String(chunk).trim())}));
 process.on('message', () => agent.kill('SIGKILL'));
 `);
   const child = fork(helper, [], {
@@ -79,7 +83,7 @@ process.on('message', () => agent.kill('SIGKILL'));
         await delay(20);
       }
     })(), 5000);
-    await within((async () => { while (!messages.includes("engine-exited")) await delay(20); })(), 5000);
+    if (supervised) await within((async () => { while (!messages.includes("engine-exited")) await delay(20); })(), 5000);
   } finally {
     if (group) { try { process.kill(-group, "SIGKILL"); } catch {} }
     const exited = once(child, "exit");

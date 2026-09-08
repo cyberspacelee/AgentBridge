@@ -1,4 +1,4 @@
-import { api } from "@/lib/api"
+import { api, useRequestSignal } from "@/lib/api"
 import type { DirectoryView } from "../../../shared/system"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,23 +28,26 @@ export function DirectoryInput({
   value: string
   onValueChange: (path: string) => void
 }) {
+  const requestSignal = useRequestSignal()
   const [choosing, setChoosing] = useState(false)
   const [error, setError] = useState<Error>()
   const [browsing, setBrowsing] = useState(false)
   const [listing, setListing] = useState<DirectoryView>()
   async function browse(directory?: string) {
+    const signal = requestSignal()
     setChoosing(true)
     setError(undefined)
     try {
-      setListing(
-        await api<DirectoryView>(
-          `/api/system/directories${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`
-        )
+      const result = await api<DirectoryView>(
+        `/api/system/directories${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`,
+        { signal }
       )
+      signal.throwIfAborted()
+      setListing(result)
     } catch (error) {
-      setError(error as Error)
+      if (!signal.aborted) setError(error as Error)
     } finally {
-      setChoosing(false)
+      if (!signal.aborted) setChoosing(false)
     }
   }
   async function choose() {

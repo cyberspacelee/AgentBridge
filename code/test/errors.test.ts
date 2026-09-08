@@ -59,3 +59,10 @@ test("diagnostics preserve provider and Windows filesystem errors while redactin
     /final failure$/,
   );
 });
+
+test("redaction treats regex punctuation literally and never reprocesses replacement markers", async () => {
+  const { redactDiagnostic } = await import("../host/diagnostics.mjs");
+  assert.equal(redactDiagnostic("a+b [REDACTED] abc", ["a+b", "REDACTED", "abc"], {}), "[REDACTED] [[REDACTED]] [REDACTED]");
+  assert.equal(redactDiagnostic("old-key new-key", [], { TOKEN: "old-key" }), "[REDACTED] new-key");
+  assert.equal(redactDiagnostic("old-key new-key", [], { TOKEN: "new-key" }), "old-key [REDACTED]");
+});

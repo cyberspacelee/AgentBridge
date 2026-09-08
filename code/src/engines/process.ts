@@ -41,17 +41,15 @@ export function startProcess(
     windowsHide: true,
     detached: process.platform !== "win32",
   }) as ChildProcessWithoutNullStreams;
-  if (process.send) {
-    if (child.pid && process.connected) process.send({ type: "engine-started", pid: child.pid }, () => {});
-    child.once("exit", () => {
-      if (child.pid && process.platform !== "win32") {
-        try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") process.stderr.write("Engine descendant cleanup failed\n");
-        }
+  if (child.pid && process.connected) process.send?.({ type: "engine-started", pid: child.pid }, () => {});
+  child.once("exit", () => {
+    if (child.pid && process.platform !== "win32") {
+      try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") process.stderr.write("Engine descendant cleanup failed\n");
       }
-      if (process.connected) process.send?.({ type: "engine-exited", pid: child.pid }, () => {});
-    });
-  }
+    }
+    if (process.connected) process.send?.({ type: "engine-exited", pid: child.pid }, () => {});
+  });
   // Drain stderr and retain a bounded tail for startup/crash diagnostics.
   child.stderr.on("data", (chunk) => {
     stderrTails.set(
@@ -75,6 +73,7 @@ export function readJsonLines(
       onRecord(JSON.parse(line));
     } catch {
       failed = true;
+      buffer = "";
       onError(engineError("Malformed engine JSONL record"));
     }
   };
@@ -87,6 +86,7 @@ export function readJsonLines(
       buffer = buffer.slice(at + 1);
       if (Buffer.byteLength(line) > 8 * 1024 * 1024) {
         failed = true;
+        buffer = "";
         onError(engineError("Engine record exceeded 8 MiB"));
         return;
       }
@@ -94,6 +94,7 @@ export function readJsonLines(
     }
     if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) {
       failed = true;
+      buffer = "";
       onError(engineError("Engine record exceeded 8 MiB"));
     }
   });

@@ -69,3 +69,21 @@ test("process failures retain a bounded stderr tail and exit code", async () => 
     await stopProcess(child, 1000);
   }
 });
+
+test("JSONL enforces the byte limit with and without a newline", async () => {
+  const limit = 8 * 1024 * 1024;
+  for (const ending of ["\n", ""]) {
+    for (const extra of [0, 1]) {
+      const stream = new PassThrough();
+      const values: unknown[] = [], errors: Error[] = [];
+      readJsonLines(stream, (value) => values.push(value), (error) => errors.push(error));
+      stream.write('"' + "x".repeat(limit - 2 + extra) + '"' + ending);
+      const ended = new Promise<void>((resolve) => stream.once("end", resolve));
+      stream.end();
+      await ended;
+      assert.equal(errors.length, extra);
+      if (extra) assert.match(errors[0]!.message, /exceeded 8 MiB/);
+      else assert.equal(values.length, 1);
+    }
+  }
+});

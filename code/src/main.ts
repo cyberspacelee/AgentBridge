@@ -1,3 +1,4 @@
+import { hostRequest } from "./gateway/system.js";
 import { gatewayUrl } from "../host/gateway.mjs";
 import { readConfig } from "./config.js";
 import { Store } from "./storage/sqlite.js";
@@ -24,6 +25,13 @@ export async function startGateway(config = readConfig()) {
     adapters.filter((adapter) => adapter.id !== config.engine),
   );
   const server = createServer(runtime);
+  runtime.onFatal = () => {
+    // Reopen durable state only after native processes are stopped; never replay uncertain work.
+    if (config.supervised && process.connected)
+      void hostRequest("lifecycle", { action: "restart", mode: "stop" }).catch(() => {
+        runtime.log("error", "recovery", "RESTART_FAILED", "Automatic recovery failed; restart the gateway manually");
+      });
+  };
   try {
     await runtime.start();
     for (const agent of runtime.runtimes.views()) if (!agent.managed) runtime.runtimes.action(agent.id, "detect");

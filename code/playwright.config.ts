@@ -1,12 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const port = Number(process.env.AGENT_BROWSER_PORT ?? 3010);
+
 export default defineConfig({
   testDir: "./test",
-  testMatch: ["browser.spec.ts", "runtime-browser.spec.ts", "network-browser.spec.ts"],
+  testMatch: ["browser.spec.ts", "runtime-browser.spec.ts", "network-browser.spec.ts", "reliability-browser.spec.ts"],
   fullyParallel: false,
   workers: 1,
   timeout: 30000,
-  use: { baseURL: "http://127.0.0.1:3010", trace: "retain-on-failure" },
+  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
   projects: [
     {
       name: "desktop",
@@ -27,7 +29,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "pnpm exec tsx test/browser-server.ts",
-    url: "http://127.0.0.1:3010/health/ready",
+    url: `http://127.0.0.1:${port}/health/ready`,
     reuseExistingServer: false,
     timeout: 30000,
     stdout: "ignore",

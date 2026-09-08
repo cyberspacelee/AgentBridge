@@ -1,7 +1,9 @@
+import { redactDiagnostic } from "./diagnostics.mjs";
+import { StringDecoder } from "node:string_decoder";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomBytes } from "node:crypto";
-import { access, mkdir, readFile, writeFile, rename, realpath, rm } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile, appendFile, stat, rename, realpath, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { networkInterfaces } from "node:os";
@@ -201,7 +203,7 @@ export class Supervisor {
       if (this.operation || this.saving) throw new Error("已有生命周期操作正在进行");
       if (!["restart", "shutdown"].includes(payload.action) || !["wait", "stop"].includes(payload.mode)) throw new Error("无效的生命周期操作");
       this.operation = payload.action;
-      setTimeout(() => void this.stop(payload.mode, payload.action === "restart").catch((error) => this.options.onError?.(error)), 100);
+      setTimeout(() => void this.stop(payload.mode, payload.action === "restart").catch((error) => this.reportError(error)), 100);
       return { accepted: true };
     }
     throw new Error("Unsupported host operation");
@@ -218,12 +220,27 @@ export class Supervisor {
     const child = spawn(this.node, this.args, { env, cwd: this.options.cwd ?? this.directory, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] });
     this.child = child;
     let diagnostics = "";
-    for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
-      let value = String(chunk);
-      if (this.applied.proxyPassword) value = value.replaceAll(this.applied.proxyPassword, "[redacted]");
-      diagnostics = (diagnostics + value).slice(-8192);
-      this.options.onOutput?.(value, stream === child.stdout ? "stdout" : "stderr");
-    });
+    for (const stream of [child.stdout, child.stderr]) {
+      const decoder = new StringDecoder("utf8");
+      let pending = "", dropping = false;
+      const output = (line) => {
+        const value = redactDiagnostic(line, [this.applied.proxyPassword], this.baseEnv);
+        diagnostics = (diagnostics + value).slice(-8192);
+        this.options.onOutput?.(value, stream === child.stdout ? "stdout" : "stderr");
+      };
+      const consume = (text) => {
+        for (const fragment of text.split(/(?<=\n)/)) {
+          if (!dropping) pending += fragment;
+          if (pending.length > 65536) { pending = ""; dropping = true; }
+          if (fragment.endsWith("\n")) {
+            output(dropping ? "[oversized diagnostic omitted]\n" : pending);
+            pending = ""; dropping = false;
+          }
+        }
+      };
+      stream.on("data", (chunk) => consume(decoder.write(chunk)));
+      stream.on("end", () => { consume(decoder.end()); if (pending || dropping) output(dropping ? "[oversized diagnostic omitted]\n" : pending); });
+    }
     child.on("message", (input) => {
       if (input?.type === "engine-started" && Number.isSafeInteger(input.pid) && input.pid > 1) this.groups.add(input.pid);
       if (input?.type === "engine-exited") this.groups.delete(input.pid);
@@ -312,6 +329,15 @@ export class Supervisor {
       this.operation = null; this.restarting = false;
       await this.persist(false);
     }
+  }
+  async reportError(error) {
+    const detail = redactDiagnostic(message(error), [this.applied.proxyPassword], this.baseEnv);
+    try {
+      const filename = path.join(this.directory, "host.log");
+      if ((await stat(filename).catch(() => null))?.size > 1024 * 1024) await rename(filename, filename + ".1");
+      await appendFile(filename, `${new Date().toISOString()} ${detail}\n`, { mode: 0o600 });
+    } catch { process.stderr.write("Host diagnostic write failed\n"); }
+    this.options.onError?.(new Error(detail));
   }
   async release() { await this.unlock?.(); this.unlock = undefined; }
   async cleanup() {

@@ -7,7 +7,6 @@ import {
 } from "prom-client";
 import { performance } from "node:perf_hooks";
 import type { Run, ToolPart } from "../../shared/contracts.js";
-import { isTerminal } from "../domain/transitions.js";
 import type { SessionRuntime } from "../runtime/sessions.js";
 
 export class Telemetry {
@@ -121,7 +120,10 @@ export class Telemetry {
     });
     runtime.onFinished = (run) => this.recordFinished(run);
     this.sample();
-    this.timer = setInterval(() => this.sample(), 5000);
+    this.timer = setInterval(() => {
+      try { this.sample(); }
+      catch (error) { this.runtime.storageFailure(error, true); }
+    }, 5000);
     this.timer.unref();
   }
   private recordFinished(run: Run) {
@@ -143,48 +145,22 @@ export class Telemetry {
       );
   }
   private sample() {
-    const runs = this.runtime.store.list("runs");
-    const sessions = this.runtime.store.list("sessions");
-    const engineBySession = new Map(sessions.map((s) => [s.id, s.engineId]));
-    const engines = Object.fromEntries(
-      [
-        ...new Set([
-          ...this.runtime.adapters.map((adapter) => adapter.id),
-          ...sessions.map((s) => s.engineId),
-        ]),
-      ].map((engine) => {
-        const selected = runs.filter(
-          (r) => engineBySession.get(r.sessionId) === engine,
-        );
-        return [
-          engine,
-          {
-            activeRuns: selected.filter(
-              (r) => r.state === "running" || r.state === "stopping",
-            ).length,
-            queueDepth: selected.filter((r) => r.state === "queued").length,
-            completed: selected.filter((r) => r.state === "completed").length,
-            failed: selected.filter(
-              (r) => r.state === "failed" || r.state === "timed_out",
-            ).length,
-          },
-        ];
-      }),
-    );
+    const counts = this.runtime.store.runCounts();
+    const summarize = (engine?: string) => {
+      const count = (...states: Run["state"][]) => counts.filter((r) => (!engine || r.engineId === engine) && states.includes(r.state)).reduce((n, r) => n + r.count, 0);
+      return { activeRuns: count("running", "stopping"), queueDepth: count("queued"), completed: count("completed"), failed: count("failed", "timed_out") };
+    };
+    const engines = Object.fromEntries([...new Set([
+      ...this.runtime.adapters.map((a) => a.id),
+      ...this.runtime.store.db.prepare("SELECT DISTINCT engineId FROM sessions").all().map((s) => String(s.engineId)),
+    ])].map((id) => [id, summarize(id)]));
     const memory = process.memoryUsage();
     const sample = {
       at: new Date().toISOString(),
       rssBytes: memory.rss,
       heapBytes: memory.heapUsed,
       engines,
-      activeRuns: runs.filter(
-        (r) => r.state === "running" || r.state === "stopping",
-      ).length,
-      queueDepth: runs.filter((r) => r.state === "queued").length,
-      completed: runs.filter((r) => r.state === "completed").length,
-      failed: runs.filter(
-        (r) => r.state === "failed" || r.state === "timed_out",
-      ).length,
+      ...summarize(),
     };
     this.active.set(sample.activeRuns);
     this.queued.set(sample.queueDepth);
@@ -214,15 +190,14 @@ export class Telemetry {
     if (this.samples.length > 720) this.samples.shift();
   }
   async overview(from: string, to: string, engine = "") {
-    const sessions = this.runtime.store
-      .list("sessions")
-      .filter((s) => !engine || s.engineId === engine);
-    const sessionIds = new Set(sessions.map((s) => s.id));
-    const allRuns = this.runtime.store.list("runs");
-    const all = allRuns.filter((r) => sessionIds.has(r.sessionId));
-    const runs = all.filter(
-      (r) => r.finishedAt && r.finishedAt >= from && r.finishedAt <= to,
-    );
+    const db = this.runtime.store.db;
+    const runs = this.runtime.store.list("runs", "finishedAt>=? AND finishedAt<=? AND (?='' OR sessionId IN (SELECT id FROM sessions WHERE engineId=?))", [from, to, engine, engine]);
+    const counts = db.prepare(`SELECT
+      COUNT(CASE WHEN r.acceptedAt>=? AND r.acceptedAt<=? THEN 1 END) AS accepted,
+      COUNT(CASE WHEN r.state IN ('running','stopping') THEN 1 END) AS running,
+      COUNT(CASE WHEN r.state='queued' THEN 1 END) AS queued,
+      MIN(CASE WHEN r.state='queued' THEN r.acceptedAt END) AS oldestQueuedAt
+      FROM runs r JOIN sessions s ON s.id=r.sessionId WHERE (?='' OR s.engineId=?)`).get(from, to, engine, engine)!;
     const count = (state: string) =>
       runs.filter((r) => r.state === state).length;
     const completed = count("completed"),
@@ -255,7 +230,6 @@ export class Telemetry {
     ]);
     const sumValues = (values: { value: number }[]) =>
       values.reduce((total, value) => total + value.value, 0);
-    const db = this.runtime.store.db;
     return {
       from,
       to,
@@ -272,12 +246,9 @@ export class Telemetry {
       timedOut,
       cancelled,
       totalFinished: runs.length,
-      accepted: all.filter((r) => r.acceptedAt >= from && r.acceptedAt <= to)
-        .length,
-      running: all.filter(
-        (r) => r.state === "running" || r.state === "stopping",
-      ).length,
-      queued: all.filter((r) => r.state === "queued").length,
+      accepted: Number(counts.accepted),
+      running: Number(counts.running),
+      queued: Number(counts.queued),
       successRate:
         completed + failed + timedOut
           ? completed / (completed + failed + timedOut)
@@ -315,13 +286,7 @@ export class Telemetry {
             ? usage.reduce((sum, u) => sum + u.output!, 0)
             : null,
       },
-      pendingInteractions: this.runtime.store
-        .list("interactions")
-        .filter(
-          (i) =>
-            sessionIds.has(i.sessionID) &&
-            (i.state === "pending" || i.state === "replying"),
-        ).length,
+      pendingInteractions: Number(db.prepare("SELECT COUNT(*) AS n FROM interactions i JOIN sessions s ON s.id=i.sessionID WHERE i.state IN ('pending','replying') AND (?='' OR s.engineId=?)").get(engine, engine)?.n ?? 0),
       http: {
         requests: sumValues(http.values),
         errors4xx: sumValues(
@@ -348,17 +313,11 @@ export class Telemetry {
         allocatedBytes:
           Number(db.prepare("PRAGMA page_count").get()?.page_count ?? 0) *
           Number(db.prepare("PRAGMA page_size").get()?.page_size ?? 0),
-        sessions: this.runtime.store.list("sessions").length,
-        runs: allRuns.length,
+        sessions: Number(db.prepare("SELECT COUNT(*) AS n FROM sessions").get()?.n ?? 0),
+        runs: Number(db.prepare("SELECT COUNT(*) AS n FROM runs").get()?.n ?? 0),
       },
-      unavailableSessions: sessions.filter(
-        (s) => s.availability === "unavailable",
-      ).length,
-      oldestQueuedAt:
-        all
-          .filter((r) => !isTerminal(r.state) && r.state === "queued")
-          .sort((a, b) => a.acceptedAt.localeCompare(b.acceptedAt))[0]
-          ?.acceptedAt ?? null,
+      unavailableSessions: Number(db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE availability='unavailable' AND (?='' OR engineId=?)").get(engine, engine)?.n ?? 0),
+      oldestQueuedAt: counts.oldestQueuedAt ?? null,
     };
   }
   series(metric: string, from: string, to: string, engine = "") {
