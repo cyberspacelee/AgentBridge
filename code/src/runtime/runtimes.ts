@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeF
 import { chmod, cp, mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { agentIds, runtimeSourceSchema, type AgentId, type RuntimeSource } from "../../shared/settings.js";
 import type { RuntimeAction, RuntimeView } from "../../shared/runtimes.js";
@@ -21,6 +22,17 @@ const stableVersion = z.string().regex(/^\d+\.\d+\.\d+$/);
 const maxDownload = 512 * 1024 * 1024;
 const maxInstallation = 2 * 1024 * 1024 * 1024;
 const timestamp = () => new Date().toISOString();
+// Windows may briefly lock runtime files after a CLI exits or while a scanner reads them.
+const removeOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 };
+async function renameDirectory(source: string, destination: string) {
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(source, destination); return; }
+    catch (error) {
+      if (attempt >= removeOptions.maxRetries || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await delay(removeOptions.retryDelay * (attempt + 1));
+    }
+  }
+}
 function opencodePackage() {
   const platform = process.platform === "win32" ? "windows" : process.platform;
   const musl = process.platform === "linux" && !(process.report.getReport() as { header: { glibcVersionRuntime?: string } }).header.glibcVersionRuntime;
@@ -90,7 +102,7 @@ export class RuntimeManager {
           if (manifest.rollback.snapshot) {
             if (!existsSync(backup)) throw new Error(`Interrupted ${id} update requires its missing native state backup`);
             const native = agentDirectory(config, id);
-            rmSync(native, { recursive: true, force: true }); cpSync(backup, native, { recursive: true });
+            rmSync(native, removeOptions); cpSync(backup, native, { recursive: true });
           }
           this.hooks.restoreBindings?.(id, manifest.rollback.bindings);
           manifest.current = manifest.rollback.previous; manifest.rollback = null;
@@ -101,8 +113,8 @@ export class RuntimeManager {
           if (rollback.snapshot) {
             if (!existsSync(backup)) throw new Error(`Interrupted ${id} source switch is missing its native backup`);
             const native = agentDirectory(config, id);
-            rmSync(native, { recursive: true, force: true }); cpSync(backup, native, { recursive: true });
-          } else rmSync(agentDirectory(config, id), { recursive: true, force: true });
+            rmSync(native, removeOptions); cpSync(backup, native, { recursive: true });
+          } else rmSync(agentDirectory(config, id), removeOptions);
           config.runtimeSources[id] = rollback.previous;
           if (rollback.previous.mode === "external") config[id].command = rollback.previous.command!;
           this.hooks.saveSource?.(id, rollback.previous);
@@ -111,7 +123,7 @@ export class RuntimeManager {
           manifest.error = "来源切换被中断，已恢复原来源和会话";
         }
         if (manifest.operation) { manifest.error = "Installation was interrupted by gateway shutdown; retry the operation"; manifest.operation = null; }
-        rmSync(path.join(this.directory(id), "staging"), { recursive: true, force: true });
+        rmSync(path.join(this.directory(id), "staging"), removeOptions);
       }
       this.manifests.set(id, manifest);
       if (this.managed(id)) this.select(id);
@@ -175,7 +187,7 @@ export class RuntimeManager {
             const probeDirectory = path.join(this.directory(id), "source-probe", randomUUID());
             await mkdir(probeDirectory, { recursive: true });
             try { await this.probe(id, source.command!, probeDirectory, controller.signal, version, true); }
-            finally { await rm(probeDirectory, { recursive: true, force: true }); }
+            finally { await rm(probeDirectory, removeOptions); }
         }
         controller.signal.throwIfAborted();
         this.states.set(id, { operation: "source", cancelable: false, updateStatus: "switching" });
@@ -197,7 +209,7 @@ export class RuntimeManager {
           this.config.runtimeSources[id] = previous; this.config[id].command = previousCommand;
           this.hooks.saveSource?.(id, previous);
           if (manifest.sourceRollback) {
-            await rm(native, { recursive: true, force: true });
+            await rm(native, removeOptions);
             if (manifest.sourceRollback.snapshot) await cp(backup, native, { recursive: true });
           }
           if (manifest.sourceRollback) this.hooks.restoreBindings?.(id, manifest.sourceRollback.bindings);
@@ -208,11 +220,11 @@ export class RuntimeManager {
           await this.detect(id);
           if (this.detections.get(id)?.detection === "present") this.detections.set(id, { ...this.detections.get(id), compatibility: "compatible" });
         }
-        await rm(backup, { recursive: true, force: true });
+        await rm(backup, removeOptions);
       } catch (error) {
         manifest.error = errorDetail(error, diagnosticSecrets(this.config)); this.persist(id);
         this.detections.set(id, { ...this.detections.get(id), error: manifest.error });
-        if (!manifest.sourceRollback) await rm(backup, { recursive: true, force: true });
+        if (!manifest.sourceRollback) await rm(backup, removeOptions);
       }
       finally { this.operations.delete(id); this.states.delete(id); }
     });
@@ -256,7 +268,7 @@ export class RuntimeManager {
     this.persist(id);
     const controller = new AbortController();
     const done = Promise.resolve().then(async () => {
-      await rm(path.join(this.directory(id), "staging"), { recursive: true, force: true });
+      await rm(path.join(this.directory(id), "staging"), removeOptions);
       if (action === "detect") await this.detect(id, controller.signal);
       else if (action === "uninstall") await this.uninstall(id);
       else if (action === "check") await this.resolve(id, controller.signal);
@@ -266,7 +278,7 @@ export class RuntimeManager {
       if (action === "check") manifest.checkError = message;
       else manifest.error = message;
     }).finally(async () => {
-      await rm(path.join(this.directory(id), "staging"), { recursive: true, force: true }).catch(() => {});
+      await rm(path.join(this.directory(id), "staging"), removeOptions).catch(() => {});
       manifest.operation = null;
       this.states.delete(id); this.operations.delete(id); this.persist(id);
     });
@@ -386,7 +398,7 @@ export class RuntimeManager {
     }, 500);
     try { await this.command(this.config.runtimeNode, [npm, "ci", ...args.slice(2)], directory, AbortSignal.any([signal, budget.signal]), env); }
     finally { clearInterval(timer); }
-    await rm(path.join(directory, ".npm-cache"), { recursive: true, force: true });
+    await rm(path.join(directory, ".npm-cache"), removeOptions);
     if (id === "opencode") {
       const command = path.join("node_modules", packageName, "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       if (!existsSync(path.join(directory, command))) throw new Error("Official OpenCode package is missing its platform binary");
@@ -413,7 +425,7 @@ export class RuntimeManager {
       await within(adapter.start(), config.limits.startupTimeoutMs);
       if (id === "pi") await within(adapter.createSession({ id: randomUUID(), engineId: id, title: "Protocol check", directory: probeDirectory, availability: "unavailable", interactionPolicy: { permission: "manual", question: "manual" }, createdAt: timestamp(), updatedAt: timestamp(), version: 1 }), config.limits.startupTimeoutMs);
       signal.throwIfAborted();
-    } finally { await adapter.stop(); await rm(probeDirectory, { recursive: true, force: true }); }
+    } finally { await adapter.stop(); await rm(probeDirectory, removeOptions); }
   }
   private async install(id: AgentId, signal: AbortSignal) {
     const release = await this.resolve(id, signal);
@@ -433,10 +445,10 @@ export class RuntimeManager {
     const previous = manifest.current;
     const destination = path.join(this.directory(id), "versions", operation);
     if (externalSource) {
-      await mkdir(path.dirname(destination), { recursive: true }); await rename(directory, destination);
+      await mkdir(path.dirname(destination), { recursive: true }); await renameDirectory(directory, destination);
       manifest.current = { version: release.version, directory: operation, command, size, source: release.source, integrity: release.integrity };
       this.persist(id);
-      for (const entry of await readdir(path.dirname(destination))) if (entry !== operation) await rm(path.join(path.dirname(destination), entry), { recursive: true, force: true });
+      for (const entry of await readdir(path.dirname(destination))) if (entry !== operation) await rm(path.join(path.dirname(destination), entry), removeOptions);
       return;
     }
     const backup = path.join(this.config.dataDirectory, "backups", id, operation);
@@ -449,29 +461,29 @@ export class RuntimeManager {
         await mkdir(path.dirname(backup), { recursive: true }); await cp(native, backup, { recursive: true }); snapshot = true;
       }
       manifest.rollback = { previous, directory: operation, snapshot, bindings: this.hooks.snapshotBindings?.(id) ?? [] }; this.persist(id);
-      await mkdir(path.dirname(destination), { recursive: true }); await rename(directory, destination);
+      await mkdir(path.dirname(destination), { recursive: true }); await renameDirectory(directory, destination);
       manifest.current = { version: release.version, directory: operation, command, size, source: release.source, integrity: release.integrity };
       this.persist(id); this.select(id);
     }, async () => {
       manifest.current = previous; this.persist(id); this.select(id);
-      if (snapshot) { await rm(native, { recursive: true, force: true }); await cp(backup, native, { recursive: true }); }
+      if (snapshot) { await rm(native, removeOptions); await cp(backup, native, { recursive: true }); }
       if (manifest.rollback) this.hooks.restoreBindings?.(id, manifest.rollback.bindings);
       manifest.rollback = null; this.persist(id);
     }, false); }
     catch (error) {
-      if (!manifest.rollback) { await rm(destination, { recursive: true, force: true }); await rm(backup, { recursive: true, force: true }); }
+      if (!manifest.rollback) { await rm(destination, removeOptions); await rm(backup, removeOptions); }
       throw error;
     }
     manifest.rollback = null; manifest.uninstallPending = false; this.persist(id);
-    await rm(backup, { recursive: true, force: true });
-    for (const entry of await readdir(path.dirname(destination))) if (entry !== operation) await rm(path.join(path.dirname(destination), entry), { recursive: true, force: true });
+    await rm(backup, removeOptions);
+    for (const entry of await readdir(path.dirname(destination))) if (entry !== operation) await rm(path.join(path.dirname(destination), entry), removeOptions);
   }
   private async uninstall(id: AgentId) {
     const manifest = this.manifests.get(id)!;
     await this.hooks.switch(id, async () => {
       manifest.uninstallPending = true; this.persist(id);
-      await rm(path.join(this.directory(id), "versions"), { recursive: true, force: true });
-      await rm(path.join(this.config.dataDirectory, "backups", id), { recursive: true, force: true });
+      await rm(path.join(this.directory(id), "versions"), removeOptions);
+      await rm(path.join(this.config.dataDirectory, "backups", id), removeOptions);
       manifest.current = null; manifest.uninstallPending = false; this.persist(id); this.select(id);
     }, async () => {}, true);
   }

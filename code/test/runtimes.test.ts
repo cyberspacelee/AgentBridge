@@ -1,11 +1,68 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
+import fs, { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { readConfig } from "../src/config.js";
 import { RuntimeManager, type RuntimeDependencies } from "../src/runtime/runtimes.js";
+
+test("runtime promotion retries temporary locks, bounds persistent locks and preserves the installed version on failure", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-runtime-locks-"));
+  const config = readConfig([], { AGENT_DATA_DIR: directory, AGENT_MANAGED_RUNTIMES: "true" });
+  const manager = new RuntimeManager(config, {
+    runningVersion: () => null,
+    switch: async (_id, activate, rollback) => {
+      try { await activate(); } catch (error) { await rollback(); throw error; }
+    },
+  }, {
+    fetch: async () => Response.json({ version: "1.2.3", dist: { tarball: "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.2.3.tgz", integrity: "sha512-Zml4dHVyZQ==" } }),
+    freeBytes: async () => 4 * 1024 ** 3,
+    install: async (_id, _release, destination) => { await writeFile(path.join(destination, "cli"), "binary"); return "cli"; },
+    probe: async () => {},
+  });
+  const rename = fs.rename;
+  let failures: string[] = [], attempts = 0;
+  t.mock.method(fs, "rename", async (...args: Parameters<typeof rename>) => {
+    attempts++;
+    const code = failures.shift();
+    if (code) throw Object.assign(new Error(`Injected ${code}`), { code });
+    return rename(...args);
+  });
+  syncBuiltinESMExports();
+  const manifestFile = path.join(directory, "runtimes", "opencode", "manifest.json");
+  try {
+    for (const mode of ["managed", "external"] as const) {
+      config.runtimeSources.opencode = mode === "managed" ? { mode } : { mode, command: process.execPath };
+      for (const scenario of [
+        { codes: [], attempts: 1, failed: false },
+        { codes: ["EPERM", "EBUSY", "EACCES"], attempts: 4, failed: false },
+        { codes: Array<string>(6).fill("EPERM"), attempts: 6, failed: true },
+        { codes: ["ENOENT"], attempts: 1, failed: true },
+      ]) {
+        const previous = JSON.parse(await readFile(manifestFile, "utf8")).current;
+        failures = [...scenario.codes]; attempts = 0;
+        manager.action("opencode", "install"); await manager.idle();
+        assert.equal(attempts, scenario.attempts);
+        const current = JSON.parse(await readFile(manifestFile, "utf8")).current;
+        if (scenario.failed) {
+          assert.match(manager.view("opencode").error!, new RegExp(scenario.codes[0]!));
+          assert.deepEqual(current, previous);
+        } else {
+          assert.equal(manager.view("opencode").error, null);
+          assert.equal(current.version, "1.2.3");
+          assert.notEqual(current.directory, previous?.directory);
+        }
+        assert.equal(await readFile(path.join(directory, "runtimes", "opencode", "versions", current.directory, current.command), "utf8"), "binary");
+        assert.equal(manager.busy("opencode"), false);
+      }
+    }
+  } finally {
+    t.mock.restoreAll(); syncBuiltinESMExports();
+    await manager.close(); await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("managed runtimes resolve each requested latest, isolate failed updates, cancel and preserve native state on uninstall", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-runtimes-"));
