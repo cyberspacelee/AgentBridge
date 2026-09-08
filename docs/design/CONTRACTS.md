@@ -44,6 +44,11 @@ myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表�
 
 | 方法与路径 | 请求或查询 | 返回与行为 |
 | --- | --- | --- |
+| GET `/api/agents` | 无 | 四个 Agent 的启用、健康、已保存/已应用配置修订、能力、活动数量 |
+| POST `/api/agents/{id}/actions` | action: enable / disable / stop / apply | 202；按 Agent 排他执行、状态通过 agents.updated 和查询观察 |
+| GET/PUT `/api/settings` | PUT: settings、revision | 读取脱敏配置；校验引用、乐观并发，保存不自动应用资源更改 |
+| POST `/api/providers/{id}/test` | modelID | 对已保存连接发起一次受限模型请求 |
+| POST `/api/agents/{id}/import` | file: 绝对路径 | 只读预览 providers、skills、mcp、warnings；不导入密钥 |
 | GET `/api/runtime` | 无 | instanceId、storeId、engine、health、storage、models、limits、interactionDefaults、capabilities |
 | GET `/api/tasks` | q、status、cursor、limit | TaskSummary 列表、nextCursor、snapshot 元数据 |
 | POST `/api/tasks` | CreateTaskInput | 202 AcceptedRun；原生创建失败返回错误 |
@@ -56,7 +61,7 @@ myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表�
 | GET `/api/events` | 可选 sessionId；Last-Event-ID | 全局或指定会话的应用事件 |
 | GET `/api/artifacts/{id}` | 无 | 文件元数据、可用性、验证结果 |
 | GET `/api/artifacts/{id}/content` | disposition=inline 或 attachment | 流式文件；inline 只允许受控文本 |
-| GET `/api/observability/overview` | from、to | 健康、配额、执行统计和异常提示 |
+| GET `/api/observability/overview` | engine、from、to | agents: 所选范围各 Agent 的状态快照；health 仅在指定单个 Agent 时返回，否则为 null；配额、执行统计和异常提示 |
 | GET `/api/observability/series` | metric、from、to、stepSeconds | 允许指标集合的时间序列、单位、实际覆盖范围 |
 | GET `/api/observability/errors` | from、to、stage、code、cursor、limit | 可关联 Run 的近期异常 |
 | GET `/api/observability/runs/{runId}` | 无 | 日志、可观察 spans、trace 完整性与保留状态 |
@@ -79,7 +84,7 @@ myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表�
 }
 ```
 
-title 可选；空白 title 由服务端生成普通任务标题。directory 与 parts 必需。interactionPolicy 允许 auto/manual，自动答案内容来自受控配置；评测默认策略独立固定，不被网页全局设置改写。
+title 可选；空白 title 由服务端生成普通任务标题。directory 与 parts 必需。engineId 缺省使用 defaultAgent。interactionPolicy 缺省使用 Agent 的已应用策略，允许请求覆盖 auto/manual；自动答案内容来自受控配置。
 
 SubmitRunInput 仅包含 submissionId、parts 与可选 model；不得在追加轮次时改变 Session 的目录或引擎。
 
@@ -154,7 +159,7 @@ eventId 为 storeId 与持久化事件序号，逐事件递增；revision 为业
 | question.asked / permission.asked | 完整 Interaction |
 | interaction.updated | 最新回复状态，不重复发送原生回复 |
 | artifact.updated | 文件登记或检查状态变化 |
-| engine.health.updated | 引擎健康与安全原因 |
+| agents.updated | Agent 启停、配置应用与可公开状态 |
 | session.status / session.idle / session.error | 评测 serializer 所需的规范化状态或错误事实 |
 
 server.connected、server.heartbeat、server.resync_required 为连接控制事件，不写业务日志、不带持久化 SSE id，不推进业务 cursor。connected 包含当前 instanceId/storeId、保留窗口最早和最新 cursor。

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { readConfig } from "../src/config.js";
 import { Store } from "../src/storage/sqlite.js";
 import { SessionRuntime, within } from "../src/runtime/sessions.js";
@@ -24,6 +25,36 @@ import { createTaskSchema } from "../shared/contracts.js";
 import { transitionRun } from "../src/domain/transitions.js";
 import { createServer } from "../src/gateway/server.js";
 import { engineError } from "../src/errors.js";
+import { SettingsManager } from "../src/settings.js";
+
+function configureAgents(config: ReturnType<typeof readConfig>) {
+  const manager = new SettingsManager(config),
+    view = manager.view();
+  manager.save({
+    revision: view.revision,
+    settings: {
+      ...view.settings,
+      providers: ["pi", "opencode"].map((id) => ({
+        id,
+        baseUrl: "http://127.0.0.1:9/v1",
+        models: [{ id: "model" }, { id: "chosen" }],
+      })),
+      agents: view.settings.agents.map((a) =>
+        ["pi", "opencode"].includes(a.id)
+          ? {
+              ...a,
+              enabled: true,
+              models: [
+                { providerID: a.id, modelID: "model" },
+                { providerID: a.id, modelID: "chosen" },
+              ],
+              defaultModel: { providerID: a.id, modelID: "model" },
+            }
+          : a,
+      ),
+    },
+  });
+}
 
 class ControlledEngine implements EngineAdapter {
   id = "test";
@@ -128,6 +159,7 @@ async function fixture(
     AGENT_DATA_DIR: directory,
   });
   const store = new Store(":memory:");
+  configureAgents(config);
   const adapter = new ControlledEngine();
   const runtime = new SessionRuntime(
     store,
@@ -163,6 +195,144 @@ const input = (directory: string, id = randomUUID()) =>
     directory,
     parts: [{ type: "text", text: "work" }],
   });
+
+test("Agent lifecycle drains active work, cancels queues, applies revisions and preserves other agents", async () => {
+  const second = new ControlledEngine();
+  second.id = "opencode";
+  const f = await fixture(10000, [second]);
+  f.adapter.id = "pi";
+  try {
+    await f.runtime.agentAction("pi", "enable");
+    await until(
+      () => !f.runtime.agentViews().find((a) => a.id === "pi")!.operation,
+    );
+    const firstRevision = f.runtime
+      .agentViews()
+      .find((a) => a.id === "pi")!.appliedRevision;
+    assert.ok(firstRevision);
+    const active = await f.runtime.submit({
+      ...input(f.directory),
+      engineId: "pi",
+    });
+    await until(() => f.adapter.executions.has(active.sessionId));
+    const queued = await f.runtime.submit(
+      { submissionId: randomUUID(), parts: [{ type: "text", text: "queued" }] },
+      active.sessionId,
+    );
+    const other = await f.runtime.submit({
+      ...input(f.directory),
+      engineId: "opencode",
+    });
+    await until(() => second.executions.has(other.sessionId));
+    const saved = f.runtime.settings.view();
+    saved.settings.providers.find((p) => p.id === "pi")!.baseUrl =
+      "http://127.0.0.1:10/v1";
+    saved.settings.providers.find((p) => p.id === "pi")!.models[0]!.id =
+      "replacement";
+    const nextAgent = saved.settings.agents.find((a) => a.id === "pi")!;
+    nextAgent.models = [{ providerID: "pi", modelID: "replacement" }];
+    nextAgent.defaultModel = nextAgent.models[0]!;
+    f.runtime.saveSettings({
+      settings: saved.settings,
+      revision: saved.revision,
+    });
+    assert.equal(f.runtime.run(active.runId).configRevision, firstRevision);
+    assert.equal(
+      f.runtime.agentViews().find((a) => a.id === "pi")!.pendingChanges,
+      true,
+    );
+    await f.runtime.agentAction("pi", "apply");
+    await until(() => f.runtime.run(queued.runId).state === "cancelled");
+    assert.equal(f.runtime.run(active.runId).state, "running");
+    assert.throws(
+      () => f.runtime.submit({ ...input(f.directory), engineId: "pi" }),
+      /disabled or applying/,
+    );
+    assert.throws(
+      () =>
+        f.runtime.saveSettings({
+          settings: saved.settings,
+          revision: saved.revision,
+        }),
+      /Wait for Agent/,
+    );
+    f.adapter.complete(active.sessionId);
+    await until(
+      () => !f.runtime.agentViews().find((a) => a.id === "pi")!.operation,
+    );
+    const applied = f.runtime.agentViews().find((a) => a.id === "pi")!;
+    assert.notEqual(applied.appliedRevision, firstRevision);
+    assert.equal(applied.pendingChanges, false);
+    assert.equal(f.runtime.run(other.runId).state, "running");
+    await until(
+      () => f.runtime.session(active.sessionId).availability === "ready",
+    );
+    const followup = await f.runtime.submit(
+      {
+        submissionId: randomUUID(),
+        parts: [{ type: "text", text: "continue" }],
+      },
+      active.sessionId,
+    );
+    await until(() => f.adapter.executions.has(active.sessionId));
+    await f.runtime.agentAction("pi", "disable");
+    assert.equal(f.runtime.run(followup.runId).model?.modelID, "replacement");
+    assert.equal(f.runtime.run(followup.runId).state, "running");
+    f.adapter.complete(active.sessionId);
+    await until(
+      () => !f.runtime.agentViews().find((a) => a.id === "pi")!.operation,
+    );
+    assert.equal(f.runtime.agentHealth("pi").status, "disabled");
+    assert.equal(f.adapter.sessions.size, 0);
+    await delay(250);
+    assert.equal(f.adapter.sessions.size, 0);
+    second.complete(other.sessionId);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Agent immediate stop aborts work; failed enable stays unavailable until an explicit retry", async () => {
+  const f = await fixture();
+  f.adapter.id = "pi";
+  try {
+    const active = await f.runtime.submit({
+      ...input(f.directory),
+      engineId: "pi",
+    });
+    await until(() => f.adapter.executions.has(active.sessionId));
+    await f.runtime.agentAction("pi", "stop");
+    await until(
+      () => !f.runtime.agentViews().find((a) => a.id === "pi")!.operation,
+    );
+    assert.equal(f.runtime.run(active.runId).state, "cancelled");
+    f.adapter.start = async () => {
+      throw new Error("fixture start failure");
+    };
+    await f.runtime.agentAction("pi", "enable");
+    await until(
+      () => !f.runtime.agentViews().find((a) => a.id === "pi")!.operation,
+    );
+    assert.equal(f.runtime.agentHealth("pi").status, "unavailable");
+    assert.match(
+      f.runtime.agentViews().find((a) => a.id === "pi")!.error!,
+      /fixture start failure/,
+    );
+    assert.throws(
+      () => f.runtime.submit({ ...input(f.directory), engineId: "pi" }),
+      /unavailable|disabled|applying/,
+    );
+    f.adapter.start = async () => {};
+    await f.runtime.agentAction("pi", "enable");
+    await until(() => f.runtime.agentHealth("pi").status === "ready");
+    assert.equal(
+      f.runtime.agentViews().find((a) => a.id === "pi")!.error,
+      null,
+    );
+  } finally {
+    await f.close();
+  }
+});
 
 test("artifact inventory warnings retain the filesystem cause without failing the model run", async () => {
   const f = await fixture();
@@ -242,6 +412,9 @@ test("task engines route models, follow-ups, approvals, cancellation and recover
         await server.inject("/api/observability/overview?engine=opencode")
       ).json().health,
     );
+    const allAgents = (await server.inject("/api/observability/overview")).json();
+    assert.equal(allAgents.health, null, "An aggregate cannot claim the default Agent health");
+    assert.deepEqual(allAgents.agents.map((agent: { id: string }) => agent.id), ["pi", "opencode"]);
     assert.ok(
       (
         await server.inject(
@@ -720,6 +893,27 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
   }
 });
 
+test("legacy databases are rejected without changing stored rows", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-legacy-"));
+  const file = path.join(directory, "state.sqlite");
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(
+      "CREATE TABLE runs (id TEXT); INSERT INTO runs VALUES ('keep'); PRAGMA user_version=1;",
+    );
+    old.close();
+    assert.throws(() => new Store(file), /Unsupported legacy database/);
+    const preserved = new DatabaseSync(file);
+    try {
+      assert.equal(preserved.prepare("SELECT id FROM runs").get()?.id, "keep");
+    } finally {
+      preserved.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("message snapshots cannot overwrite another run's parts", async () => {
   const f = await fixture();
   try {
@@ -774,6 +968,7 @@ test("native failure recovery never replays a previously accepted execution", as
 test("gateway restart rebuilds both engines from durable bindings without replaying runs", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-recovery-"));
   const config = readConfig([], { AGENT_DATA_DIR: directory });
+  configureAgents(config);
   const engines = () =>
     ["pi", "opencode"].map((id) => {
       const engine = new ControlledEngine();

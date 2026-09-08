@@ -61,6 +61,16 @@ export class Store {
       );
       if (version > migrations.length)
         throw new Error("Database schema is newer than this gateway");
+      if (
+        version > 0 &&
+        !this.db
+          .prepare("PRAGMA table_info(runs)")
+          .all()
+          .some((column) => column.name === "configRevision")
+      )
+        throw new Error(
+          "Unsupported legacy database. Use a new AGENT_DATA_DIR; the existing database has been preserved.",
+        );
       migrations.slice(version).forEach((sql, i) => {
         this.db.exec("BEGIN IMMEDIATE");
         try {

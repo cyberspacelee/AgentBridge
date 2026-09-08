@@ -17,6 +17,8 @@ import {
   YAxis,
 } from "recharts"
 import type { EngineHealth } from "../../../shared/contracts"
+import type { AgentView } from "../../../shared/settings"
+import { agentNames } from "@/lib/agent-draft"
 import { useGateway } from "@/lib/gateway"
 import { useQuery } from "@/lib/api"
 import {
@@ -55,6 +57,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 interface Overview {
   capturedAt: string
   health: EngineHealth | null
+  agents: AgentView[]
   accepted: number
   completed: number
   failed: number
@@ -121,11 +124,10 @@ export function Observability() {
   const [params, setParams] = useSearchParams()
   const engineOptions = [
     { value: "", label: "全部引擎" },
-    { value: "pi", label: "Pi" },
-    { value: "opencode", label: "OpenCode" },
-    ...(runtime && !["pi", "opencode"].includes(runtime.engine)
-      ? [{ value: runtime.engine, label: runtime.engine }]
-      : []),
+    ...(runtime?.engines ?? []).map((agent) => ({
+      value: agent.id,
+      label: agentNames[agent.id] ?? agent.id,
+    })),
   ]
   const engine = engineOptions.some(
     (option) => option.value === params.get("engine")
@@ -202,7 +204,7 @@ export function Observability() {
     >
       <div className="page-heading">
         <div>
-          <h1>网关观测</h1>
+          <h1>运行观测</h1>
         </div>
         <div className="observation-filters">
           <Choice
@@ -247,9 +249,7 @@ export function Observability() {
         </div>
       </div>
       <div className="observation-meta">
-        <span>
-          {engineName} · {runtime?.instanceId.slice(0, 8)}
-        </span>
+        <span>{engineName}</span>
         <span role="status">
           {data
             ? `更新于 ${date(data.capturedAt)}${refreshPolicy.auto ? "" : " · 自动刷新已暂停"}`
@@ -290,6 +290,65 @@ export function Observability() {
         <TabsContent value="overview">
           {data && (
             <>
+              <section
+                className="agent-health-section"
+                aria-label="Agent 可用性"
+              >
+                <div className="section-heading">
+                  <h2>Agent 可用性</h2>
+                  <Link
+                    className="text-sm text-primary underline underline-offset-4"
+                    to="/agents"
+                  >
+                    管理 Agents
+                  </Link>
+                </div>
+                <Table className="stacked-table">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Agent</TableHead>
+                      <TableHead>状态</TableHead>
+                      <TableHead>执行 / 排队</TableHead>
+                      <TableHead>配置</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.agents?.map((agent) => (
+                      <TableRow key={agent.id}>
+                        <TableCell>
+                          <Link
+                            className="agent-name"
+                            to={`/agents/${agent.id}`}
+                          >
+                            {agentNames[agent.id] ?? agent.id}
+                            <ArrowUpRight />
+                          </Link>
+                        </TableCell>
+                        <TableCell data-label="状态">
+                          <Status state={agent.health.status} />
+                          {agent.error && (
+                            <p className="max-w-lg text-xs break-words text-destructive">
+                              {agent.error}
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell data-label="执行 / 排队">
+                          {agent.activeRuns} / {agent.queuedRuns}
+                        </TableCell>
+                        <TableCell data-label="配置">
+                          {agent.operation
+                            ? "处理中"
+                            : !agent.enabled
+                              ? "已停用"
+                              : agent.pendingChanges
+                                ? "待应用"
+                                : "已生效"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </section>
               <dl className="metric-band">
                 <Metric
                   label="运行中"
@@ -305,15 +364,23 @@ export function Observability() {
                   label="执行成功率"
                   value={
                     data.successRate === null
-                      ? "未知"
+                      ? "暂无样本"
                       : `${number(data.successRate * 100)}%`
                   }
                   detail={`完成 ${data.completed} / 失败 ${data.failed + data.timedOut}`}
                 />
                 <Metric
                   label="P95 执行耗时"
-                  value={duration(data.p95ExecutionMs)}
-                  detail={`P50 ${duration(data.p50ExecutionMs)}`}
+                  value={
+                    data.p95ExecutionMs === null
+                      ? "暂无样本"
+                      : duration(data.p95ExecutionMs)
+                  }
+                  detail={
+                    data.p50ExecutionMs === null
+                      ? "尚无执行耗时"
+                      : `P50 ${duration(data.p50ExecutionMs)}`
+                  }
                 />
               </dl>
               <section className="chart-section">
@@ -358,9 +425,11 @@ export function Observability() {
                   <h2>运行状态</h2>
                   <dl className="outcome-list">
                     <div>
-                      <dt>引擎</dt>
+                      <dt>{engine ? "引擎" : "可用 Agent"}</dt>
                       <dd>
-                        {data.health ? (
+                        {!engine ? (
+                          `${data.agents?.filter((agent) => agent.health.status === "ready").length ?? 0} / ${data.agents?.length ?? 0}`
+                        ) : data.health ? (
                           <Status state={data.health.status} />
                         ) : (
                           "未连接"
@@ -393,12 +462,14 @@ export function Observability() {
               <div className="section-heading">
                 <h2 className="flex items-center gap-2">
                   <Server className="size-4" />
-                  {engine || runtime?.engine}
+                  {engine ? (agentNames[engine] ?? engine) : "全部 Agents"}
                 </h2>
-                {data.health ? (
+                {engine && data.health ? (
                   <Status state={data.health.status} />
                 ) : (
-                  <span className="text-muted-foreground">未连接</span>
+                  <span className="text-muted-foreground">
+                    {engine ? "未连接" : "网关资源"}
+                  </span>
                 )}
               </div>
               <p className="mb-4 text-xs text-muted-foreground">
@@ -425,9 +496,13 @@ export function Observability() {
                 </TableHeader>
                 <TableBody>
                   {[
-                    ["引擎版本", data.health?.version ?? "未知"],
-                    ["引擎进程数", data.health?.processes ?? "未知"],
-                    ["进程重启次数", data.health?.restarts ?? "未知"],
+                    ...(engine
+                      ? [
+                          ["引擎版本", data.health?.version ?? "未获取"],
+                          ["引擎进程数", data.health?.processes ?? "未获取"],
+                          ["进程重启次数", data.health?.restarts ?? "未获取"],
+                        ]
+                      : []),
                     [
                       "引擎进程内存",
                       bytes(data.resource.childProcessMemoryBytes),
@@ -437,10 +512,16 @@ export function Observability() {
                     ["执行超时", duration(runtime?.limits.runTimeoutMs)],
                     ["会话容量", runtime?.limits.maxSessions],
                     ["SSE 连接上限", runtime?.limits.maxSseConnections],
-                    [
-                      "引擎诊断",
-                      data.health ? (data.health.message ?? "无") : "未连接",
-                    ],
+                    ...(engine
+                      ? [
+                          [
+                            "引擎诊断",
+                            data.health
+                              ? (data.health.message ?? "无")
+                              : "未连接",
+                          ],
+                        ]
+                      : []),
                   ].map(([label, value]) => (
                     <TableRow key={label}>
                       <TableCell>{label}</TableCell>
@@ -646,6 +727,12 @@ function Metric({
 }
 function Trend({ data }: { data?: Series }) {
   if (!data) return <Skeleton className="h-64" />
+  if (
+    data.points.length &&
+    data.unit !== "bytes" &&
+    data.points.every((point) => point.value === 0)
+  )
+    return <Blank>所选时间内此指标均为 0</Blank>
   return (
     <>
       <div className="trend">
@@ -663,6 +750,7 @@ function Trend({ data }: { data?: Series }) {
                   new Date(value).toLocaleTimeString("zh-CN", {
                     hour: "2-digit",
                     minute: "2-digit",
+                    second: "2-digit",
                   })
                 }
                 minTickGap={45}

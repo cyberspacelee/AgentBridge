@@ -1,5 +1,4 @@
 import path from "node:path";
-import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -9,426 +8,599 @@ import {
   writeFileSync,
   rmSync,
   statSync,
+  symlinkSync,
+  realpathSync,
 } from "node:fs";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { z } from "zod";
 import {
   settingsSchema,
-  hiddenSecret,
   providerSchema,
+  skillSchema,
+  mcpSchema,
+  hiddenSecret,
   type Settings,
   type SettingsView,
+  type AgentId,
+  type AgentConfiguration,
 } from "../shared/settings.js";
 import type { Config } from "./config.js";
 import { GatewayError, errorDetail } from "./errors.js";
-import {
-  startProcess,
-  stopProcess,
-  processDiagnostic,
-} from "./engines/process.js";
-import { within } from "./async.js";
 
+const applied = new WeakMap<Config, Map<string, Settings>>();
+const object = (value: unknown) =>
+  z.record(z.string(), z.unknown()).parse(value);
+export const revision = (value: unknown) =>
+  createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function readJson(file: string): Record<string, unknown> {
   try {
-    return z
-      .record(z.string(), z.unknown())
-      .parse(JSON.parse(readFileSync(file, "utf8")));
+    return object(JSON.parse(readFileSync(file, "utf8")));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw new GatewayError(
-      "VALIDATION_ERROR",
+      "CONFIGURATION_ERROR",
       `Cannot read configuration: ${file}`,
       400,
     );
   }
 }
 export function readSettings(config: Config): Settings {
-  return settingsSchema.parse(
-    readJson(path.join(config.dataDirectory, "settings.json")),
-  );
-}
-export function piDirectory(config: Config, settings = readSettings(config)) {
-  return path.resolve(
-    config.pi.configDirectory ||
-      settings.piConfigDirectory ||
-      path.join(config.dataDirectory, "pi"),
-  );
-}
-export function configuredProviders(
-  config: Config,
-  settings = readSettings(config),
-) {
-  const providers = settings.providers.filter((provider) => provider.enabled);
+  const file = path.join(config.dataDirectory, "settings.json");
+  if (existsSync(file)) return settingsSchema.parse(readJson(file));
+  const settings = settingsSchema.parse({ defaultAgent: config.engine });
   if (config.compatibleProvider) {
     const provider = providerSchema.parse(config.compatibleProvider);
-    return [...providers.filter((item) => item.id !== provider.id), provider];
+    settings.providers.push(provider);
+    const agent = settings.agents.find((a) => a.id === config.engine)!;
+    agent.models = provider.models.map((m) => ({
+      providerID: provider.id,
+      modelID: m.id,
+    }));
+    agent.defaultModel = config.model ?? agent.models[0]!;
+    agent.enabled = true;
   }
-  return providers;
+  return settingsSchema.parse(settings);
+}
+export function agentDirectory(config: Config, id: string) {
+  return path.join(config.dataDirectory, "agents", id);
+}
+export function agentConfigFile(config: Config, id: string) {
+  return path.join(
+    agentDirectory(config, id),
+    id === "pi"
+      ? "settings.json"
+      : id === "opencode"
+        ? "opencode.json"
+        : "config.toml",
+  );
+}
+export function piDirectory(config: Config) {
+  return agentDirectory(config, "pi");
+}
+export function effectiveSettings(config: Config, id: string) {
+  return applied.get(config)?.get(id) ?? readSettings(config);
+}
+export function agentConfiguration(
+  config: Config,
+  id: string,
+  settings = effectiveSettings(config, id),
+): AgentConfiguration | undefined {
+  return settings.agents.find((a) => a.id === id);
+}
+export function engineSettings(
+  config: Config,
+  id: string,
+  settings = effectiveSettings(config, id),
+) {
+  const agent = agentConfiguration(config, id, settings);
+  return {
+    ...settings,
+    providers: settings.providers
+      .filter((p) => p.enabled)
+      .map((p) => ({
+        ...p,
+        models: p.models.filter((m) =>
+          agent?.models.some(
+            (r) => r.providerID === p.id && r.modelID === m.id,
+          ),
+        ),
+      }))
+      .filter((p) => p.models.length),
+    skills: settings.skills.filter(
+      (s) => s.enabled && agent?.skillIds.includes(s.id),
+    ),
+    mcp: settings.mcp.filter((m) => m.enabled && agent?.mcpIds.includes(m.id)),
+  };
+}
+export function agentRevision(
+  config: Config,
+  id: string,
+  settings = readSettings(config),
+) {
+  const scoped = engineSettings(config, id, settings);
+  const agent = agentConfiguration(config, id, settings);
+  return revision({
+    agent: agent && { ...agent, enabled: undefined },
+    providers: scoped.providers,
+    skills: scoped.skills,
+    mcp: scoped.mcp,
+  });
+}
+export function configuredModels(config: Config, id: string) {
+  return engineSettings(config, id).providers.flatMap((p) =>
+    p.models.map((m) => ({
+      providerID: p.id,
+      modelID: m.id,
+      name: m.name || m.id,
+    })),
+  );
 }
 export function diagnosticSecrets(config: Config): string[] {
   const values = [
     config.opencode.password,
     config.compatibleProvider?.apiKey ?? "",
   ];
-  // Invalid settings must not hide the error we are trying to report.
   try {
-    const settings = readSettings(config);
-    values.push(
-      ...settings.providers.map((provider) => provider.apiKey),
-      ...settings.mcp.flatMap((mcp) =>
-        Object.values(
-          mcp.config.type === "local"
-            ? mcp.config.environment
-            : mcp.config.headers,
-        ),
-      ),
-    );
-  } catch {}
-  return values;
+    for (const settings of [
+      readSettings(config),
+      ...(applied.get(config)?.values() ?? []),
+    ]) {
+      values.push(...settings.providers.map((p) => p.apiKey));
+      for (const m of settings.mcp)
+        values.push(
+          ...Object.values(
+            m.config.type === "local" ? m.config.environment : m.config.headers,
+          ),
+        );
+    }
+  } catch {
+    /* Configuration errors must remain reportable. */
+  }
+  return values.filter(Boolean);
 }
 export function piProviders(config: Config) {
   return Object.fromEntries(
-    configuredProviders(config).map((provider) => [
-      provider.id,
+    engineSettings(config, "pi").providers.map((p) => [
+      p.id,
       {
-        baseUrl: provider.baseUrl,
-        api: provider.api,
-        // Escape Pi's command/environment interpolation: page keys are literal secrets.
-        apiKey: (provider.apiKey || "not-required")
+        baseUrl: p.baseUrl,
+        api: p.api,
+        apiKey: (p.apiKey || "not-required")
           .replaceAll("$", () => "$$")
           .replace(/^!/, "$!"),
-        models: provider.models.map((model) => ({
-          ...model,
-          name: model.name || model.id,
+        models: p.models.map((m) => ({
+          ...m,
+          name: m.name || m.id,
           reasoning: false,
-          input: ["text"] as ["text"],
+          input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         })),
       },
     ]),
   );
 }
-export function opencodeEnvironment(config: Config) {
-  const settings = readSettings(config);
-  const content = z
-    .record(z.string(), z.unknown())
-    .parse(JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || "{}"));
-  const provider = {
-    ...z.record(z.string(), z.unknown()).parse(content.provider || {}),
-  };
-  for (const item of configuredProviders(config, settings))
-    provider[item.id] = {
-      npm:
-        item.api === "openai-responses"
-          ? "@ai-sdk/openai"
-          : "@ai-sdk/openai-compatible",
-      name: item.id,
-      options: { baseURL: item.baseUrl, apiKey: item.apiKey || "not-required" },
-      models: Object.fromEntries(
-        item.models.map((model) => [
-          model.id,
-          {
-            name: model.name || model.id,
-            limit: { context: model.contextWindow, output: model.maxTokens },
-          },
-        ]),
-      ),
-    };
-  const skills = z.record(z.string(), z.unknown()).parse(content.skills || {});
-  return {
-    ...(settings.opencodeConfigFile
-      ? { OPENCODE_CONFIG: settings.opencodeConfigFile }
-      : {}),
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({
-      ...content,
-      provider,
-      skills: {
-        ...skills,
-        paths: [
-          ...z.array(z.string()).parse(skills.paths || []),
-          ...settings.skills
-            .filter((s) => s.enabled && s.engine !== "pi")
-            .map((s) => s.path),
-        ],
-      },
-      mcp: {
-        ...z.record(z.string(), z.unknown()).parse(content.mcp || {}),
-        ...Object.fromEntries(
-          settings.mcp
-            .filter((m) => m.engine !== "pi")
-            .map((m) => [m.id, { ...m.config, enabled: m.enabled }]),
-        ),
-      },
-    }),
-  };
-}
-const revision = (settings: Settings) =>
-  createHash("sha256").update(JSON.stringify(settings)).digest("hex");
-const restartSnapshot = (settings: Settings) =>
-  JSON.stringify([
-    settings.opencodeConfigFile,
-    settings.providers,
-    settings.skills.filter((skill) => skill.engine !== "pi"),
-    settings.mcp.filter((mcp) => mcp.engine !== "pi"),
-  ]);
-
 export function piMcpConfiguration(settings: Settings) {
+  const agent = settings.agents.find((a) => a.id === "pi");
   const environment: NodeJS.ProcessEnv = {};
   const servers = Object.fromEntries(
     settings.mcp
-      .filter((m) => m.engine !== "opencode")
+      .filter((m) => m.enabled && agent?.mcpIds.includes(m.id))
       .map((m) => {
         const literal = (field: string, value: string) => {
-          const key = `AGENT_BRIDGE_MCP_SECRET_${createHash("sha256")
-            .update(JSON.stringify([m.id, field]))
-            .digest("hex")}`;
+          const key = `AGENT_BRIDGE_MCP_${revision([m.id, field])}`;
           environment[key] = value;
-          // The adapter expands {env:NAME} last, after checking for command secrets.
           return `{env:${key}}`;
         };
-        const entries = (field: string, values: Record<string, string>) =>
+        const entries = (values: Record<string, string>, prefix: string) =>
           Object.fromEntries(
             Object.entries(values).map(([key, value]) => [
               key,
-              literal(`${field}.${key}`, value),
+              literal(prefix + key, value),
             ]),
           );
         return [
           m.id,
-          {
-            ...(m.config.type === "local"
-              ? {
-                  command: m.config.command[0],
-                  args: m.config.command
-                    .slice(1)
-                    .map((value, index) => literal(`args.${index}`, value)),
-                  env: entries("env", m.config.environment),
-                }
-              : {
-                  url: literal("url", m.config.url),
-                  headers: entries("headers", m.config.headers),
-                }),
-            disabled: !m.enabled,
-          },
+          m.config.type === "local"
+            ? {
+                command: m.config.command[0],
+                args: m.config.command
+                  .slice(1)
+                  .map((v, i) => literal(`arg${i}`, v)),
+                env: entries(m.config.environment, "env"),
+              }
+            : {
+                url: literal("url", m.config.url),
+                headers: entries(m.config.headers, "header"),
+              },
         ];
       }),
   );
   return { servers, environment };
 }
-
-type ConfigWrite = { file: string; value: unknown };
-function piMcpWrites(
-  config: Config,
-  settings: Settings,
-  previous?: Settings,
-): ConfigWrite[] {
-  const directory = piDirectory(config, settings);
-  const targets = new Map([[directory, piMcpConfiguration(settings).servers]]);
-  if (previous && piDirectory(config, previous) !== directory)
-    targets.set(piDirectory(config, previous), {});
-  return [...targets].flatMap(([target, generated]) => {
-    const file = path.join(target, "mcp.json");
-    if (!Object.keys(generated).length && !existsSync(file)) return [];
-    let native: Record<string, unknown>;
-    try {
-      native = readJson(file);
-    } catch (error) {
-      // Native JSONC remains the extension's concern when no managed entries need syncing.
-      if (
-        !Object.keys(generated).length &&
-        !previous?.mcp.some((m) => m.engine !== "opencode")
-      )
-        return [];
-      throw error;
-    }
-    const ownership = z
-      .object({ owner: z.string(), servers: z.array(z.string()) })
-      .optional()
-      .parse(native._agentbridge);
-    if (
-      !Object.keys(generated).length &&
-      ownership?.owner !== config.dataDirectory
-    )
-      return [];
-    if (ownership && ownership.owner !== config.dataDirectory)
-      throw new GatewayError(
-        "CONFLICT",
-        `Pi MCP configuration is managed by another gateway: ${file}`,
-        409,
-      );
-    const servers = {
-      ...z
-        .record(z.string(), z.unknown())
-        .parse(native.mcpServers ?? native["mcp-servers"] ?? {}),
-    };
-    for (const id of Object.keys(generated))
-      if (Object.hasOwn(servers, id) && !ownership?.servers.includes(id))
-        throw new GatewayError(
-          "CONFLICT",
-          `Pi MCP server ${id} already exists in ${file}; use another name`,
-          409,
-        );
-    for (const id of ownership?.servers ?? []) delete servers[id];
-    const value = {
-      ...native,
-      mcpServers: { ...servers, ...generated },
-      _agentbridge: {
-        owner: config.dataDirectory,
-        servers: Object.keys(generated),
-      },
-    };
-    return JSON.stringify(native) === JSON.stringify(value)
-      ? []
-      : [{ file, value }];
-  });
+export function syncPiMcp(config: Config) {
+  return piMcpConfiguration(effectiveSettings(config, "pi")).environment;
 }
-
-function writeConfigFiles(writes: ConfigWrite[]) {
-  const staged: {
-    file: string;
-    temporary: string;
-    previous?: Buffer;
-    committed: boolean;
-  }[] = [];
-  try {
-    for (const { file, value } of writes) {
-      const previous = existsSync(file) ? readFileSync(file) : undefined;
-      mkdirSync(path.dirname(file), { recursive: true });
-      const item = {
-        file,
-        temporary: `${file}.${randomUUID()}.tmp`,
-        previous,
-        committed: false,
-      };
-      staged.push(item);
-      writeFileSync(item.temporary, JSON.stringify(value, null, 2) + "\n", {
-        mode: 0o600,
-        flag: "wx",
-      });
-    }
-    for (const item of staged) {
-      renameSync(item.temporary, item.file);
-      item.committed = true;
-    }
-  } catch (error) {
-    // Restore derived files if committing the gateway settings fails.
-    for (const item of staged.reverse()) {
-      if (!item.committed) continue;
-      if (item.previous === undefined) rmSync(item.file, { force: true });
-      else {
-        writeFileSync(item.temporary, item.previous, {
-          mode: 0o600,
-          flag: "wx",
-        });
-        renameSync(item.temporary, item.file);
-      }
-    }
+export function opencodeEnvironment(config: Config) {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment))
+    if (key.startsWith("OPENCODE_")) delete environment[key];
+  const settings = engineSettings(config, "opencode");
+  const native = {
+    autoupdate: false,
+    plugin: [],
+    enabled_providers: settings.providers.map((p) => p.id),
+    provider: Object.fromEntries(
+      settings.providers.map((p) => [
+        p.id,
+        {
+          npm:
+            p.api === "openai-responses"
+              ? "@ai-sdk/openai"
+              : "@ai-sdk/openai-compatible",
+          name: p.id,
+          options: { baseURL: p.baseUrl, apiKey: p.apiKey || "not-required" },
+          models: Object.fromEntries(
+            p.models.map((m) => [
+              m.id,
+              {
+                name: m.name || m.id,
+                limit: { context: m.contextWindow, output: m.maxTokens },
+              },
+            ]),
+          ),
+        },
+      ]),
+    ),
+    skills: { paths: settings.skills.map((s) => s.path) },
+    mcp: Object.fromEntries(
+      settings.mcp.map((m) => [m.id, { ...m.config, enabled: true }]),
+    ),
+  };
+  return {
+    ...environment,
+    OPENCODE_CONFIG: agentConfigFile(config, "opencode"),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(native),
+    OPENCODE_CONFIG_DIR: agentDirectory(config, "opencode"),
+    XDG_CONFIG_HOME: path.join(
+      agentDirectory(config, "opencode"),
+      "xdg-config",
+    ),
+    XDG_DATA_HOME: path.join(agentDirectory(config, "opencode"), "xdg-data"),
+    XDG_CACHE_HOME: path.join(agentDirectory(config, "opencode"), "xdg-cache"),
+    OPENCODE_DISABLE_AUTOUPDATE: "true",
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+    OPENCODE_DISABLE_CLAUDE_CODE: "true",
+    OPENCODE_DISABLE_EXTERNAL_SKILLS: "true",
+    OPENCODE_DISABLE_DEFAULT_PLUGINS: "true",
+    OPENCODE_ENABLE_QUESTION_TOOL: "true",
+  };
+}
+export function nativeEnvironment(config: Config, id: "codex" | "grok") {
+  const settings = engineSettings(config, id);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env))
+    if (/^(CODEX_|GROK_|XAI_|OPENAI_|AGENT_BRIDGE_KEY_)/.test(key))
+      delete env[key];
+  return {
+    ...env,
+    ...(id === "codex"
+      ? { CODEX_HOME: agentDirectory(config, id) }
+      : {
+          GROK_HOME: agentDirectory(config, id),
+          GROK_DISABLE_AUTOUPDATER: "1",
+        }),
+    ...Object.fromEntries(
+      settings.providers.map((p) => [
+        `AGENT_BRIDGE_KEY_${p.id}`,
+        p.apiKey || "not-required",
+      ]),
+    ),
+  };
+}
+export function nativeSessionDirectory(
+  config: Config,
+  id: "codex" | "grok",
+  sessionId: string,
+) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionId))
     throw new GatewayError(
-      "CONFIGURATION_ERROR",
-      `Could not save configuration: ${errorDetail(error)}`,
-      500,
+      "VALIDATION_ERROR",
+      "Invalid managed session ID",
+      400,
     );
+  return path.join(agentDirectory(config, id), "sessions", sessionId);
+}
+export function nativeSessionEnvironment(
+  config: Config,
+  id: "codex" | "grok",
+  session: { id: string; directory: string },
+) {
+  // Native project settings can add executable resources despite a managed HOME.
+  for (
+    let directory = session.directory;
+    ;
+    directory = path.dirname(directory)
+  ) {
+    const file = path.join(
+      directory,
+      id === "codex" ? ".codex" : ".grok",
+      "config.toml",
+    );
+    if (existsSync(file)) {
+      const values = parseToml(readFileSync(file, "utf8"));
+      if (Object.keys(values).length)
+        throw new GatewayError(
+          "CONFIGURATION_ERROR",
+          `Project configuration is unsupported in managed mode: ${file}. Import these resources into AgentBridge first and remove the conflicting project entries.`,
+          400,
+        );
+    }
+    if (id === "grok" && existsSync(path.join(directory, ".mcp.json")))
+      throw new GatewayError(
+        "CONFIGURATION_ERROR",
+        `Project MCP discovery is unsupported in managed mode: ${path.join(directory, ".mcp.json")}`,
+        400,
+      );
+    if (
+      directory === path.dirname(directory) ||
+      existsSync(path.join(directory, ".git"))
+    )
+      break;
+  }
+  const home = nativeSessionDirectory(config, id, session.id);
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  const native = parseToml(readFileSync(agentConfigFile(config, id), "utf8"));
+  if (id === "codex") {
+    const skills = path.join(home, "skills");
+    rmSync(skills, { recursive: true, force: true });
+    mkdirSync(skills, { recursive: true, mode: 0o700 });
+    for (const skill of engineSettings(config, id).skills)
+      symlinkSync(
+        skill.path,
+        path.join(skills, skill.id),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    native.skills = { config: [] };
+  }
+  atomicWrite(path.join(home, "config.toml"), stringifyToml(native));
+  return {
+    ...nativeEnvironment(config, id),
+    [id === "codex" ? "CODEX_HOME" : "GROK_HOME"]: home,
+  };
+}
+export function restrictNativeSkills(
+  config: Config,
+  id: "codex" | "grok",
+  sessionId: string,
+  discovered: { path: string; enabled: boolean }[],
+) {
+  const allowed = engineSettings(config, id).skills.map((skill) =>
+    realpathSync(path.join(skill.path, "SKILL.md")),
+  );
+  const enabled = (location: string) => {
+    try {
+      return allowed.includes(
+        realpathSync(
+          location.endsWith("SKILL.md")
+            ? location
+            : path.join(location, "SKILL.md"),
+        ),
+      );
+    } catch {
+      return false;
+    }
+  };
+  const unwanted = discovered.filter(
+    (skill) => skill.enabled && !enabled(skill.path),
+  );
+  if (!unwanted.length) return false;
+  const file = path.join(
+    nativeSessionDirectory(config, id, sessionId),
+    "config.toml",
+  );
+  const native = parseToml(readFileSync(file, "utf8"));
+  native.skills =
+    id === "codex"
+      ? {
+          config: discovered.map((skill) => ({
+            path: skill.path,
+            enabled: enabled(skill.path),
+          })),
+        }
+      : {
+          paths: engineSettings(config, id).skills.map((skill) => skill.path),
+          ignore: unwanted.map((skill) => skill.path),
+        };
+  atomicWrite(file, stringifyToml(native));
+  return true;
+}
+function atomicWrite(file: string, content: string) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+    renameSync(temporary, file);
   } finally {
-    for (const item of staged) rmSync(item.temporary, { force: true });
+    rmSync(temporary, { force: true });
   }
 }
-
-export function syncPiMcp(config: Config, settings = readSettings(config)) {
-  writeConfigFiles(piMcpWrites(config, settings));
-  return piMcpConfiguration(settings).environment;
+export function applyAgentConfiguration(config: Config, id: AgentId) {
+  const settings = structuredClone(readSettings(config));
+  const snapshots = applied.get(config) ?? new Map<string, Settings>();
+  applied.set(config, snapshots);
+  const previous = snapshots.get(id);
+  snapshots.set(id, settings);
+  try {
+    const scoped = engineSettings(config, id);
+    const agent = agentConfiguration(config, id)!;
+    const file = agentConfigFile(config, id);
+    if (id === "pi") {
+      atomicWrite(
+        file,
+        JSON.stringify(
+          {
+            defaultProjectTrust: "never",
+            packages: [],
+            skills: [],
+            extensions: [],
+          },
+          null,
+          2,
+        ),
+      );
+      atomicWrite(
+        path.join(piDirectory(config), "models.json"),
+        JSON.stringify({ providers: piProviders(config) }, null, 2),
+      );
+      atomicWrite(
+        path.join(piDirectory(config), "mcp.json"),
+        JSON.stringify(
+          { mcpServers: piMcpConfiguration(settings).servers },
+          null,
+          2,
+        ),
+      );
+    } else if (id === "opencode")
+      atomicWrite(file, opencodeEnvironment(config).OPENCODE_CONFIG_CONTENT);
+    else {
+      const mcp = Object.fromEntries(
+        scoped.mcp.map((m) => [
+          m.id,
+          m.config.type === "local"
+            ? {
+                command: m.config.command[0]!,
+                args: m.config.command.slice(1),
+                env: m.config.environment,
+              }
+            : {
+                url: m.config.url,
+                ...(id === "codex"
+                  ? { http_headers: m.config.headers }
+                  : { headers: m.config.headers }),
+              },
+        ]),
+      );
+      const native =
+        id === "codex"
+          ? {
+              ...(agent.defaultModel
+                ? {
+                    model: agent.defaultModel.modelID,
+                    model_provider: agent.defaultModel.providerID,
+                  }
+                : {}),
+              model_providers: Object.fromEntries(
+                scoped.providers.map((p) => [
+                  p.id,
+                  {
+                    name: p.id,
+                    base_url: p.baseUrl,
+                    env_key: `AGENT_BRIDGE_KEY_${p.id}`,
+                    wire_api: "responses",
+                    requires_openai_auth: false,
+                  },
+                ]),
+              ),
+              mcp_servers: mcp,
+              skills: {
+                config: scoped.skills.map((s) => ({
+                  path: s.path,
+                  enabled: true,
+                })),
+              },
+              approval_policy: "on-request",
+              sandbox_mode: "workspace-write",
+              web_search: "disabled",
+            }
+          : {
+              models: {
+                ...(agent.defaultModel
+                  ? Object.fromEntries(
+                      [
+                        "default",
+                        "web_search",
+                        "session_summary",
+                        "image_description",
+                        "prompt_suggestion",
+                      ].map((key) => [
+                        key,
+                        `${agent.defaultModel!.providerID}/${agent.defaultModel!.modelID}`,
+                      ]),
+                    )
+                  : {}),
+                allowed_models: scoped.providers.flatMap((p) =>
+                  p.models.map((m) => `${p.id}/${m.id}`),
+                ),
+              },
+              model: Object.fromEntries(
+                scoped.providers.flatMap((p) =>
+                  p.models.map((m) => [
+                    `${p.id}/${m.id}`,
+                    {
+                      model: m.id,
+                      base_url: p.baseUrl,
+                      name: m.name || m.id,
+                      env_key: `AGENT_BRIDGE_KEY_${p.id}`,
+                      api_backend:
+                        p.api === "openai-responses"
+                          ? "responses"
+                          : "chat_completions",
+                      context_window: m.contextWindow,
+                      max_completion_tokens: m.maxTokens,
+                      supports_backend_search: false,
+                    },
+                  ]),
+                ),
+              ),
+              mcp_servers: mcp,
+              skills: { paths: scoped.skills.map((s) => s.path) },
+              cli: { auto_update: false },
+              compat: {
+                cursor: {
+                  skills: false,
+                  rules: false,
+                  agents: false,
+                  mcps: false,
+                  hooks: false,
+                },
+                claude: {
+                  skills: false,
+                  rules: false,
+                  agents: false,
+                  mcps: false,
+                  hooks: false,
+                },
+              },
+            };
+      atomicWrite(file, stringifyToml(native));
+    }
+    return agentRevision(config, id, settings);
+  } catch (error) {
+    if (previous) snapshots.set(id, previous);
+    else snapshots.delete(id);
+    throw error;
+  }
 }
 
 export class SettingsManager {
-  private initial: string;
-  private installing = false;
-  constructor(private config: Config) {
-    this.initial = restartSnapshot(readSettings(config));
-  }
+  constructor(readonly config: Config) {}
   view(): SettingsView {
     const settings = readSettings(this.config);
     const safe = structuredClone(settings);
-    for (const provider of safe.providers)
-      if (provider.apiKey) provider.apiKey = hiddenSecret;
-    for (const mcp of safe.mcp) {
+    for (const p of safe.providers) if (p.apiKey) p.apiKey = hiddenSecret;
+    for (const m of safe.mcp) {
       const values =
-        mcp.config.type === "local"
-          ? mcp.config.environment
-          : mcp.config.headers;
+        m.config.type === "local" ? m.config.environment : m.config.headers;
       for (const key of Object.keys(values))
         if (values[key]) values[key] = hiddenSecret;
     }
-    const packages = z
-      .array(z.union([z.string(), z.object({ source: z.string() })]))
-      .parse(
-        readJson(path.join(piDirectory(this.config, settings), "settings.json"))
-          .packages || [],
-      );
-    const localOpenCode = path.join(
-      process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
-      "opencode",
-      "opencode.json",
-    );
-    const directory = piDirectory(this.config, settings);
-    const adapterDetected = packages.some((item) => {
-      const source = typeof item === "string" ? item : item.source;
-      if (/^npm:pi-mcp-adapter(?:@|$)/.test(source))
-        return existsSync(
-          path.join(directory, "npm/node_modules/pi-mcp-adapter/package.json"),
-        );
-      if (/^(npm:|git:|https?:|ssh:|git@)/.test(source)) return false;
-      const manifest = path.resolve(
-        directory,
-        source.startsWith("~/")
-          ? path.join(os.homedir(), source.slice(2))
-          : source,
-        "package.json",
-      );
-      try {
-        return readJson(manifest).name === "pi-mcp-adapter";
-      } catch {
-        return false;
-      }
-    });
     return {
       settings: safe,
       revision: revision(settings),
-      restartRequired: this.initial !== restartSnapshot(settings),
-      local: {
-        pi: path.join(os.homedir(), ".pi/agent"),
-        opencode:
-          !existsSync(localOpenCode) && existsSync(`${localOpenCode}c`)
-            ? `${localOpenCode}c`
-            : localOpenCode,
-      },
-      effectivePiDirectory: piDirectory(this.config, settings),
-      externalOpenCode: !this.config.opencode.managed,
-      environmentProvider: !!this.config.compatibleProvider,
-      piMcp: {
-        configFile: path.join(directory, "mcp.json"),
-        adapterDetected,
-        serverCount: settings.mcp.filter(
-          (m) => m.engine !== "opencode" && m.enabled,
-        ).length,
-      },
-      packages: packages.map((item) => {
-        const source = typeof item === "string" ? item : item.source;
-        return /^(npm:|git:|https?:|ssh:|git@)/.test(source)
-          ? source
-          : path.resolve(
-              piDirectory(this.config, settings),
-              source.startsWith("~/")
-                ? path.join(os.homedir(), source.slice(2))
-                : source,
-            );
-      }),
+      dataDirectory: this.config.dataDirectory,
     };
   }
-  save(input: unknown) {
-    if (this.installing)
-      throw new GatewayError(
-        "CONFLICT",
-        "Pi package operation in progress",
-        409,
-      );
+  save(input: unknown): SettingsView {
     const request = z
       .object({ settings: settingsSchema, revision: z.string() })
       .strict()
@@ -437,10 +609,9 @@ export class SettingsManager {
     if (request.revision !== revision(previous))
       throw new GatewayError(
         "CONFLICT",
-        "Configuration changed; reload before saving",
+        "配置已在其他位置修改，请刷新配置后重试；当前草稿将保留",
         409,
       );
-    const settings = request.settings;
     const restore = (value: string, old?: string) => {
       if (value !== hiddenSecret) return value;
       if (old === undefined)
@@ -451,124 +622,263 @@ export class SettingsManager {
         );
       return old;
     };
-    for (const provider of settings.providers)
-      provider.apiKey = restore(
-        provider.apiKey,
-        previous.providers.find((p) => p.id === provider.id)?.apiKey,
+    for (const p of request.settings.providers)
+      p.apiKey = restore(
+        p.apiKey,
+        previous.providers.find((old) => old.id === p.id)?.apiKey,
       );
-    for (const mcp of settings.mcp) {
-      const old = previous.mcp.find((m) => m.id === mcp.id)?.config;
+    for (const m of request.settings.mcp) {
+      const old = previous.mcp.find((entry) => entry.id === m.id)?.config;
       const values =
-        mcp.config.type === "local"
-          ? mcp.config.environment
-          : mcp.config.headers;
+        m.config.type === "local" ? m.config.environment : m.config.headers;
       const oldValues = old?.type === "local" ? old.environment : old?.headers;
       for (const key of Object.keys(values))
         values[key] = restore(values[key]!, oldValues?.[key]);
     }
-    for (const [file, directory] of [
-      [settings.piConfigDirectory, true],
-      [settings.opencodeConfigFile, false],
-      ...settings.skills.map((s) => [s.path, true]),
-    ] as [string, boolean][]) {
-      if (!file) continue;
+    for (const s of request.settings.skills)
       if (
-        !path.isAbsolute(file) ||
-        !existsSync(file) ||
-        (directory ? !statSync(file).isDirectory() : !statSync(file).isFile())
+        !path.isAbsolute(s.path) ||
+        !existsSync(s.path) ||
+        !statSync(s.path).isDirectory() ||
+        !existsSync(path.join(s.path, "SKILL.md"))
       )
         throw new GatewayError(
           "VALIDATION_ERROR",
-          `Expected an existing absolute ${directory ? "directory" : "file"}: ${file}`,
+          `Skill must be an existing absolute directory containing SKILL.md: ${s.path}`,
           400,
         );
-    }
-    writeConfigFiles([
-      ...piMcpWrites(this.config, settings, previous),
-      {
-        file: path.join(this.config.dataDirectory, "settings.json"),
-        value: settings,
-      },
-    ]);
+    atomicWrite(
+      path.join(this.config.dataDirectory, "settings.json"),
+      JSON.stringify(request.settings, null, 2) + "\n",
+    );
     return this.view();
   }
-  async packageOperation(input: unknown) {
-    const { action, source } = z
-      .object({
-        action: z.enum(["install", "remove"]),
-        source: z
-          .string()
-          .min(1)
-          .max(2048)
-          .refine(
-            (s) =>
-              !/[\r\n\0]/.test(s) &&
-              (s.startsWith("npm:") ||
-                s.startsWith("git:") ||
-                /^(https?|ssh|git):\/\//.test(s) ||
-                path.isAbsolute(s)),
-            "Use npm:, git:, https:// or an absolute path",
-          ),
-      })
+  async testProvider(id: string, input: unknown) {
+    const { modelID } = z
+      .object({ modelID: z.string().min(1).max(300) })
       .strict()
       .parse(input);
-    if (this.installing)
-      throw new GatewayError(
-        "CONFLICT",
-        "Pi package operation in progress",
-        409,
-      );
-    this.installing = true;
-    const directory = piDirectory(this.config);
-    let child: ReturnType<typeof startProcess> | undefined;
+    const provider = readSettings(this.config).providers.find(
+      (p) => p.id === id,
+    );
+    if (!provider?.models.some((m) => m.id === modelID))
+      throw new GatewayError("VALIDATION_ERROR", "Unknown provider/model", 400);
+    const started = Date.now();
     try {
-      mkdirSync(directory, { recursive: true });
-      child = startProcess(
-        this.config.pi.command,
-        [action, source],
-        directory,
+      const responses = provider.api === "openai-responses";
+      const result = await fetch(
+        `${provider.baseUrl.replace(/\/$/, "")}/${responses ? "responses" : "chat/completions"}`,
         {
-          ...process.env,
-          PI_CODING_AGENT_DIR: directory,
-          PI_TELEMETRY: "0",
-          PI_SKIP_VERSION_CHECK: "1",
-          GIT_TERMINAL_PROMPT: "0",
+          method: "POST",
+          redirect: "error",
+          signal: AbortSignal.timeout(30000),
+          headers: {
+            "Content-Type": "application/json",
+            ...(provider.apiKey
+              ? { Authorization: `Bearer ${provider.apiKey}` }
+              : {}),
+          },
+          body: JSON.stringify(
+            responses
+              ? {
+                  model: modelID,
+                  input: "Reply OK.",
+                  max_output_tokens: 64,
+                  store: false,
+                }
+              : {
+                  model: modelID,
+                  messages: [{ role: "user", content: "Reply OK." }],
+                  max_tokens: 64,
+                  stream: false,
+                },
+          ),
         },
       );
-      child.stdout.resume();
-      child.stdin.end();
-      await within(
-        new Promise<void>((resolve, reject) => {
-          child!.once("error", (error) =>
-            reject(
-              new GatewayError(
-                "ENGINE_ERROR",
-                `Pi package command could not start: ${errorDetail(error, diagnosticSecrets(this.config))}`,
-                502,
-              ),
-            ),
+      if (!result.ok) {
+        await result.body?.cancel();
+        throw new Error(`Provider returned HTTP ${result.status}`);
+      }
+      const body = object(await result.json());
+      if (
+        body.error ||
+        (responses
+          ? !Array.isArray(body.output) && typeof body.output_text !== "string"
+          : !Array.isArray(body.choices) || body.choices.length === 0)
+      )
+        throw new Error("Provider returned an invalid model response");
+      return { ok: true, durationMs: Date.now() - started, modelID };
+    } catch (error) {
+      throw new GatewayError(
+        "MODEL_CONNECTION_ERROR",
+        errorDetail(error, diagnosticSecrets(this.config)),
+        502,
+      );
+    }
+  }
+  importNative(id: AgentId, input: unknown) {
+    const { file } = z
+      .object({ file: z.string().min(1).max(4096) })
+      .strict()
+      .parse(input);
+    if (
+      !path.isAbsolute(file) ||
+      !existsSync(file) ||
+      !statSync(file).isFile() ||
+      statSync(file).size > 1024 * 1024
+    )
+      throw new GatewayError(
+        "VALIDATION_ERROR",
+        "Expected an absolute configuration file under 1 MiB",
+        400,
+      );
+    const raw = readFileSync(file, "utf8");
+    let native: Record<string, unknown>;
+    try {
+      native = object(
+        file.endsWith(".toml") ? parseToml(raw) : JSON.parse(raw),
+      );
+    } catch {
+      throw new GatewayError(
+        "VALIDATION_ERROR",
+        "Expected a valid JSON or TOML configuration object",
+        400,
+      );
+    }
+    const providers: Settings["providers"] = [],
+      skills: Settings["skills"] = [],
+      mcp: Settings["mcp"] = [],
+      warnings: string[] = [];
+    const records = (value: unknown) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? object(value)
+        : {};
+    const attempt = (name: string, action: () => void) => {
+      try {
+        action();
+      } catch {
+        warnings.push(`${name}: unsupported or incomplete configuration`);
+      }
+    };
+    if (id === "grok") {
+      for (const [name, value] of Object.entries(records(native.model)))
+        attempt(name, () => {
+          const m = object(value);
+          providers.push(
+            providerSchema.parse({
+              id: name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100),
+              baseUrl: m.base_url,
+              api:
+                m.api_backend === "responses"
+                  ? "openai-responses"
+                  : "openai-completions",
+              models: [{ id: m.model, name: m.name }],
+            }),
           );
-          child!.once("close", (code) =>
-            code === 0
-              ? resolve()
-              : reject(
-                  new GatewayError(
-                    "ENGINE_ERROR",
-                    `Pi ${action} failed: ${errorDetail(processDiagnostic(child!), diagnosticSecrets(this.config))}`,
-                    502,
-                  ),
-                ),
+        });
+    } else if (id === "codex") {
+      for (const [name, value] of Object.entries(
+        records(native.model_providers),
+      ))
+        attempt(name, () => {
+          const p = object(value);
+          providers.push(
+            providerSchema.parse({
+              id: name,
+              baseUrl: p.base_url,
+              api: "openai-responses",
+              models: [{ id: native.model }],
+            }),
+          );
+        });
+    } else {
+      for (const [name, value] of Object.entries(
+        records(native[id === "pi" ? "providers" : "provider"]),
+      ))
+        attempt(name, () => {
+          const p = object(value),
+            options = records(p.options);
+          const models = Array.isArray(p.models)
+            ? p.models.map((value) => {
+                const model = object(value);
+                return {
+                  id: model.id,
+                  name: model.name,
+                  contextWindow: model.contextWindow,
+                  maxTokens: model.maxTokens,
+                };
+              })
+            : Object.entries(records(p.models)).map(([key, value]) => {
+                const model = records(value),
+                  limit = records(model.limit);
+                return {
+                  id: key,
+                  name: model.name,
+                  contextWindow: limit.context,
+                  maxTokens: limit.output,
+                };
+              });
+          providers.push(
+            providerSchema.parse({
+              id: name,
+              baseUrl: p.baseUrl ?? options.baseURL,
+              api:
+                p.api ??
+                (p.npm === "@ai-sdk/openai"
+                  ? "openai-responses"
+                  : "openai-completions"),
+              models,
+            }),
+          );
+        });
+    }
+    const nativeSkills = Array.isArray(native.skills)
+      ? native.skills
+      : (records(native.skills).paths ?? records(native.skills).config);
+    if (Array.isArray(nativeSkills))
+      nativeSkills.forEach((s, index) =>
+        attempt(`skill ${index}`, () => {
+          const location = typeof s === "string" ? s : object(s).path;
+          const resolved = path.resolve(
+            path.dirname(file),
+            z.string().parse(location),
+          );
+          skills.push(
+            skillSchema.parse({
+              id: `imported-skill-${index + 1}`,
+              path:
+                path.basename(resolved) === "SKILL.md"
+                  ? path.dirname(resolved)
+                  : resolved,
+            }),
           );
         }),
-        120000,
       );
-      return this.view();
-    } finally {
-      try {
-        if (child) await stopProcess(child, this.config.limits.abortTimeoutMs);
-      } finally {
-        this.installing = false;
-      }
-    }
+    for (const [name, value] of Object.entries(
+      records(native.mcp_servers ?? native.mcpServers ?? native.mcp),
+    ))
+      attempt(name, () => {
+        const m = object(value),
+          command = Array.isArray(m.command)
+            ? m.command
+            : [m.command, ...(Array.isArray(m.args) ? m.args : [])];
+        mcp.push(
+          mcpSchema.parse({
+            id: name,
+            config: m.url
+              ? { type: "remote", url: m.url, headers: {} }
+              : { type: "local", command, environment: {} },
+          }),
+        );
+      });
+    return {
+      providers,
+      skills,
+      mcp,
+      warnings: [
+        ...warnings,
+        "Credentials are not imported; enter API keys and MCP secrets before applying.",
+      ],
+    };
   }
 }

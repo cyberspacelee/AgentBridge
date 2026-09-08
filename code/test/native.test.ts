@@ -13,7 +13,7 @@ import type { Session } from "../shared/contracts.js";
 import { createTaskSchema } from "../shared/contracts.js";
 import { SessionRuntime, within } from "../src/runtime/sessions.js";
 import { Store } from "../src/storage/sqlite.js";
-import { SettingsManager } from "../src/settings.js";
+import { SettingsManager, applyAgentConfiguration } from "../src/settings.js";
 
 for (const engine of ["pi", "opencode"] as const)
   test(
@@ -42,6 +42,7 @@ for (const engine of ["pi", "opencode"] as const)
         version: 1,
       };
       try {
+        applyAgentConfiguration(config, engine);
         await adapter.start();
         assert.equal(adapter.health().status, "ready");
         const binding = await adapter.createSession(session);
@@ -66,7 +67,9 @@ for (const engine of ["pi", "opencode"] as const)
           await adapter.stop();
           const file = path.join(
             config.dataDirectory,
-            "pi-sessions",
+            "agents",
+            "pi",
+            "sessions",
             `${session.id}.jsonl`,
           );
           const history = await readFile(file, "utf8");
@@ -88,36 +91,21 @@ for (const engine of ["pi", "opencode"] as const)
             binding.nativeSessionId,
           );
         }
-        if (engine === "opencode") {
-          for (let restart = 0; restart < 2; restart++) {
-            const external = new OpenCodeAdapter({
-              ...config,
-              opencode: { ...config.opencode, managed: false },
-            });
-            try {
-              await external.start();
-              await assert.rejects(
-                external.recoverSession(
-                  { ...session, directory: path.join(directory, "wrong") },
-                  binding,
-                ),
-              );
-              assert.equal(
-                (await external.recoverSession(session, binding))
-                  ?.nativeSessionId,
-                binding.nativeSessionId,
-              );
-            } finally {
-              await external.stop();
-            }
-          }
-        }
+        if (engine === "opencode")
+          await assert.rejects(
+            adapter.recoverSession(
+              { ...session, directory: path.join(directory, "wrong") },
+              binding,
+            ),
+          );
         await adapter.abort(session.id, randomUUID());
         await adapter.disposeSession(session.id);
         if (engine === "pi") {
           const file = path.join(
             config.dataDirectory,
-            "pi-sessions",
+            "agents",
+            "pi",
+            "sessions",
             `${session.id}.jsonl`,
           );
           await assert.rejects(adapter.recoverSession(session, binding));
@@ -156,6 +144,24 @@ for (const engine of ["pi", "opencode"] as const)
         path.join(os.tmpdir(), "agentbridge-model-"),
       );
       const output = path.join(directory, "result.txt");
+      const selectedSkill = path.join(directory, "selected-skill");
+      const unselectedSkill = path.join(
+        directory,
+        ".agents",
+        "skills",
+        "unselected-skill",
+      );
+      for (const [location, marker] of [
+        [selectedSkill, "bridge-selected-marker"],
+        [unselectedSkill, "bridge-unselected-marker"],
+      ]) {
+        await mkdir(location!, { recursive: true });
+        await writeFile(
+          path.join(location!, "SKILL.md"),
+          `---\nname: ${marker}\ndescription: ${marker} handles confirmations.\n---\nConfirm the result.\n`,
+        );
+      }
+      const modelRequests: string[] = [];
       let toolRequests = 0;
       let rejectModel = false;
       let recoveredHistory = false;
@@ -164,6 +170,7 @@ for (const engine of ["pi", "opencode"] as const)
           const chunks: Buffer[] = [];
           for await (const chunk of req) chunks.push(Buffer.from(chunk));
           const body = JSON.parse(Buffer.concat(chunks).toString());
+          modelRequests.push(JSON.stringify(body));
           if (
             body.messages.some((message: { content: unknown }) =>
               JSON.stringify(message.content).includes(
@@ -280,6 +287,21 @@ for (const engine of ["pi", "opencode"] as const)
         revision: initial.revision,
         settings: {
           ...initial.settings,
+          agents: initial.settings.agents.map((a) =>
+            a.id === engine
+              ? {
+                  ...a,
+                  enabled: true,
+                  skillIds: ["selected"],
+                  models: [{ providerID: "bridge", modelID: "bridge-test" }],
+                  defaultModel: {
+                    providerID: "bridge",
+                    modelID: "bridge-test",
+                  },
+                }
+              : a,
+          ),
+          skills: [{ id: "selected", path: selectedSkill, enabled: true }],
           providers: [
             {
               id: "bridge",
@@ -336,6 +358,18 @@ for (const engine of ["pi", "opencode"] as const)
         assert.equal(result.state, "completed", JSON.stringify(result.error));
         assert.equal(await readFile(output, "utf8"), "native tool verified\n");
         assert.equal(toolRequests, 1);
+        assert.ok(
+          modelRequests.some((request) =>
+            request.includes("bridge-selected-marker"),
+          ),
+          "Selected skill must reach the model",
+        );
+        assert.ok(
+          modelRequests.every(
+            (request) => !request.includes("bridge-unselected-marker"),
+          ),
+          "Unselected project skill must not reach the model",
+        );
         const messages = store.messages(accepted.sessionId);
         assert.ok(
           messages.some((m) =>

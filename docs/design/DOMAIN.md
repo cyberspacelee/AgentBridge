@@ -55,7 +55,7 @@ Task 不单独建表，是 Session 的读模型。ToolCall 是执行事实，消
 
 - Session 是执行一致性边界。同一 Session 中开始 Run、更新队列、取消和删除必须串行提交。
 - directory 在创建时解析真实路径、验证存在和允许范围，之后不可修改。真实路径相同的两个 Session 仍不保证文件操作互相隔离，UI 与交付文档必须明确共享文件风险。
-- engineId 在创建后固定。重新以另一引擎启动网关时，旧历史可以读取，绑定不匹配的会话不可追加执行。
+- engineId 在创建后固定。停用该 Agent 时历史可读、禁止追加；重新启用并成功恢复原生绑定后才恢复接收。
 - `availability` 为 ready、unavailable、deleting；原生创建中的尝试由 Submission/创建操作记录承载，不能作为创建成功的 Session 返回。
 - `version` 用于内部并发检查；全局快照 revision 是不同概念。
 - `activeRunId` 最多一个。排队顺序从 Run 的接收序号读取，不在数据库与引擎分别维护两套队列。
@@ -63,6 +63,8 @@ Task 不单独建表，是 Session 的读模型。ToolCall 是执行事实，消
 ### Run
 
 必要字段：`id, sessionId, submissionId, sequence, inputParts, model, state, acceptedAt, deadlineAt, startedAt, finishedAt, stopRequest, error, usage, traceId`。
+
+Run 记录选定模型与实际已应用的 configRevision。Session 保留连续上下文，Run 划分一次用户提交的排队、超时、取消和用量边界；不新增 Turn 聚合。
 
 `stopRequest` 包含 `reason: user | timeout | deletion | shutdown`、请求时间及停止确认信息。错误包含固定类别、阶段和对外安全文案。usage 允许 null，不能用预填的零值代表引擎没有提供用量。
 
@@ -205,7 +207,7 @@ TaskView 不接受直接赋值，按下列优先级计算：
 
 事件是事务提交后的可靠通知记录，不是领域唯一数据源；不通过全量事件重放重建数据库。默认仅一个网关拥有一个数据目录，第二个写入实例启动失败。SQLite 放在本地磁盘，备份走一致性备份方式，不直接复制运行中的单个数据库文件而漏掉 WAL。
 
-启动恢复顺序：取得数据目录锁 → 检查/迁移 schema → 创建 instanceId → 核对并清理旧实例拥有的残留进程 → 收尾旧实例的非终态 Run → 将不可确认恢复的绑定标记 unavailable → 使旧 Interaction 过期 → 记录恢复事件 → 启动当前引擎 → 开放接收。
+启动恢复顺序：取得数据目录锁 → 检查/迁移 schema → 创建 instanceId → 核对并清理旧实例拥有的残留进程 → 收尾旧实例的非终态 Run → 将不可确认恢复的绑定标记 unavailable → 使旧 Interaction 过期 → 记录恢复事件 → 启动已启用 Agents → 分别开放接收。
 
 残留进程必须通过所有权记录、创建时间和启动身份核对，不能只凭 PID 终止进程。无法确认停止的执行资源及其工作目录保持隔离，禁止新的任务继续使用；解除隔离需要明确的清理确认，不能仅因新引擎启动成功就取消隔离。
 

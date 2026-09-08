@@ -1,193 +1,105 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
+import { settingsSchema } from "../shared/settings.js";
 
-test("settings persist models, skills and MCP with masked secrets", async ({
+test("Agent resources, assignment, configuration apply and enable state persist", async ({
   page,
   request,
 }, info) => {
-  const suffix = info.project.name;
-  const provider = `compatible-${suffix}`;
-  const initialViewport = page.viewportSize()!;
-  await page.setViewportSize({ width: initialViewport.width, height: 540 });
-  expect((await page.goto("/settings"))?.status()).toBe(200);
-  await expect(
-    page.getByRole("heading", { name: "配置", exact: true }),
-  ).toBeVisible();
+  const suffix = info.project.name,
+    provider = `compatible-${suffix}`;
+  await page.goto("/agents/resources");
   await page.getByRole("button", { name: "添加", exact: true }).click();
   const editor = page.getByRole("dialog");
-  await expect(
-    editor.getByRole("button", { name: /关闭|取消编辑/ }),
-  ).toHaveCount(1);
-  await expect(editor).toHaveCSS("overflow-y", "hidden");
-  await page.getByLabel("名称", { exact: true }).fill(provider);
-  await page
+  await editor.getByLabel("资源标识", { exact: true }).fill(provider);
+  await editor
     .getByLabel("Base URL", { exact: true })
     .fill("http://127.0.0.1:8888/v1");
-  await page.getByLabel("API Key", { exact: true }).fill("browser-secret");
-  await page
-    .getByRole("group", { name: "模型 1", exact: true })
-    .getByLabel("模型 ID", { exact: true })
-    .fill("model-one");
-  await page
-    .getByRole("group", { name: "模型 1", exact: true })
-    .getByLabel("上下文长度")
-    .fill("32000");
-  await page
-    .getByRole("group", { name: "模型 1", exact: true })
-    .getByLabel("最大输出长度")
-    .fill("4096");
-  await page.getByRole("button", { name: "添加模型", exact: true }).click();
-  await page
+  await editor.getByLabel("API Key", { exact: true }).fill("browser-secret");
+  await editor.getByLabel("模型 ID", { exact: true }).fill("model-one");
+  await editor.getByRole("button", { name: "添加模型", exact: true }).click();
+  await editor
     .getByRole("group", { name: "模型 2", exact: true })
     .getByLabel("模型 ID", { exact: true })
     .fill("model-two");
-  await page
-    .getByRole("group", { name: "模型 2", exact: true })
-    .getByLabel("上下文长度")
-    .fill("200000");
-  await captureQa(page, `settings-model-form-${suffix}`);
-  const editorViewport = editor.locator('[data-slot="scroll-area-viewport"]');
-  await expect(editorViewport).toHaveCSS("scrollbar-width", "none");
-  await expect
-    .poll(() =>
-      editorViewport.evaluate((el) => el.scrollHeight > el.clientHeight),
-    )
-    .toBe(true);
-  await editorViewport.evaluate((el) => {
-    el.scrollTop = el.scrollHeight;
+  await captureQa(page, `agents-model-form-${suffix}`);
+  await editor.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  await page.route(`**/api/providers/${provider}/test`, (route) => {
+    expect(route.request().postDataJSON().modelID).toBe("model-two");
+    return route.fulfill({ json: { ok: true, durationMs: 7, modelID: "model-two" } });
   });
-  expect(
-    await editorViewport.evaluate((el) => el.scrollWidth <= el.clientWidth),
-  ).toBe(true);
-  await expect(
-    editor.getByRole("button", { name: "保存配置", exact: true }),
-  ).toBeInViewport({ ratio: 1 });
-  await page.screenshot({ path: info.outputPath("settings-scroll.png") });
-  await page.getByRole("button", { name: "保存配置", exact: true }).click();
-  await page.setViewportSize(initialViewport);
-  await expect(
-    page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
-  ).toBeVisible();
-  const settingsResponse = await request.get("/api/settings");
-  expect(await settingsResponse.text()).not.toContain("browser-secret");
-  expect(
-    (await settingsResponse.json()).settings.providers.find(
-      (item: { id: string }) => item.id === provider,
-    ).models,
-  ).toMatchObject([
-    { id: "model-one", contextWindow: 32000, maxTokens: 4096 },
-    { id: "model-two", contextWindow: 200000, maxTokens: 16384 },
-  ]);
+  await page.getByRole("combobox", { name: `测试模型 ${provider}`, exact: true }).click();
+  await page.getByRole("option", { name: "model-two", exact: true }).click();
+  await page.getByRole("button", { name: `测试连接 ${provider}`, exact: true }).click();
+  await expect(page.getByText("model-two · 连接成功 · 7 ms", { exact: true })).toBeVisible();
+  expect(await (await request.get("/api/settings")).text()).not.toContain(
+    "browser-secret",
+  );
   await page
-    .getByRole("button", { name: `配置操作 ${provider}`, exact: true })
+    .getByRole("button", { name: `编辑 ${provider}`, exact: true })
     .click();
-  await page
-    .getByRole("menuitem", { name: `编辑 ${provider}`, exact: true })
-    .click();
-  await expect(page.getByLabel("API Key", { exact: true })).toHaveValue(
+  await expect(editor.getByLabel("API Key", { exact: true })).toHaveValue(
     "********",
   );
-  await expect(
-    page
-      .getByRole("group", { name: "模型 1", exact: true })
-      .getByLabel("上下文长度"),
-  ).toHaveValue("32000");
-  await page
-    .getByRole("group", { name: "模型 2", exact: true })
-    .getByLabel("上下文长度")
-    .fill("256000");
-  await page
-    .getByLabel("Base URL", { exact: true })
-    .fill("http://127.0.0.1:8889/v1");
-  await page.getByRole("button", { name: "保存配置", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
-  ).toBeVisible();
-  await page.reload();
-  await expect(page.getByText(/8889/)).toBeVisible();
-  await page
-    .getByRole("button", { name: `配置操作 ${provider}`, exact: true })
-    .click();
-  await page
-    .getByRole("menuitem", { name: `编辑 ${provider}`, exact: true })
-    .click();
-  await expect(
-    page
-      .getByRole("group", { name: "模型 2", exact: true })
-      .getByLabel("上下文长度"),
-  ).toHaveValue("256000");
-  await page.getByRole("button", { name: "删除模型 1", exact: true }).click();
-  await expect(
-    page
-      .getByRole("group", { name: "模型 1", exact: true })
-      .getByLabel("模型 ID", { exact: true }),
-  ).toHaveValue("model-two");
   await editor.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(editor).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: `配置操作 ${provider}`, exact: true }),
-  ).toBeFocused();
-  await captureQa(page, `settings-models-${suffix}`);
   await page.getByRole("tab", { name: "Skills", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();
   const { directory } = await (await request.get("/__test/directory")).json();
-  await page.getByLabel("名称", { exact: true }).fill(`office-${suffix}`);
-  await page.getByLabel("Skill 目录", { exact: true }).fill(directory);
-  await page.getByRole("button", { name: "保存配置", exact: true }).click();
-  await expect(
-    page.getByRole("switch", { name: `启用 office-${suffix}` }),
-  ).toBeChecked();
-  await page.getByRole("switch", { name: `启用 office-${suffix}` }).click();
-  await expect(
-    page.getByRole("switch", { name: `启用 office-${suffix}` }),
-  ).not.toBeChecked();
+  await editor.getByLabel("资源标识", { exact: true }).fill(`office-${suffix}`);
+  await editor.getByLabel("服务器 Skill 目录", { exact: true }).fill(directory);
+  await editor.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(editor).not.toBeVisible();
   await page.getByRole("tab", { name: "MCP", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();
-  await page.getByLabel("名称", { exact: true }).fill(`office-mcp-${suffix}`);
-  await page.getByRole("combobox", { name: "MCP 引擎", exact: true }).click();
-  await page.getByRole("option", { name: "Pi", exact: true }).click();
+  await editor.getByLabel("资源标识", { exact: true }).fill(`mcp-${suffix}`);
+  await editor.getByLabel("服务器命令", { exact: true }).fill("node");
+  await editor.getByRole("button", { name: "添加参数", exact: true }).click();
+  await editor.getByLabel("参数 1", { exact: true }).fill("server.mjs");
+  await editor.getByRole("button", { name: "添加环境变量", exact: true }).click();
+  await editor.getByLabel("键名 1", { exact: true }).fill("TOKEN");
+  await editor.getByLabel("值 1", { exact: true }).fill("mcp-secret");
+  await editor.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  await navigate(page, "Agent 管理");
+  await page.getByRole("link", { name: "Grok Build", exact: true }).click();
+  await page.getByRole("tab", { name: "模型", exact: true }).click();
   await page
-    .getByLabel("命令和参数（JSON 数组）")
-    .fill('["node", "office-server.mjs"]');
-  await page.getByLabel("环境变量（JSON 对象）").fill('{"TOKEN":"mcp-secret"}');
+    .getByRole("checkbox", { name: `${provider} model-one`, exact: true })
+    .check();
+  await page.getByRole("tab", { name: "Skills", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: new RegExp(`office-${suffix}`) })
+    .check();
+  await page.getByRole("tab", { name: "MCP", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: new RegExp(`mcp-${suffix}`) })
+    .check();
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
-    page.getByRole("button", {
-      name: `配置操作 office-mcp-${suffix}`,
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(page.getByLabel("Pi MCP 配置文件")).toHaveValue(
-    /[/\\]pi[/\\]mcp\.json$/,
-  );
+    page.getByRole("button", { name: "应用配置", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "应用配置", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "安装 MCP 扩展", exact: true }),
-  ).toBeVisible();
-  await captureQa(page, `settings-mcp-${suffix}`);
-  await page.getByRole("tab", { name: "Pi 插件", exact: true }).click();
-  await expect(page.getByLabel("插件来源", { exact: true })).toBeVisible();
-  await captureQa(page, `settings-pi-${suffix}`);
-  for (const [tab, id] of [
-    ["模型", provider],
-    ["Skills", `office-${suffix}`],
-    ["MCP", `office-mcp-${suffix}`],
-  ]) {
-    await page.getByRole("tab", { name: tab, exact: true }).click();
-    await page
-      .getByRole("button", { name: `配置操作 ${id}`, exact: true })
-      .click();
-    await page
-      .getByRole("menuitem", { name: `删除 ${id}`, exact: true })
-      .click();
-    await expect(page.getByRole("alertdialog")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "取消", exact: true }),
-    ).toBeFocused();
-    await page.getByRole("button", { name: "确认删除", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: `配置操作 ${id}`, exact: true }),
-    ).toHaveCount(0);
-  }
+    page.getByRole("button", { name: "应用配置", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("tab", { name: "运行", exact: true }).click();
+  await captureQa(page, `agents-runtime-${suffix}`);
+  await page.getByRole("button", { name: "停用", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "启用", exact: true }),
+  ).toBeEnabled();
+  await page.reload();
+  await expect(page.getByText("已停用", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "启用", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "停用", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("navigation", { name: "Agent 管理" })
+    .getByRole("link", { name: "全部 Agents", exact: true })
+    .click();
+  await captureQa(page, `agents-list-${suffix}`);
 });
 
 function designFixture() {
@@ -295,8 +207,8 @@ async function observationTab(page: Page, name: string) {
   } else await page.getByRole("tab", { name, exact: true }).click();
 }
 async function theme(page: Page, name: string) {
-  await page.getByRole("combobox", { name: "主题", exact: true }).click();
-  await page.getByRole("option", { name, exact: true }).click();
+  await page.getByRole("button", { name: "主题", exact: true }).click();
+  await page.getByRole("menuitemradio", { name, exact: true }).click();
 }
 
 async function captureQa(page: Page, name: string) {
@@ -368,7 +280,7 @@ test("sidebar toggles, persists, centers icons and supports mobile navigation", 
     await expect(shell).toHaveAttribute("data-collapsed", "true");
     const link = page
       .locator(".app-sidebar")
-      .getByRole("link", { name: "网关观测", exact: true });
+      .getByRole("link", { name: "运行观测", exact: true });
     const bounds = await link.boundingBox();
     const icon = await link.locator("svg").boundingBox();
     expect(
@@ -376,7 +288,7 @@ test("sidebar toggles, persists, centers icons and supports mobile navigation", 
     ).toBeLessThan(1);
     await link.hover();
     await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(
-      "网关观测",
+      "运行观测",
     );
     await captureQa(page, "sidebar-collapsed");
     await link.click();
@@ -401,7 +313,7 @@ test("sidebar toggles, persists, centers icons and supports mobile navigation", 
   await captureQa(page, `navigation-${info.project.name}`);
   await page
     .getByRole("dialog")
-    .getByRole("link", { name: "网关观测", exact: true })
+    .getByRole("link", { name: "运行观测", exact: true })
     .click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await expect(page).toHaveURL(/observability/);
@@ -473,10 +385,10 @@ test("task list search, history, filters, pagination, empty state and create for
   expect(
     await dialog.locator("input:invalid, textarea:invalid").count(),
   ).toBeGreaterThan(0);
-  await dialog.getByLabel("工作目录", { exact: true }).fill("/tmp");
+  await dialog.getByLabel("服务器工作目录", { exact: true }).fill("/tmp");
   await dialog.getByLabel("任务要求", { exact: true }).fill("检查");
   await dialog
-    .getByLabel("工作目录", { exact: true })
+    .getByLabel("服务器工作目录", { exact: true })
     .fill("/__qa_missing_directory__");
   await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
   await expect(dialog.locator('[role="alert"]')).toBeVisible();
@@ -557,8 +469,8 @@ test("empty task and observation lists fill the remaining workspace", async ({
   detail.artifacts = [];
   await mockTask(page, detail);
   for (const [tab, text] of [
-    ["交付物", "本轮暂无交付物"],
-    ["交互", "本轮没有交互请求"],
+    ["交付物", "暂无交付物"],
+    ["交互", "没有交互请求"],
   ]) {
     await page.getByRole("tab", { name: tab, exact: true }).click();
     const empty = page
@@ -650,7 +562,7 @@ test("task creation selects engine, provider and model with loading and failure 
   await choose("模型供应商", "opencode-secondary");
   await choose("模型名称", "opencode secondary quality");
   await captureQa(page, `engine-model-selection-${info.project.name}`);
-  await dialog.getByLabel("工作目录", { exact: true }).fill(directory);
+  await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
   await dialog
     .getByLabel("任务要求", { exact: true })
     .fill("model selection QA");
@@ -728,7 +640,7 @@ test("observation engine selection isolates requests and does not retain another
   );
   await select.click();
   await page.getByRole("option", { name: "Pi", exact: true }).click();
-  await expect(page.getByText("QA_OFFLINE", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pi 数据读取失败", { exact: true })).toBeVisible();
   await expect(page.getByText("完成 13 / 失败 0", { exact: true })).toHaveCount(
     0,
   );
@@ -740,14 +652,21 @@ test("task rounds, follow mode, information panel and narrow dialogs", async ({
 }, info) => {
   const detail = designFixture();
   detail.runs.push({ ...detail.runs[0], id: "second-run", sequence: 2 });
+  detail.messages.push({
+    ...detail.messages.find((message) => message.role === "assistant")!,
+    id: "second-message",
+    runId: "second-run",
+    parts: [{ id: "second-text", type: "text", text: "### 第二次执行结果" }],
+  });
   await mockTask(page, detail);
-  await expect(page.getByText("暂无消息", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "执行轮次" }).click();
+  await expect(page.locator(".markdown h3")).toHaveCount(2);
+  await page.getByRole("combobox", { name: "执行筛选" }).click();
   await page
-    .getByRole("option", { name: "第 1 轮 · 已完成", exact: true })
+    .getByRole("option", { name: "执行 #1 · 已完成", exact: true })
     .click();
   await expect(page).toHaveURL(/run=design-run/);
-  await expect(page.locator(".markdown h3")).toBeVisible();
+  await expect(page.locator(".markdown h3")).toHaveCount(1);
+  await expect(page.locator(".markdown h3")).toHaveText("网关检查结果");
   const follow = page.getByRole("switch", { name: "跟随输出" });
   await follow.uncheck();
   await expect(follow).not.toBeChecked();
@@ -854,7 +773,7 @@ test("diagnostics and file previews scroll without compressing content", async (
   await viewport.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
   });
-  await expect(panel.getByText("本轮暂无错误日志")).toBeInViewport();
+  await expect(panel.getByText("暂无错误日志")).toBeInViewport();
   await page.getByRole("tab", { name: "交付物", exact: true }).click();
   await page.getByRole("button", { name: "预览 report.md" }).click();
   const preview = page.getByRole("dialog");
@@ -948,7 +867,7 @@ test("every detail and observation subview has responsive screenshot evidence", 
   );
   await mockTask(page, detail);
   await page.goto("/tasks/design-fixture?tab=invalid");
-  await expect(page.getByRole("tab", { name: "执行记录" })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "对话" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -977,7 +896,7 @@ test("every detail and observation subview has responsive screenshot evidence", 
       }
       await page.goto("/observability?engine=pi");
       await expect(
-        page.getByRole("heading", { name: "网关观测", exact: true }),
+        page.getByRole("heading", { name: "运行观测", exact: true }),
       ).toBeVisible();
       for (const [name, tab] of [
         ["engine", "引擎与资源"],
@@ -1029,7 +948,7 @@ test("LAN HTTP compatibility supports submission and clipboard fallback", async 
   await page.goto("/tasks");
   await page.getByRole("button", { name: "分派任务", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("工作目录", { exact: true }).fill(directory);
+  await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
   await dialog
     .getByLabel("任务要求", { exact: true })
     .fill("HTTP compatibility check");
@@ -1091,22 +1010,20 @@ test("task assignment, approval, output, observations, cancellation and deletion
   await dialog
     .getByLabel("任务名称", { exact: true })
     .fill(`销售分析-${info.project.name}`);
-  await dialog.getByLabel("工作目录", { exact: true }).fill(directory);
+  await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
   await dialog
     .getByLabel("任务要求", { exact: true })
     .fill("汇总销售数据并生成报告");
   await dialog.getByRole("switch", { name: "人工审批权限" }).check();
   await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
   await expect(page).toHaveURL(/\/tasks\/[\w-]+/);
-  await expect(
-    page.getByRole("region", { name: "本轮待处理交互" }),
-  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "待处理交互" })).toBeVisible();
   await page.screenshot({
     path: `artifacts/ui/approval-${info.project.name}.png`,
     fullPage: true,
   });
   await page.getByRole("button", { name: "允许本次", exact: true }).click();
-  await page.getByRole("tab", { name: "执行记录" }).click();
+  await page.getByRole("tab", { name: "对话" }).click();
   await expect(
     page.getByText("销售分析已完成，结果已写入 report.md。"),
   ).toBeVisible();
@@ -1126,7 +1043,7 @@ test("task assignment, approval, output, observations, cancellation and deletion
   await page.keyboard.press("Escape");
   await page.getByRole("tab", { name: "诊断" }).click();
   await expect(page.getByText("Trace ID", { exact: true })).toBeVisible();
-  await navigate(page, "网关观测");
+  await navigate(page, "运行观测");
   await expect(page.getByText("P95 执行耗时", { exact: true })).toBeVisible();
   await page.screenshot({
     path: info.outputPath("observability.png"),
@@ -1278,13 +1195,13 @@ test("inline questions preserve input on conflict and expire without actionable 
     }
   });
   await mockTask(page, detail);
-  const pending = page.getByRole("region", { name: "本轮待处理交互" });
+  const pending = page.getByRole("region", { name: "待处理交互" });
   await pending.getByRole("checkbox", { name: "连接", exact: true }).check();
   await pending
     .getByRole("textbox", { name: "检查项目 自定义回答" })
     .fill("存储");
   await pending.getByRole("button", { name: "提交回答" }).click();
-  await expect(pending.getByText("CONFLICT", { exact: true })).toBeVisible();
+  await expect(pending.getByText("请重试当前回复", { exact: true })).toBeVisible();
   await expect(
     pending.getByRole("textbox", { name: "检查项目 自定义回答" }),
   ).toHaveValue("存储");
@@ -1334,7 +1251,7 @@ test("observation filters persist and paused snapshots survive events and failur
     }),
   );
   await page.getByRole("button", { name: "刷新观测数据" }).click();
-  await expect(page.getByText("SAMPLE_ERROR", { exact: true })).toBeVisible();
+  await expect(page.getByText("采集暂不可用", { exact: true })).toBeVisible();
   await expect(page.getByText("P95 执行耗时", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("combobox", { name: "时间范围" })).toContainText(
@@ -1449,7 +1366,7 @@ test("history scroll stays put on updates and IME does not submit", async ({
   ).toBeVisible();
   expect(await log.evaluate((element) => element.scrollTop)).toBe(0);
   await page.getByRole("tab", { name: "交付物" }).click();
-  await page.getByRole("tab", { name: "执行记录" }).click();
+  await page.getByRole("tab", { name: "对话" }).click();
   expect(await log.evaluate((element) => element.scrollTop)).toBe(0);
   let submissions = 0;
   await page.route("**/api/tasks/design-fixture/runs", (route) => {
@@ -1696,28 +1613,15 @@ test("danger confirmation cancels, locks during submission and preserves failure
   await expect(page.locator("[data-sonner-toast]")).toContainText("任务已删除");
 });
 
-test("settings field errors, failed saves and package confirmations use shared components", async ({
+test("resource field errors and stale writes preserve the draft", async ({
   page,
 }) => {
-  let settings = {
-    piConfigDirectory: "",
-    opencodeConfigFile: "",
-    providers: [],
-    skills: [],
-    mcp: [],
-  };
-  let packages = ["npm:sample-plugin"];
+  let settings = settingsSchema.parse({});
   let writes = 0;
-  let removals = 0;
   const view = () => ({
     settings,
-    packages,
     revision: String(writes),
-    restartRequired: true,
-    externalOpenCode: true,
-    environmentProvider: true,
-    effectivePiDirectory: "/tmp/pi-config",
-    local: { pi: "/tmp/pi", opencode: "/tmp/opencode.json" },
+    dataDirectory: "/tmp/bridge",
   });
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() === "PUT") {
@@ -1731,79 +1635,120 @@ test("settings field errors, failed saves and package confirmations use shared c
     }
     await route.fulfill({ json: view() });
   });
-  await page.route("**/api/settings/pi/packages", async (route) => {
-    expect(route.request().postDataJSON()).toEqual({
-      action: "remove",
-      source: "npm:sample-plugin",
-    });
-    removals++;
-    if (removals === 1)
-      return route.fulfill({
-        status: 500,
-        json: { code: "FAILED", message: "卸载失败" },
-      });
-    packages = [];
-    await route.fulfill({ json: view() });
-  });
-  await page.goto("/settings");
-  await expect(page.locator('[data-slot="alert"]')).toHaveCount(3);
+  await page.goto("/agents/resources");
   await page.getByRole("tab", { name: "MCP", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("名称", { exact: true }).fill("sample");
-  await dialog.getByLabel("命令和参数（JSON 数组）").fill("[");
+  await dialog.getByLabel("资源标识", { exact: true }).fill("sample");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("放弃未保存的资源配置");
+  await page.getByRole("alertdialog").getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog.getByLabel("资源标识", { exact: true })).toHaveValue("sample");
   await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
-  await expect(dialog.getByLabel("命令和参数（JSON 数组）")).toHaveAttribute(
-    "aria-invalid",
-    "true",
-  );
-  await expect(dialog.getByLabel("命令和参数（JSON 数组）")).toHaveAttribute(
-    "aria-describedby",
-    "config.command-error",
-  );
-  await expect(dialog.getByRole("alert")).toHaveText("JSON 格式不正确");
+  expect(await dialog.getByLabel("服务器命令").evaluate((el: HTMLInputElement) => el.validity.valueMissing)).toBe(true);
   expect(writes).toBe(0);
-  await dialog
-    .getByLabel("命令和参数（JSON 数组）")
-    .fill('["node","server.js"]');
-  await dialog.getByLabel("环境变量（JSON 对象）").fill("[]");
+  await dialog.getByLabel("服务器命令").fill("node");
+  await dialog.getByRole("button", { name: "添加环境变量", exact: true }).click();
+  await dialog.getByLabel("键名 1", { exact: true }).fill("TOKEN");
+  await dialog.getByRole("button", { name: "添加环境变量", exact: true }).click();
+  await dialog.getByLabel("键名 2", { exact: true }).fill("TOKEN");
   await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
-  await expect(dialog.getByLabel("环境变量（JSON 对象）")).toHaveAttribute(
-    "aria-invalid",
-    "true",
-  );
-  await dialog.getByLabel("环境变量（JSON 对象）").fill("{}");
+  await expect(dialog.getByText("键名不能重复", { exact: true })).toBeVisible();
+  expect(writes).toBe(0);
+  await dialog.getByRole("button", { name: "删除键值 2", exact: true }).click();
   await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("配置版本冲突");
-  await expect(dialog.getByLabel("名称", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("资源标识", { exact: true })).toHaveValue(
     "sample",
   );
   await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.locator("[data-sonner-toast]").last()).toContainText(
-    "配置已保存",
-  );
-  await page.getByRole("tab", { name: "Pi 插件", exact: true }).click();
-  const uninstall = page.getByRole("button", {
-    name: "卸载 npm:sample-plugin",
-    exact: true,
+  await expect(page.getByRole("button", { name: "编辑 sample", exact: true })).toBeVisible();
+});
+
+test("Agent drafts survive resource navigation and refresh, and flag concurrent edits", async ({ page, request }) => {
+  const saved = await (await request.get("/api/settings")).json();
+  let current = structuredClone(saved);
+  let writes = 0;
+  const initialPolicy = current.settings.agents.find((a: { id: string }) => a.id === "pi").interactionPolicy.permission;
+  const nextPolicy = initialPolicy === "manual" ? "auto" : "manual";
+  const label = nextPolicy === "auto" ? "自动处理" : "人工处理";
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      expect(body.revision).toBe(current.revision);
+      current = { ...current, settings: body.settings, revision: `draft-${++writes}` };
+    }
+    return route.fulfill({ json: current });
   });
-  await uninstall.click();
-  const confirmation = page.getByRole("alertdialog");
-  await expect(confirmation).toContainText("/tmp/pi-config");
-  await page.keyboard.press("Escape");
-  await expect(uninstall).toBeFocused();
-  expect(removals).toBe(0);
-  await uninstall.click();
-  await confirmation
-    .getByRole("button", { name: "确认卸载", exact: true })
-    .click();
-  await expect(confirmation.getByRole("alert")).toContainText("卸载失败");
-  await confirmation
-    .getByRole("button", { name: "确认卸载", exact: true })
-    .click();
-  await expect(confirmation).not.toBeVisible();
-  await expect(page.getByText("暂无插件", { exact: true })).toBeVisible();
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.goto("/agents/pi?tab=runtime");
+  await page.getByRole("combobox", { name: "默认权限策略", exact: true }).click();
+  await page.getByRole("option", { name: label, exact: true }).click();
+  await page.getByRole("tab", { name: "Skills", exact: true }).click();
+  await page.getByRole("button", { name: "共享资源", exact: true }).click();
+  await expect(page).toHaveURL(/tab=skills&agent=pi/);
+  await page.getByRole("link", { name: "返回 Pi 配置", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Skills", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "运行", exact: true }).click();
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "默认权限策略", exact: true })).toContainText(label);
+  await expect(page.getByRole("button", { name: "保存配置", exact: true })).toBeEnabled();
+  const agent = current.settings.agents.find((a: { id: string }) => a.id === "pi");
+  agent.interactionPolicy.question = agent.interactionPolicy.question === "auto" ? "manual" : "auto";
+  current.revision = "external-change";
+  await page.getByRole("button", { name: "刷新 Agent 配置", exact: true }).click();
+  await expect(page.getByText("此 Agent 的配置已在其他位置修改", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存配置", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "保留我的更改", exact: true }).click();
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  expect(writes).toBe(1);
+  expect(current.settings.agents.find((a: { id: string }) => a.id === "pi").interactionPolicy.permission).toBe(nextPolicy);
+  await expect(page.getByRole("button", { name: "保存配置", exact: true })).toBeDisabled();
+  await captureQa(page, `agent-draft-${test.info().project.name}`);
+});
+
+test("first configuration reaches activation and reports an asynchronous failure", async ({ page, request }) => {
+  const live = await (await request.get("/api/runtime")).json();
+  const snapshot = await (await request.get("/api/agents")).json();
+  let settings = settingsSchema.parse({});
+  let version = 0;
+  const agents = snapshot.agents.map((a: { id: string }) => ({ ...a, enabled: false, health: { status: "disabled", processes: 0, restarts: 0, version: null }, operation: null, error: null, pendingChanges: true }));
+  await page.route("**/api/runtime", (route) => route.fulfill({ json: { ...live, engines: live.engines.map((a: object) => ({ ...a, enabled: false, health: { status: "disabled" } })) } }));
+  await page.route("**/api/agents", (route) => route.fulfill({ json: { agents } }));
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() === "PUT") { settings = settingsSchema.parse(route.request().postDataJSON().settings); version++; }
+    return route.fulfill({ json: { settings, revision: String(version), dataDirectory: "/tmp/fixture" } });
+  });
+  await page.route("**/api/agents/pi/actions", (route) => {
+    expect(route.request().postDataJSON().action).toBe("enable");
+    settings.agents.find((a) => a.id === "pi")!.enabled = true;
+    Object.assign(agents.find((a: { id: string }) => a.id === "pi"), { enabled: true, operation: "enable" });
+    return route.fulfill({ status: 202, json: agents[0] });
+  });
+  await page.goto("/tasks");
+  await page.getByRole("link", { name: "配置 Agent", exact: true }).click();
+  await page.getByRole("link", { name: "Pi", exact: true }).click();
+  await page.getByRole("button", { name: "添加模型连接", exact: true }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("资源标识").fill("new-provider");
+  await dialog.getByLabel("Base URL").fill("https://example.test/v1");
+  await dialog.getByLabel("API Key").fill("secret-stays-in-form");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("new-model");
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole("link", { name: "返回 Pi 配置", exact: true }).click();
+  await page.getByRole("checkbox", { name: "new-provider new-model", exact: true }).check();
+  const stored = await page.evaluate(() => JSON.stringify(sessionStorage));
+  expect(stored).not.toContain("secret-stays-in-form");
+  await page.getByRole("button", { name: "保存并启用", exact: true }).click();
+  await expect(page.getByRole("button", { name: "处理中", exact: true })).toBeDisabled();
+  Object.assign(agents.find((a: { id: string }) => a.id === "pi"), { operation: null, error: "模型服务拒绝连接" });
+  await page.getByRole("button", { name: "刷新 Agent 配置", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("模型服务拒绝连接");
+  await expect(page.getByRole("button", { name: "应用配置", exact: true })).toBeEnabled();
+  await captureQa(page, `agent-activation-failed-${test.info().project.name}`);
 });
 
 test("model search filters, handles no matches and selects with keyboard", async ({

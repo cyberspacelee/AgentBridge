@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { readConfig } from "../src/config.js";
+import { SettingsManager } from "../src/settings.js";
+import { agentIds } from "../shared/settings.js";
 import { Store } from "../src/storage/sqlite.js";
 import { SessionRuntime } from "../src/runtime/sessions.js";
 import { createServer } from "../src/gateway/server.js";
@@ -139,11 +141,48 @@ const config = readConfig([], {
   AGENT_STORAGE: "memory",
   AGENT_DATA_DIR: directory,
 });
+const manager = new SettingsManager(config),
+  initial = manager.view();
+manager.save({
+  revision: initial.revision,
+  settings: {
+    ...initial.settings,
+    defaultAgent: "pi",
+    providers: agentIds.flatMap((id) =>
+      ["primary", "secondary"].map((provider) => ({
+        id: `${id}-${provider}`,
+        baseUrl: "http://127.0.0.1:9/v1",
+        api: id === "codex" ? "openai-responses" : "openai-completions",
+        models: [{ id: "fast" }, { id: "quality" }],
+      })),
+    ),
+    agents: initial.settings.agents.map((a) => ({
+      ...a,
+      enabled: true,
+      models: ["primary", "secondary"].flatMap((provider) =>
+        ["fast", "quality"].map((modelID) => ({
+          providerID: `${a.id}-${provider}`,
+          modelID,
+        })),
+      ),
+      defaultModel: { providerID: `${a.id}-primary`, modelID: "fast" },
+      interactionPolicy: { permission: "auto", question: "auto" },
+    })),
+  },
+});
+await writeFile(
+  path.join(directory, "SKILL.md"),
+  "---\nname: fixture\ndescription: Browser test skill\n---\n",
+);
 const runtime = new SessionRuntime(
   new Store(":memory:"),
   new BrowserEngine("pi"),
   config,
-  [new BrowserEngine("opencode")],
+  [
+    new BrowserEngine("opencode"),
+    new BrowserEngine("codex"),
+    new BrowserEngine("grok"),
+  ],
 );
 await runtime.start();
 const server = createServer(runtime);

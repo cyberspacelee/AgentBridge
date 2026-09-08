@@ -116,6 +116,7 @@ export function Task() {
   const detail = query.data?.detail
   const selected =
     detail?.runs.find((r) => r.id === params.get("run")) ?? detail?.runs.at(-1)
+  const runFilter = detail?.runs.find((r) => r.id === params.get("run"))?.id
   const tab = [
     "execution",
     "artifacts",
@@ -127,12 +128,14 @@ export function Task() {
   const pending =
     detail?.interactions.filter(
       (i) =>
-        i.runId === selected?.id && ["pending", "replying"].includes(i.state)
+        (!runFilter || i.runId === runFilter) &&
+        ["pending", "replying"].includes(i.state)
     ) ?? []
   const change = (key: string, value: string) =>
     setParams((previous) => {
       const next = new URLSearchParams(previous)
-      next.set(key, value)
+      if (value) next.set(key, value)
+      else next.delete(key)
       return next
     })
   async function confirm() {
@@ -235,16 +238,19 @@ export function Task() {
               >
                 <div className="task-navigation">
                   <Choice
-                    label="执行轮次"
-                    value={selected?.id ?? ""}
-                    options={detail.runs.map((r) => ({
-                      value: r.id,
-                      label: `第 ${r.sequence} 轮 · ${labels[r.state]}`,
-                    }))}
+                    label="执行筛选"
+                    value={runFilter ?? ""}
+                    options={[
+                      { value: "", label: "完整对话" },
+                      ...detail.runs.map((r) => ({
+                        value: r.id,
+                        label: `执行 #${r.sequence} · ${labels[r.state]}`,
+                      })),
+                    ]}
                     onChange={(v) => change("run", v)}
                   />
                   <TabsList variant="line" className="max-w-full">
-                    <TabsTrigger value="execution">执行记录</TabsTrigger>
+                    <TabsTrigger value="execution">对话</TabsTrigger>
                     <TabsTrigger value="artifacts">交付物</TabsTrigger>
                     <TabsTrigger value="interactions" aria-label="交互">
                       交互{pending.length ? ` (${pending.length})` : ""}
@@ -254,19 +260,20 @@ export function Task() {
                 </div>
                 <TabsContent value="execution" data-execution>
                   <Execution
-                    key={selected?.id}
+                    positionKey={runFilter ?? id}
+                    runs={runFilter ? [] : detail.runs}
                     positions={positions}
                     messages={detail.messages.filter(
-                      (m) => m.runId === selected?.id
+                      (m) => !runFilter || m.runId === runFilter
                     )}
-                    run={selected}
+                    run={runFilter ? selected : undefined}
                     focused={focused}
                     onFocusChange={() => setFocused((value) => !value)}
                   >
                     {!!pending.length && (
                       <section
                         className="pending-interactions"
-                        aria-label="本轮待处理交互"
+                        aria-label="待处理交互"
                       >
                         <h2 className="text-sm font-semibold">
                           等待处理 · {pending.length}
@@ -280,14 +287,15 @@ export function Task() {
                         ))}
                       </section>
                     )}
-                    {!!detail.artifacts.filter((a) => a.runId === selected?.id)
-                      .length && (
+                    {!!detail.artifacts.filter(
+                      (a) => !runFilter || a.runId === runFilter
+                    ).length && (
                       <Button
                         variant="link"
                         onClick={() => change("tab", "artifacts")}
                       >
                         <FileText data-icon="inline-start" />
-                        查看本轮交付物
+                        查看交付物
                       </Button>
                     )}
                   </Execution>
@@ -309,9 +317,9 @@ export function Task() {
                           ? "引擎尚未就绪"
                           : undefined
                     }
-                    run={selected}
-                    onAccepted={(runId) => {
-                      change("run", runId)
+                    run={detail.runs.at(-1)}
+                    onAccepted={() => {
+                      change("run", "")
                       query.reload()
                     }}
                   />
@@ -319,14 +327,14 @@ export function Task() {
                 <TabsContent value="artifacts">
                   <Artifacts
                     artifacts={detail.artifacts.filter(
-                      (a) => a.runId === selected?.id
+                      (a) => !runFilter || a.runId === runFilter
                     )}
                   />
                 </TabsContent>
                 <TabsContent value="interactions">
                   <div className="list-body divide-y">
                     {detail.interactions
-                      .filter((i) => i.runId === selected?.id)
+                      .filter((i) => !runFilter || i.runId === runFilter)
                       .map((i) => (
                         <InteractionRow
                           key={i.id}
@@ -335,8 +343,8 @@ export function Task() {
                         />
                       ))}
                     {!detail.interactions.some(
-                      (i) => i.runId === selected?.id
-                    ) && <Blank>本轮没有交互请求</Blank>}
+                      (i) => !runFilter || i.runId === runFilter
+                    ) && <Blank>没有交互请求</Blank>}
                   </div>
                 </TabsContent>
                 <TabsContent value="diagnostics" data-diagnostics>
@@ -355,7 +363,7 @@ export function Task() {
                 <dd className="font-mono">{detail.task.directory}</dd>
                 <dt>引擎</dt>
                 <dd>{detail.task.engineId}</dd>
-                <dt>模型</dt>
+                <dt>{runFilter ? "执行模型" : "最近执行模型"}</dt>
                 <dd>
                   {selected?.model
                     ? `${selected.model.providerID} / ${selected.model.modelID}`
@@ -378,7 +386,11 @@ export function Task() {
               </dl>
               {selected && (
                 <>
-                  <h2 className="mt-8">本轮用量</h2>
+                  <h2 className="mt-8">
+                    {runFilter
+                      ? `执行 #${selected.sequence} 用量`
+                      : `最近执行 #${selected.sequence} 用量`}
+                  </h2>
                   <dl className="metadata">
                     <dt>接收时间</dt>
                     <dd>{date(selected.acceptedAt)}</dd>
@@ -444,7 +456,7 @@ export function Task() {
               <dd className="font-mono">{detail?.task.directory}</dd>
               <dt>引擎</dt>
               <dd>{detail?.task.engineId}</dd>
-              <dt>模型</dt>
+              <dt>{runFilter ? "执行模型" : "最近执行模型"}</dt>
               <dd>
                 {selected?.model
                   ? `${selected.model.providerID} / ${selected.model.modelID}`
@@ -459,7 +471,7 @@ export function Task() {
                 {number(selected?.usage?.input)} /{" "}
                 {number(selected?.usage?.output)}
               </dd>
-              <dt>本轮接收时间</dt>
+              <dt>{runFilter ? "所选执行接收时间" : "最近执行接收时间"}</dt>
               <dd>{date(selected?.acceptedAt)}</dd>
               <dt>费用 (USD)</dt>
               <dd>{number(selected?.usage?.costUsd)}</dd>
@@ -473,6 +485,8 @@ export function Task() {
 
 function Execution({
   messages,
+  positionKey,
+  runs,
   run,
   children,
   positions,
@@ -480,13 +494,15 @@ function Execution({
   onFocusChange,
 }: {
   messages: Message[]
+  positionKey: string
+  runs: Run[]
   run?: Run
   children?: ReactNode
   positions: Map<string, { top: number; follow: boolean }>
   focused: boolean
   onFocusChange: () => void
 }) {
-  const runId = run?.id
+  const runId = positionKey
   const [follow, setFollow] = useState(true)
   const [atBottom, setAtBottom] = useState(
     () => positions.get(runId ?? "")?.follow ?? true
@@ -533,7 +549,9 @@ function Execution({
     <div className="execution-view">
       <div className="execution-controls">
         <div className="execution-context">
-          <h2 className="text-sm font-semibold">执行消息</h2>
+          <h2 className="text-sm font-semibold">
+            {run ? `执行 #${run.sequence}` : "完整对话"}
+          </h2>
           <span role="status">{run && <Status state={run.state} />}</span>
           {run && (
             <span
@@ -579,12 +597,59 @@ function Execution({
             "aria-label": "执行消息",
           }}
         >
-          {messages.map((message) => (
-            <AgentMessage key={message.id} message={message} />
-          ))}
+          {messages.map((message, index) => {
+            const execution = runs.find((item) => item.id === message.runId)
+            return (
+              <div key={message.id}>
+                {execution && messages[index - 1]?.runId !== message.runId && (
+                  <>
+                    <div className="run-divider">
+                      <span>执行 #{execution.sequence}</span>
+                      <Status state={execution.state} />
+                      <ElapsedTime
+                        start={execution.startedAt}
+                        end={execution.finishedAt}
+                        active={execution.state === "running"}
+                      />
+                    </div>
+                    {execution.error && (
+                      <Failure
+                        error={
+                          new Error(
+                            `执行 #${execution.sequence}：${execution.error.message}`
+                          )
+                        }
+                      />
+                    )}
+                  </>
+                )}
+                <AgentMessage message={message} />
+              </div>
+            )
+          })}
           {!messages.length && (
-            <Blank>{run?.state === "queued" ? "等待执行" : "暂无消息"}</Blank>
+            <Blank>
+              {(run ?? runs.at(-1))?.state === "queued"
+                ? "等待执行"
+                : "暂无消息"}
+            </Blank>
           )}
+          {runs
+            .filter(
+              (execution) =>
+                execution.error &&
+                !messages.some((message) => message.runId === execution.id)
+            )
+            .map((execution) => (
+              <Failure
+                key={execution.id}
+                error={
+                  new Error(
+                    `执行 #${execution.sequence}：${execution.error!.message}`
+                  )
+                }
+              />
+            ))}
           {children}
         </ScrollArea>
         {!atBottom && (
@@ -634,7 +699,6 @@ function FollowUp({
     try {
       const input = promptSchema.parse({
         parts: [{ type: "text", text }],
-        ...(run?.model ? { model: run.model } : {}),
       })
       const result = await submit(input, sessionId)
       setText("")
@@ -1041,7 +1105,7 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
           </TableBody>
         </Table>
       ) : (
-        <Blank>本轮暂无交付物</Blank>
+        <Blank>暂无交付物</Blank>
       )}
       <Failure error={downloadError} />
       <Dialog
@@ -1148,7 +1212,7 @@ function Diagnostics({ run, revision }: { run: Run; revision: number }) {
             ))}
           </section>
         ) : (
-          <Blank>本轮暂无错误日志</Blank>
+          <Blank>暂无错误日志</Blank>
         )}
       </div>
     </ScrollArea>

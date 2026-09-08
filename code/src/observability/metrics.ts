@@ -190,7 +190,7 @@ export class Telemetry {
     this.queued.set(sample.queueDepth);
     this.ready.set(
       this.runtime.adapters.some(
-        (adapter) => adapter.health().status === "ready",
+        (adapter) => this.runtime.agentHealth(adapter.id).status === "ready",
       )
         ? 1
         : 0,
@@ -267,11 +267,10 @@ export class Telemetry {
       capturedAt: new Date().toISOString(),
       instanceId: this.runtime.store.instanceId,
       engine: engine || null,
-      health:
-        (engine
-          ? this.runtime.adapters.find((adapter) => adapter.id === engine)
-          : this.runtime.adapter
-        )?.health() ?? null,
+      health: this.runtime.adapters.some((adapter) => adapter.id === engine)
+        ? this.runtime.agentHealth(engine)
+        : null,
+      agents: this.runtime.agentViews().filter((agent) => !engine || agent.id === engine),
       limits: this.runtime.config.limits,
       completed,
       failed,

@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { createServer as createPortReservation } from "node:net";
 import { mkdir } from "node:fs/promises";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -25,7 +26,11 @@ import { engineError } from "../../errors.js";
 import { within } from "../../async.js";
 import { startProcess, stopProcess, processDiagnostic } from "../process.js";
 import { toolInstructions } from "../tool-instructions.js";
-import { opencodeEnvironment, diagnosticSecrets } from "../../settings.js";
+import {
+  opencodeEnvironment,
+  diagnosticSecrets,
+  configuredModels,
+} from "../../settings.js";
 
 const object = (v: unknown) => z.record(z.string(), z.unknown()).parse(v);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -59,6 +64,7 @@ export class OpenCodeAdapter implements EngineAdapter {
   private streamJob?: Promise<void>;
   private generation = 0;
   private password: string;
+  private endpoint: string;
   private state: EngineHealth = {
     status: "starting",
     version: null,
@@ -67,43 +73,20 @@ export class OpenCodeAdapter implements EngineAdapter {
     restarts: 0,
   };
   constructor(private config: Config) {
-    this.password =
-      config.opencode.password ||
-      (config.opencode.managed ? randomBytes(24).toString("hex") : "");
+    this.endpoint = config.opencode.url;
+    this.password = config.opencode.password || randomBytes(24).toString("hex");
   }
   health() {
     return { ...this.state };
   }
   async models() {
-    const catalog = z
-      .object({
-        connected: z.array(z.string()),
-        all: z.array(
-          z.object({
-            id: z.string(),
-            models: z.record(
-              z.string(),
-              z.object({ id: z.string(), name: z.string() }),
-            ),
-          }),
-        ),
-      })
-      .parse(await this.request("/provider"));
-    return catalog.all
-      .filter((provider) => catalog.connected.includes(provider.id))
-      .flatMap((provider) =>
-        Object.values(provider.models).map((model) => ({
-          providerID: provider.id,
-          modelID: model.id,
-          name: model.name,
-        })),
-      );
+    return configuredModels(this.config, this.id);
   }
   unavailableSessions() {
     return this.state.status === "ready" ? [] : [...this.sessions.keys()];
   }
   private url(route: string, directory?: string) {
-    const url = new URL(route, this.config.opencode.url);
+    const url = new URL(route, this.endpoint);
     if (directory) url.searchParams.set("directory", directory);
     return url;
   }
@@ -157,14 +140,28 @@ export class OpenCodeAdapter implements EngineAdapter {
     this.stream = new AbortController();
     this.state.status = "starting";
     if (this.generation) this.state.restarts++;
-    if (this.config.opencode.managed) {
+    {
       const url = new URL(this.config.opencode.url);
+      if (url.port === "0") {
+        const reservation = createPortReservation();
+        await new Promise<void>((resolve, reject) => {
+          reservation.once("error", reject);
+          reservation.listen(0, url.hostname, resolve);
+        });
+        const address = reservation.address();
+        if (!address || typeof address === "string")
+          throw engineError("Could not allocate OpenCode port");
+        url.port = String(address.port);
+        await new Promise<void>((resolve, reject) =>
+          reservation.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+      this.endpoint = url.href;
       this.child = startProcess(
         this.config.opencode.command,
         ["serve", "--hostname", url.hostname, "--port", url.port || "4096"],
         this.config.dataDirectory,
         {
-          ...process.env,
           ...opencodeEnvironment(this.config),
           OPENCODE_SERVER_USERNAME: this.config.opencode.username,
           OPENCODE_SERVER_PASSWORD: this.password,
@@ -234,7 +231,7 @@ export class OpenCodeAdapter implements EngineAdapter {
         status: "ready",
         version: str(health.version),
         message: null,
-        processes: this.config.opencode.managed ? 1 : 0,
+        processes: 1,
       };
       this.streamJob = this.consume(response).catch(() => {
         if (!this.stream.signal.aborted) {
@@ -335,7 +332,7 @@ export class OpenCodeAdapter implements EngineAdapter {
       output: num(tokens.output),
       cacheRead: num(cache.read),
       cacheWrite: num(cache.write),
-      costUsd: num(info.cost),
+      costUsd: null,
       source: "reported",
     };
   }
@@ -620,10 +617,7 @@ export class OpenCodeAdapter implements EngineAdapter {
     throw engineError("OpenCode did not confirm idle after cancellation");
   }
   async forceStop() {
-    if (!this.child)
-      throw engineError(
-        "Cannot terminate an externally managed OpenCode process",
-      );
+    if (!this.child) throw engineError("OpenCode process is not running");
     const affected = [...this.sessions.keys()];
     this.stream.abort();
     await stopProcess(this.child, this.config.limits.abortTimeoutMs);
@@ -646,7 +640,7 @@ export class OpenCodeAdapter implements EngineAdapter {
   async disposeSession(sessionId: string) {
     const native = this.sessions.get(sessionId);
     if (!native) return;
-    if (this.state.status === "ready" || !this.config.opencode.managed)
+    if (this.state.status === "ready")
       await this.request(
         `/session/${encodeURIComponent(native.nativeId)}`,
         "DELETE",

@@ -159,6 +159,7 @@ export function useEvents() {
       "question.asked",
       "interaction.updated",
       "artifact.updated",
+      "agents.updated",
     ])
       source.addEventListener(event, invalidate)
     const polling = setInterval(invalidate, 5000)

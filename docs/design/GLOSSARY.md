@@ -9,13 +9,16 @@
 | 网关 | Gateway | 提供协议、任务控制、数据和观测的 AgentBridge 服务 | 模型推理引擎 |
 | 网关实例 | GatewayInstance / instanceId | 一次网关进程生命周期；重启生成新 ID | 持久化数据集或引擎进程 |
 | 存储标识 | StoreIdentity / storeId | 一个数据目录的身份；重新初始化数据目录才变化 | instanceId |
-| Agent 引擎 | AgentEngine / engineId | 带工具调用与执行循环的 Agent harness，例如 opencode、pi | provider、LLM model |
+| Agent 引擎 | AgentEngine / engineId | 带工具调用与执行循环的 Agent harness，包括 opencode、pi、codex、grok | provider、LLM model |
 | 引擎适配器 | EngineAdapter | 对外实现统一契约，对内处理原生协议 | 路由控制器、工具业务 |
 | 引擎进程 | EngineProcess / processGeneration | 适配器拥有的服务或 RPC 子进程及其代次 | GatewayInstance |
 | 原生会话 | NativeSession / nativeSessionId | 引擎内部的上下文标识 | 网关 sessionId |
 | 会话 | Session / sessionId | 固定工作目录、引擎绑定与交互策略的一组连续执行 | 一次 HTTP 请求、一次 Run |
 | 任务 | Task / TaskView | Session 的用户视图，taskId 等于 sessionId | 独立可写 Task 聚合 |
-| 执行轮次 | Run / runId | 一次已接受的用户要求，包含排队、执行及唯一终态 | 模型的一次调用或 tool step |
+| 执行 | Run / runId | 一次已接受的用户要求，包含排队、执行及唯一终态 | 模型的一次调用或 tool step |
+| 原生轮次 | Turn | Codex 等原生协议的执行标识，只在适配器内使用 | 独立网关实体；一次模型采样 |
+| 管理配置 | Settings / settings.json | Agent 与共享资源的唯一配置源，带内容修订 | 原生生成文件 |
+| 配置修订 | configRevision | Run 接收时实际应用的 Agent 配置内容摘要 | 数据库事件 revision |
 | 消息 | Message / messageId | 属于一个 Run 的用户输入或 Agent 输出 | SSE 事件 |
 | 消息片段 | MessagePart / partId | 消息内的文本、工具展示或步骤结束片段 | Run 的唯一终态 |
 | 工具调用 | ToolCall / toolCallId | 一次实际工具执行，包含输入、输出、状态与时间 | Agent 输出中提到某工具 |
@@ -51,7 +54,7 @@
 | InteractionState | pending / replying / resolved / expired | 待认领、回复中、已确认、执行已结束 |
 | ToolCallState | pending / running / completed / failed / cancelled / interrupted | 工具调用自身状态；不能倒推 Run 必然成功或失败 |
 | ValidationStatus | not_checked / passed / failed / unavailable | 检查状态；检查范围必须同时给出 |
-| EngineHealth | starting / ready / degraded / unavailable / stopping | 引擎接收新会话的运行条件 |
+| EngineHealth | starting / ready / degraded / unavailable / stopping / disabled | 引擎接收新会话的运行条件 |
 
 固定中文文案：completed 为“执行完成”，failed 为“执行失败”，timed_out 为“已超时”，cancelled 为“已取消”。业务验证 passed 才能针对其明确检查范围显示“检查通过”，不能把 completed 翻译成“验收通过”。
 

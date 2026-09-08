@@ -32,7 +32,24 @@ import {
   errorDetail,
   GatewayError,
 } from "../errors.js";
-import { diagnosticSecrets } from "../settings.js";
+import {
+  diagnosticSecrets,
+  SettingsManager,
+  readSettings,
+  agentConfiguration,
+  agentRevision,
+  agentDirectory,
+  agentConfigFile,
+  applyAgentConfiguration,
+  configuredModels,
+  effectiveSettings,
+} from "../settings.js";
+import {
+  agentIdSchema,
+  type AgentId,
+  type AgentView,
+} from "../../shared/settings.js";
+import { setTimeout as delay } from "node:timers/promises";
 import { Store } from "../storage/sqlite.js";
 import {
   discoverFiles,
@@ -50,6 +67,13 @@ interface Execution {
 }
 
 export class SessionRuntime {
+  readonly settings: SettingsManager;
+  private agentOperations = new Map<
+    string,
+    { action: AgentView["operation"]; promise: Promise<void> }
+  >();
+  private appliedRevisions = new Map<string, string>();
+  private agentErrors = new Map<string, string>();
   private active = new Map<string, Execution>();
   private submissions = new Map<string, Promise<AcceptedRun>>();
   private deleting = new Map<string, Promise<void>>();
@@ -80,12 +104,218 @@ export class SessionRuntime {
     readonly adapter: EngineAdapter,
     readonly config: Config,
     private additionalAdapters: EngineAdapter[] = [],
-  ) {}
+  ) {
+    this.settings = new SettingsManager(config);
+  }
+
+  agentEnabled(id: string) {
+    return (
+      agentConfiguration(this.config, id, readSettings(this.config))?.enabled ??
+      true
+    );
+  }
+  agentHealth(id: string) {
+    const health = this.engine(id).health();
+    if (this.agentOperations.has(id))
+      return { ...health, status: "stopping" as const };
+    if (!this.agentEnabled(id))
+      return { ...health, status: "disabled" as const };
+    if (this.agentErrors.has(id))
+      return {
+        ...health,
+        status: "unavailable" as const,
+        message: this.agentErrors.get(id)!,
+      };
+    return health;
+  }
+  agentViews(): AgentView[] {
+    const settings = readSettings(this.config);
+    return settings.agents
+      .filter((a) => this.adapters.some((adapter) => adapter.id === a.id))
+      .map((a) => {
+        const savedRevision = agentRevision(this.config, a.id, settings);
+        const appliedRevision = this.appliedRevisions.get(a.id) ?? null;
+        const runs = this.store
+          .list("runs")
+          .filter(
+            (r) => this.store.get("sessions", r.sessionId)?.engineId === a.id,
+          );
+        return {
+          id: a.id,
+          enabled: a.enabled,
+          health: this.agentHealth(a.id),
+          directory: agentDirectory(this.config, a.id),
+          configFile: agentConfigFile(this.config, a.id),
+          savedRevision,
+          appliedRevision,
+          pendingChanges: savedRevision !== appliedRevision,
+          operation: this.agentOperations.get(a.id)?.action ?? null,
+          error: this.agentErrors.get(a.id) ?? null,
+          activeRuns: runs.filter(
+            (r) => r.state === "running" || r.state === "stopping",
+          ).length,
+          queuedRuns: runs.filter((r) => r.state === "queued").length,
+          models: configuredModels(this.config, a.id),
+          capabilities: this.engine(a.id).capabilities?.() ?? {
+            permissions: true,
+            questions: true,
+            recovery: true,
+          },
+        };
+      });
+  }
+  private publishAgents() {
+    this.store.transaction(() =>
+      this.store.emit({ type: "agents.updated", data: this.agentViews() }),
+    );
+  }
+  saveSettings(input: unknown) {
+    if (this.closed || this.agentOperations.size)
+      throw new GatewayError(
+        "CONFLICT",
+        "Wait for Agent operations before saving configuration",
+        409,
+      );
+    const before = readSettings(this.config);
+    const view = this.settings.save(input);
+    for (const agent of view.settings.agents)
+      if (
+        before.agents.find((a) => a.id === agent.id)?.enabled !==
+          agent.enabled &&
+        this.adapters.some((a) => a.id === agent.id)
+      )
+        void this.agentAction(
+          agent.id,
+          agent.enabled ? "enable" : "disable",
+        ).catch(() => {});
+    this.publishAgents();
+    return view;
+  }
+  async agentAction(id: AgentId, action: NonNullable<AgentView["operation"]>) {
+    if (this.closed)
+      throw new GatewayError(
+        "SERVICE_UNAVAILABLE",
+        "Gateway is shutting down",
+        503,
+      );
+    const adapter = this.engine(id);
+    if (this.agentOperations.has(id))
+      throw new GatewayError(
+        "CONFLICT",
+        "Agent operation is already in progress",
+        409,
+      );
+    const view = this.settings.view();
+    if (action === "apply" && !this.agentEnabled(id))
+      throw new GatewayError(
+        "CONFLICT",
+        "Enable the Agent to apply its configuration",
+        409,
+      );
+    if (action !== "apply") {
+      view.settings.agents.find((a) => a.id === id)!.enabled =
+        action === "enable";
+      this.settings.save({ settings: view.settings, revision: view.revision });
+    }
+    this.agentErrors.delete(id);
+    let resolve!: () => void;
+    const gate = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.agentOperations.set(id, { action, promise: gate });
+    try {
+      this.publishAgents();
+    } catch (error) {
+      this.agentOperations.delete(id);
+      resolve();
+      throw error;
+    }
+    const work = async () => {
+      try {
+        for (const session of this.store
+          .list("sessions")
+          .filter((s) => s.engineId === id)) {
+          for (const run of this.runs(session.id).filter(
+            (r) => r.state === "queued",
+          ))
+            await this.stopRun(run.id, "user");
+          if (action === "stop")
+            for (const run of this.runs(session.id).filter(
+              (r) => r.state === "running" || r.state === "stopping",
+            ))
+              await this.stopRun(run.id, "user");
+        }
+        while (
+          this.creating ||
+          this.recovery.get(id)?.pending ||
+          [
+            ...this.active.keys(),
+            ...this.repairs.keys(),
+            ...this.isolations.keys(),
+          ].some((key) => this.store.get("sessions", key)?.engineId === id)
+        ) {
+          if (this.closed) return;
+          await delay(50);
+        }
+        if (this.closed) return;
+        await within(adapter.stop(), this.config.limits.abortTimeoutMs);
+        this.store.transaction(() => {
+          for (const session of this.store
+            .list("sessions")
+            .filter(
+              (s) => s.engineId === id && s.availability !== "deleting",
+            )) {
+            this.store.put("sessions", {
+              ...session,
+              availability: "unavailable",
+              version: session.version + 1,
+              updatedAt: now(),
+            });
+            this.repairAttempts.delete(session.id);
+            this.publishSession(session.id);
+          }
+        });
+        this.appliedRevisions.delete(id);
+        this.recovery.delete(id);
+        if (this.agentEnabled(id)) {
+          const appliedRevision = applyAgentConfiguration(this.config, id);
+          await within(adapter.start(), this.config.limits.startupTimeoutMs);
+          this.appliedRevisions.set(id, appliedRevision);
+        }
+      } catch (error) {
+        this.agentErrors.set(
+          id,
+          errorDetail(error, diagnosticSecrets(this.config)),
+        );
+        await adapter.stop().catch(() => {});
+      } finally {
+        this.agentOperations.delete(id);
+        try {
+          this.publishAgents();
+        } finally {
+          resolve();
+        }
+      }
+    };
+    void work().catch((error) =>
+      this.agentErrors.set(
+        id,
+        errorDetail(error, diagnosticSecrets(this.config)),
+      ),
+    );
+    return this.agentViews().find((a) => a.id === id)!;
+  }
 
   get adapters() {
     return [this.adapter, ...this.additionalAdapters];
   }
-  engine(id = this.adapter.id) {
+  engine(
+    id: string = this.adapters.some(
+      (a) => a.id === readSettings(this.config).defaultAgent,
+    )
+      ? readSettings(this.config).defaultAgent
+      : this.adapter.id,
+  ) {
     const adapter = this.adapters.find((adapter) => adapter.id === id);
     if (!adapter)
       throw new GatewayError("VALIDATION_ERROR", "Unknown engine", 400);
@@ -131,8 +361,14 @@ export class SessionRuntime {
     });
     await Promise.all(
       this.adapters.map(async (adapter) => {
+        if (!this.agentEnabled(adapter.id)) return;
         try {
+          const appliedRevision = agentIdSchema.safeParse(adapter.id).success
+            ? applyAgentConfiguration(this.config, adapter.id as AgentId)
+            : null;
           await within(adapter.start(), this.config.limits.startupTimeoutMs);
+          if (appliedRevision)
+            this.appliedRevisions.set(adapter.id, appliedRevision);
         } catch (error) {
           this.log(
             "error",
@@ -222,6 +458,16 @@ export class SessionRuntime {
       });
   }
   private ensureAdmission(adapter: EngineAdapter) {
+    if (
+      !this.agentEnabled(adapter.id) ||
+      this.agentOperations.has(adapter.id) ||
+      this.agentErrors.has(adapter.id)
+    )
+      throw new GatewayError(
+        "SERVICE_UNAVAILABLE",
+        "Agent is disabled or applying configuration",
+        503,
+      );
     if (this.closed || !this.store.healthy)
       throw new GatewayError(
         "SERVICE_UNAVAILABLE",
@@ -264,10 +510,11 @@ export class SessionRuntime {
         directory,
         title: input.title?.trim() || "Untitled task",
         engineId: adapter.id,
-        interactionPolicy: input.interactionPolicy ?? {
-          permission: "auto",
-          question: "auto",
-        },
+        interactionPolicy: input.interactionPolicy ??
+          agentConfiguration(this.config, adapter.id)?.interactionPolicy ?? {
+            permission: "auto",
+            question: "auto",
+          },
         availability: "ready",
         createdAt: now(),
         updatedAt: now(),
@@ -438,7 +685,20 @@ export class SessionRuntime {
         "Session queue capacity reached",
         503,
       );
+    const previousModel = runs.at(-1)?.model;
+    const availableModels = configuredModels(this.config, session.engineId);
+    const inheritedModel =
+      previousModel &&
+      (!agentIdSchema.safeParse(session.engineId).success ||
+        availableModels.some(
+          (m) =>
+            m.providerID === previousModel.providerID &&
+            m.modelID === previousModel.modelID,
+        ))
+        ? previousModel
+        : null;
     const run: Run = {
+      configRevision: this.appliedRevisions.get(session.engineId) ?? null,
       id: randomUUID(),
       sessionId,
       submissionId,
@@ -446,7 +706,8 @@ export class SessionRuntime {
       inputParts: input.parts,
       model:
         input.model ??
-        runs.at(-1)?.model ??
+        inheritedModel ??
+        agentConfiguration(this.config, session.engineId)?.defaultModel ??
         (session.engineId === this.adapter.id ? this.config.model : null),
       state: "queued",
       acceptedAt: now(),
@@ -460,6 +721,20 @@ export class SessionRuntime {
       usage: null,
       traceId: randomUUID().replaceAll("-", ""),
     };
+    if (
+      agentIdSchema.safeParse(session.engineId).success &&
+      (!run.model ||
+        !configuredModels(this.config, session.engineId).some(
+          (m) =>
+            m.providerID === run.model!.providerID &&
+            m.modelID === run.model!.modelID,
+        ))
+    )
+      throw new GatewayError(
+        "VALIDATION_ERROR",
+        "Select a model configured for this agent",
+        400,
+      );
     this.store.transaction(() => {
       this.store.put("runs", run);
       this.store.emit({
@@ -485,6 +760,12 @@ export class SessionRuntime {
     if (this.closed || !this.store.healthy) return;
     try {
       for (const adapter of this.adapters) {
+        if (
+          !this.agentEnabled(adapter.id) ||
+          this.agentOperations.has(adapter.id) ||
+          this.agentErrors.has(adapter.id)
+        )
+          continue;
         const recovery = this.recovery.get(adapter.id) ?? {
           attempts: 0,
           at: 0,
@@ -527,7 +808,27 @@ export class SessionRuntime {
           );
           recovery.pending = adapter
             .stop()
-            .then(() => adapter.start())
+            .then(async () => {
+              if (
+                this.closed ||
+                !this.agentEnabled(adapter.id) ||
+                this.agentOperations.has(adapter.id)
+              )
+                return;
+              await adapter.start();
+              if (
+                agentIdSchema.safeParse(adapter.id).success &&
+                !this.appliedRevisions.has(adapter.id)
+              )
+                this.appliedRevisions.set(
+                  adapter.id,
+                  agentRevision(
+                    this.config,
+                    adapter.id,
+                    effectiveSettings(this.config, adapter.id),
+                  ),
+                );
+            })
             .catch((error) =>
               this.log(
                 "error",
@@ -646,6 +947,8 @@ export class SessionRuntime {
         }
         if (
           run.state !== "queued" ||
+          !this.agentEnabled(this.session(run.sessionId).engineId) ||
+          this.agentOperations.has(this.session(run.sessionId).engineId) ||
           this.active.size >= this.config.limits.maxConcurrentRuns ||
           this.active.has(run.sessionId)
         )
@@ -1048,6 +1351,13 @@ export class SessionRuntime {
   ): Promise<void> {
     const run = this.run(runId);
     if (isTerminal(run.state)) return Promise.resolve();
+    if (run.state === "queued") {
+      this.store.transaction(() => {
+        this.store.put("runs", { ...run, stopReason: reason });
+        this.finish(runId, reason === "timeout" ? "timed_out" : "cancelled");
+      });
+      return Promise.resolve();
+    }
     const isolation = this.isolations.get(run.sessionId);
     if (isolation) return isolation;
     const execution = this.active.get(run.sessionId);
@@ -1281,6 +1591,14 @@ export class SessionRuntime {
     this.closed = true;
     clearInterval(this.tick);
     clearInterval(this.maintenance);
+    await within(
+      Promise.all(
+        [...this.agentOperations.values()].map(
+          (operation) => operation.promise,
+        ),
+      ),
+      this.config.limits.startupTimeoutMs + this.config.limits.abortTimeoutMs,
+    );
     await within(
       Promise.all(
         [...this.recovery.values()].map((recovery) => recovery.pending),

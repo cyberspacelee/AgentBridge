@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { modelSchema } from "../shared/contracts.js";
 import { providerSchema } from "../shared/settings.js";
+import { agentIdSchema } from "../shared/settings.js";
 
 export const limitsSchema = z
   .object({
@@ -34,9 +35,9 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
       host: { type: "string" },
     },
   });
-  const engine = z
-    .enum(["opencode", "pi"])
-    .parse(values.engine ?? env.AGENT_ENGINE ?? "opencode");
+  const engine = agentIdSchema.parse(
+    values.engine ?? env.AGENT_ENGINE ?? "opencode",
+  );
   const config = {
     engine,
     host: values.host ?? env.AGENT_HOST ?? "127.0.0.1",
@@ -80,25 +81,23 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
       "Use the available context and proceed with a reasonable default.",
     opencode: {
       command: env.ENGINE_A_COMMAND ?? "opencode",
-      url:
-        env.ENGINE_A_URL ??
-        `http://127.0.0.1:${z.coerce
-          .number()
-          .int()
-          .min(1)
-          .max(65535)
-          .parse(env.ENGINE_A_PORT ?? 4096)}`,
-      managed: !env.ENGINE_A_URL,
+      url: `http://127.0.0.1:${z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(65535)
+        .parse(env.ENGINE_A_PORT ?? 0)}`,
       username: env.ENGINE_A_USERNAME ?? "opencode",
       password: env.ENGINE_A_PASSWORD ?? "",
     },
     pi: {
       command: env.ENGINE_B_COMMAND ?? "pi",
-      configDirectory: env.ENGINE_B_CONFIG_DIR ?? "",
       args: env.ENGINE_B_ARGS
         ? z.array(z.string()).parse(JSON.parse(env.ENGINE_B_ARGS))
         : [],
     },
+    codex: { command: env.CODEX_COMMAND ?? "codex" },
+    grok: { command: env.GROK_COMMAND ?? "grok" },
   };
   if (config.allowedDirectories.some((p) => !path.isAbsolute(p)))
     throw new Error("AGENT_ALLOWED_DIRECTORIES must contain absolute paths");

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentIdSchema } from "./settings.js";
 
 export const runStates = [
   "queued",
@@ -49,7 +50,7 @@ export const policySchema = z
 export type InteractionPolicy = z.infer<typeof policySchema>;
 export const createSessionSchema = z
   .object({
-    engineId: z.enum(["pi", "opencode"]).optional(),
+    engineId: agentIdSchema.optional(),
     directory: z.string().min(1).max(4096),
     title: z.string().max(200).optional(),
     interactionPolicy: policySchema.optional(),
@@ -94,6 +95,7 @@ export interface Session {
   version: number;
 }
 export interface Run {
+  configRevision: string | null;
   id: string;
   sessionId: string;
   submissionId: string;
@@ -248,7 +250,8 @@ export interface Page<T> {
   nextCursor: string | null;
 }
 export interface EngineHealth {
-  status: "starting" | "ready" | "degraded" | "unavailable" | "stopping";
+  status:
+    "starting" | "ready" | "degraded" | "unavailable" | "stopping" | "disabled";
   version: string | null;
   message: string | null;
   processes: number;
@@ -260,6 +263,14 @@ export interface ModelOption extends ModelRef {
 export interface EngineInfo {
   id: string;
   health: EngineHealth;
+  enabled?: boolean;
+  defaultModel?: ModelRef | null;
+  interactionPolicy?: InteractionPolicy;
+  capabilities?: {
+    permissions: boolean;
+    questions: boolean;
+    recovery: boolean;
+  };
 }
 export interface RuntimeInfo {
   instanceId: string;

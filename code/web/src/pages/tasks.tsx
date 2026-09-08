@@ -12,6 +12,7 @@ import {
 import type { ModelOption, Page, TaskSummary } from "../../../shared/contracts"
 import { createTaskSchema } from "../../../shared/contracts"
 import { useGateway } from "@/lib/gateway"
+import { agentNames } from "@/lib/agent-draft"
 import { submit, useQuery } from "@/lib/api"
 import {
   Blank,
@@ -92,6 +93,9 @@ export function Tasks() {
         )
       : query.data?.items
   const navigate = useNavigate()
+  const ready = runtime?.engines.some(
+    (engine) => engine.health.status === "ready"
+  )
   const update = (key: string, value: string) =>
     setParams((previous) => {
       const next = new URLSearchParams(previous)
@@ -106,15 +110,24 @@ export function Tasks() {
         <div>
           <h1>任务工作台</h1>
         </div>
-        <Button
-          onClick={() => setOpen(true)}
-          disabled={
-            !runtime?.engines.some((engine) => engine.health.status === "ready")
-          }
-        >
-          <Plus data-icon="inline-start" />
-          分派任务
-        </Button>
+        {ready ? (
+          <Button
+            onClick={() => setOpen(true)}
+            disabled={
+              !runtime?.engines.some(
+                (engine) => engine.health.status === "ready"
+              )
+            }
+          >
+            <Plus data-icon="inline-start" />
+            分派任务
+          </Button>
+        ) : (
+          <Button render={<Link to="/agents" />}>
+            <Plus data-icon="inline-start" />
+            配置 Agent
+          </Button>
+        )}
       </div>
       <form
         className="toolbar"
@@ -172,6 +185,16 @@ export function Tasks() {
         </IconButton>
       </form>
       <Failure error={query.error} />
+      {runtime && !ready && (
+        <Notice title="暂无可用 Agent">
+          <Link
+            className="text-primary underline underline-offset-4"
+            to="/agents"
+          >
+            配置模型并启用 Agent
+          </Link>
+        </Notice>
+      )}
       <div className="list-body">
         {query.loading ? (
           <div className="flex flex-col gap-4 py-5">
@@ -344,9 +367,19 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error>()
   const [invalid, setInvalid] = useState<Record<string, string>>({})
-  const [manualPermission, setManualPermission] = useState(false)
-  const [manualQuestion, setManualQuestion] = useState(false)
-  const [engineId, setEngineId] = useState(runtime?.engine ?? "pi")
+  const initialEngine =
+    runtime?.engines.find(
+      (item) => item.id === runtime.engine && item.health.status === "ready"
+    ) ?? runtime?.engines.find((item) => item.health.status === "ready")
+  const [manualPermission, setManualPermission] = useState(
+    initialEngine?.interactionPolicy?.permission !== "auto"
+  )
+  const [manualQuestion, setManualQuestion] = useState(
+    initialEngine?.interactionPolicy?.question !== "auto"
+  )
+  const [engineId, setEngineId] = useState(
+    initialEngine?.id ?? runtime?.engine ?? "pi"
+  )
   const [selectedProvider, setSelectedProvider] = useState("")
   const [selectedModel, setSelectedModel] = useState("")
   const engine = runtime?.engines.find((item) => item.id === engineId)
@@ -357,11 +390,17 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
   const providers = [...new Set(models.map((model) => model.providerID))]
   const provider = providers.includes(selectedProvider)
     ? selectedProvider
-    : (providers[0] ?? "")
+    : providers.includes(engine?.defaultModel?.providerID ?? "")
+      ? engine!.defaultModel!.providerID
+      : (providers[0] ?? "")
   const providerModels = models.filter((model) => model.providerID === provider)
   const model = providerModels.some((item) => item.modelID === selectedModel)
     ? selectedModel
-    : (providerModels[0]?.modelID ?? "")
+    : (providerModels.find(
+        (item) => item.modelID === engine?.defaultModel?.modelID
+      )?.modelID ??
+      providerModels[0]?.modelID ??
+      "")
   const canSubmit =
     engine?.health.status === "ready" &&
     !!provider &&
@@ -419,17 +458,19 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
               label="执行引擎"
               value={engineId}
               disabled={busy}
-              options={(runtime?.engines ?? []).map((item) => ({
-                value: item.id,
-                label:
-                  item.id === "pi"
-                    ? "Pi"
-                    : item.id === "opencode"
-                      ? "OpenCode"
-                      : item.id,
-              }))}
+              options={(runtime?.engines ?? [])
+                .filter((item) => item.enabled !== false)
+                .map((item) => ({
+                  value: item.id,
+                  label: agentNames[item.id] ?? item.id,
+                }))}
               onChange={(value) => {
                 setEngineId(value)
+                const policy = runtime?.engines.find(
+                  (item) => item.id === value
+                )?.interactionPolicy
+                setManualPermission(policy?.permission !== "auto")
+                setManualQuestion(policy?.question !== "auto")
                 setSelectedProvider("")
                 setSelectedModel("")
                 setError(undefined)
@@ -450,7 +491,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             <FieldError id="title-error">{invalid.title}</FieldError>
           </Field>
           <Field data-invalid={!!invalid.directory}>
-            <FieldLabel htmlFor="directory">工作目录</FieldLabel>
+            <FieldLabel htmlFor="directory">服务器工作目录</FieldLabel>
             <Input
               id="directory"
               aria-invalid={!!invalid.directory}
@@ -459,7 +500,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
               }
               name="directory"
               required
-              placeholder="D:\test_data\sales"
+              placeholder="服务器上的绝对路径"
             />
             <FieldError id="directory-error">{invalid.directory}</FieldError>
           </Field>
@@ -534,7 +575,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
           <Failure error={catalog.error} />
           {!catalog.loading && !catalog.error && !models.length && (
             <Notice title="此引擎尚未配置可用模型或供应商凭据。">
-              <Link to="/settings">前往配置模型</Link>
+              <Link to={`/agents/${engineId}?tab=models`}>前往配置模型</Link>
             </Notice>
           )}
           {engine && engine.health.status !== "ready" && (
@@ -552,6 +593,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             <Field orientation="horizontal">
               <Switch
                 id="manual-permission"
+                disabled={engine?.capabilities?.permissions === false}
                 checked={manualPermission}
                 onCheckedChange={setManualPermission}
               />
@@ -560,6 +602,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             <Field orientation="horizontal">
               <Switch
                 id="manual-question"
+                disabled={engine?.capabilities?.questions === false}
                 checked={manualQuestion}
                 onCheckedChange={setManualQuestion}
               />

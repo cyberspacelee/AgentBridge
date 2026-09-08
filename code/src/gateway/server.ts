@@ -22,7 +22,8 @@ import { isTerminal } from "../domain/transitions.js";
 import { artifactPath } from "../runtime/artifacts.js";
 import { Telemetry } from "../observability/metrics.js";
 import { evaluationEvent, evaluationMessage } from "./serialization.js";
-import { SettingsManager } from "../settings.js";
+import { agentConfiguration } from "../settings.js";
+import { agentIdSchema, agentActionSchema } from "../../shared/settings.js";
 
 const id = (params: unknown) =>
   z.object({ id: z.string().min(1).max(300) }).parse(params).id;
@@ -62,7 +63,7 @@ export function localLogTimestamp(date = new Date()) {
 
 export function createServer(runtime: SessionRuntime) {
   const { store, config } = runtime;
-  const settings = new SettingsManager(config);
+  const settings = runtime.settings;
   const transport = pino.transport({
     targets: [
       { target: "pino/file", options: { destination: 1 } },
@@ -194,10 +195,12 @@ export function createServer(runtime: SessionRuntime) {
   server.get("/health/ready", async (_r, reply) => {
     const ok =
       store.healthy &&
-      runtime.adapters.some((adapter) => adapter.health().status === "ready");
+      runtime.adapters.some(
+        (adapter) => runtime.agentHealth(adapter.id).status === "ready",
+      );
     return reply
       .code(ok ? 200 : 503)
-      .send({ ok, engine: runtime.adapter.health() });
+      .send({ ok, engine: runtime.agentHealth(runtime.engine().id) });
   });
   server.get("/metrics", async (_r, reply) =>
     reply
@@ -207,11 +210,20 @@ export function createServer(runtime: SessionRuntime) {
   server.get("/api/runtime", async (): Promise<RuntimeInfo> => ({
     instanceId: store.instanceId,
     storeId: store.storeId,
-    engine: runtime.adapter.id,
-    health: runtime.adapter.health(),
+    engine: runtime.engine().id,
+    health: runtime.agentHealth(runtime.engine().id),
     engines: runtime.adapters.map((adapter) => ({
       id: adapter.id,
-      health: adapter.health(),
+      health: runtime.agentHealth(adapter.id),
+      enabled: runtime.agentEnabled(adapter.id),
+      defaultModel: agentConfiguration(config, adapter.id)?.defaultModel,
+      interactionPolicy: agentConfiguration(config, adapter.id)
+        ?.interactionPolicy,
+      capabilities: adapter.capabilities?.() ?? {
+        permissions: true,
+        questions: true,
+        recovery: true,
+      },
     })),
     storage: store.filename === ":memory:" ? "memory" : "sqlite",
     models: config.model ? [config.model] : [],
@@ -230,7 +242,7 @@ export function createServer(runtime: SessionRuntime) {
 
   server.get("/api/engines/:id/models", async (request) => {
     const adapter = runtime.engine(id(request.params));
-    if (adapter.health().status !== "ready")
+    if (runtime.agentHealth(adapter.id).status !== "ready")
       throw new GatewayError(
         "SERVICE_UNAVAILABLE",
         `${adapter.id} engine is not ready`,
@@ -247,9 +259,25 @@ export function createServer(runtime: SessionRuntime) {
     reply.header("Cache-Control", "no-store");
     return settings.view();
   });
-  server.put("/api/settings", async (request) => settings.save(request.body));
-  server.post("/api/settings/pi/packages", async (request) =>
-    settings.packageOperation(request.body),
+  server.put("/api/settings", async (request) =>
+    runtime.saveSettings(request.body),
+  );
+  server.get("/api/agents", async () => ({ agents: runtime.agentViews() }));
+  server.post("/api/agents/:id/actions", async (request, reply) => {
+    const result = await runtime.agentAction(
+      agentIdSchema.parse(id(request.params)),
+      agentActionSchema.parse(request.body).action,
+    );
+    return reply.code(202).send(result);
+  });
+  server.post("/api/providers/:id/test", async (request) =>
+    settings.testProvider(id(request.params), request.body),
+  );
+  server.post("/api/agents/:id/import", async (request) =>
+    settings.importNative(
+      agentIdSchema.parse(id(request.params)),
+      request.body,
+    ),
   );
 
   function page<T extends { id: string }>(
@@ -779,7 +807,8 @@ export function createServer(runtime: SessionRuntime) {
   server.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?")[0]!;
     const appRoute =
-      pathname === "/" || /^\/(tasks|observability|settings)(\/|$)/.test(pathname);
+      pathname === "/" ||
+      /^\/(tasks|observability|settings|agents)(\/|$)/.test(pathname);
     const browserPage =
       request.headers.accept?.includes("text/html") &&
       !/^\/(api|session|event|permission|question|health|metrics)(\/|$)/.test(

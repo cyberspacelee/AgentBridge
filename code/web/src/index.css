@@ -4,6 +4,23 @@
 @import "@fontsource-variable/geist";
 @import "./tokens.css";
 
+.agent-navigation { display: flex; flex-wrap: wrap; gap: 8px 24px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.agent-navigation a { padding: 12px 0; font-size: 14px; border-bottom: 2px solid transparent; color: var(--muted-foreground); }
+.agent-navigation a.active { border-color: var(--primary); color: var(--foreground); }
+.agent-default { margin: 0 0 20px; max-width: 280px; }
+.run-divider { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding: 12px 0; margin: 8px 0; color: var(--muted-foreground); font-size: 12px; }
+.agent-name { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-weight: 600; }
+.agent-name svg { width: 18px; height: 18px; }
+.agent-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.agent-detail-heading h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.agent-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 32px; }
+.agent-facts dt { font-size: 12px; color: var(--muted-foreground); margin-bottom: 6px; }
+.agent-facts dd { font-size: 14px; overflow-wrap: anywhere; }
+.agent-resource-row { display: flex; align-items: center; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); font-size: 14px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.agent-resource-row > span:not([data-slot]) { min-width: 0; }
+.agent-policy { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; max-width: 640px; }
+@media (max-width: 640px) { .agent-facts, .agent-policy { grid-template-columns: minmax(0, 1fr); } .agent-navigation { gap: 0 18px; } }
+
 .settings-page {
   max-width: 1040px;
 }
@@ -938,4 +955,67 @@
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
+.agents-page { max-width: 1200px; min-height: 100%; display: flex; flex-direction: column; }
+.agents-page > .page-heading { margin-bottom: 16px; }
+.agents-page > [data-slot="tabs"] { flex: 1; }
+.agent-navigation { align-items: center; justify-content: space-between; flex-wrap: nowrap; margin-bottom: 16px; border: 0; }
+.agent-navigation a { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 4px 0; }
+.agent-navigation svg { width: 16px; height: 16px; }
+.agent-navigation [data-slot="select-trigger"] { max-width: 180px; }
+.agent-default { display: flex; align-items: center; gap: 16px; max-width: none; }
+.agent-default [data-slot="field-label"] { white-space: nowrap; }
+.agent-detail-heading { margin-bottom: 16px; }
+.agent-detail-heading > div:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+.agents-page .settings-section { border-top: 0; padding-block: 20px; }
+.agents-page .workspace-empty { min-height: 140px; }
+.agent-runtime:not([hidden]) { display: flex; flex-direction: column; }
+.agent-diagnostics { order: 2; border-top: 1px solid var(--border); padding-block: 20px; }
+.agent-diagnostics summary { cursor: pointer; font-size: 14px; font-weight: 500; }
+.agent-diagnostics .agent-facts { margin-top: 20px; }
+.config-action-bar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; margin-top: 20px; background: var(--background); border-top: 1px solid var(--border); z-index: 5; }
+.config-action-status { font-size: 13px; color: var(--muted-foreground); }
+.resource-key-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; }
+.provider-test { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; max-width: 260px; }
+.provider-test [data-slot="select-trigger"] { max-width: 180px; }
+.provider-test p { width: 100%; font-size: 12px; overflow-wrap: anywhere; white-space: normal; }
+.agent-health-section { margin-bottom: 24px; }
+.chart-section .workspace-empty { min-height: 120px; }
+.connection-label { font-size: 12px; color: var(--muted-foreground); }
+[data-slot="tabs-content"][inert] { display: none; }
+[data-slot="switch"]::after { min-height: 44px; top: 50%; bottom: auto; transform: translateY(-50%); }
+@media (max-width: 767px) {
+  .app-header { flex-wrap: nowrap; height: 56px; padding: 6px 8px; gap: 4px; }
+  .app-header .connection { order: 0; width: auto; padding: 0; margin-left: auto; }
+  .app-header .connection-label { display: none; }
+  .header-runtime { margin-left: 0; }
+  .header-runtime > button:last-child { display: none; }
+  .header-brand { font-size: 14px; }
+  .agent-navigation [data-slot="select-trigger"] { max-width: 152px; }
+  .agent-detail-heading { gap: 8px; }
+  .agents-page .settings-section { padding-block: 16px; }
+  .agents-page [data-slot="tabs-list"] { width: 100%; gap: 0; }
+  .agents-page [data-slot="tabs-trigger"] { flex: 1; }
+  .config-action-bar { padding-block: 10px; gap: 6px; }
+  .config-action-status { flex-basis: 100%; }
+  .config-action-bar > div { width: 100%; justify-content: flex-end; }
+  .config-action-bar > div > button { font-size: 13px; }
+  .resource-key-value { gap: 8px; }
+  .task-navigation { flex-wrap: nowrap; gap: 8px; }
+  .task-navigation > [data-slot="select-trigger"] { max-width: 112px; font-size: 12px; flex-shrink: 0; }
+  .task-navigation > [data-slot="tabs-list"] { width: auto; flex: 1; min-width: 0; }
+  .task-navigation [data-slot="tabs-trigger"] { padding-inline: 4px; font-size: 12px; }
+  .execution-context h2 { font-size: 12px; }
+  .agent-health-section .section-heading { margin-bottom: 8px; }
+  .agent-health-section .stacked-table tbody tr { gap: 6px 12px; padding-block: 12px; }
+  .agent-health-section .stacked-table td:nth-child(2)::before,
+  .agent-health-section .stacked-table td:nth-child(4)::before { display: none; }
+  .agent-health-section .stacked-table td:nth-child(2),
+  .agent-health-section .stacked-table td:nth-child(4) { justify-self: end; }
+  .agent-health-section .stacked-table td:nth-child(3) { display: flex; align-items: center; gap: 8px; }
+  .agent-health-section .stacked-table td:nth-child(3)::before { margin: 0; }
+  .agent-health-section .stacked-table td:nth-child(n+3) { font-size: 12px; }
+  [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-checkbox-item"] { min-height: 44px; }
 }

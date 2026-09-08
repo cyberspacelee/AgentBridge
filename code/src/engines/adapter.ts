@@ -24,6 +24,7 @@ export interface EngineBindingResult {
 }
 export interface EngineAdapter {
   readonly id: string;
+  capabilities?(): { permissions: boolean; questions: boolean; recovery: boolean };
   health(): EngineHealth;
   models?(): Promise<ModelOption[]>;
   unavailableSessions?(): string[];

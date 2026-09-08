@@ -1,10 +1,39 @@
 import { z } from "zod";
+import type { EngineHealth, ModelOption } from "./contracts.js";
+
+export const agentIds = ["pi", "opencode", "codex", "grok"] as const;
+export const agentIdSchema = z.enum(agentIds);
+export type AgentId = z.infer<typeof agentIdSchema>;
+export const modelRefSchema = z
+  .object({
+    providerID: z.string().min(1).max(100),
+    modelID: z.string().min(1).max(300),
+  })
+  .strict();
+export const agentSchema = z
+  .object({
+    id: agentIdSchema,
+    enabled: z.boolean().default(false),
+    models: z.array(modelRefSchema).max(200).default([]),
+    defaultModel: modelRefSchema.nullable().default(null),
+    skillIds: z.array(z.string()).max(200).default([]),
+    mcpIds: z.array(z.string()).max(100).default([]),
+    interactionPolicy: z
+      .object({
+        permission: z.enum(["auto", "manual"]),
+        question: z.enum(["auto", "manual"]),
+      })
+      .strict()
+      .default({ permission: "manual", question: "manual" }),
+  })
+  .strict();
+export type AgentConfiguration = z.infer<typeof agentSchema>;
 
 const name = z
   .string()
   .min(1)
   .max(100)
-  .regex(/^[a-zA-Z0-9_-]+$/)
+  .regex(/^[a-zA-Z0-9_-]+$/, "标识仅支持英文字母、数字、下划线和连字符")
   .refine(
     (value) => !["__proto__", "constructor", "prototype"].includes(value),
   );
@@ -48,7 +77,7 @@ export const providerSchema = z
       .max(100)
       .refine(
         (items) => new Set(items.map((item) => item.id)).size === items.length,
-        "Duplicate model ID",
+        "模型 ID 不能重复",
       ),
     enabled: z.boolean().default(true),
   })
@@ -57,7 +86,6 @@ export const skillSchema = z
   .object({
     id: name,
     path: z.string().min(1).max(4096),
-    engine: z.enum(["both", "pi", "opencode"]).default("both"),
     enabled: z.boolean().default(true),
   })
   .strict();
@@ -65,7 +93,6 @@ const secrets = z.record(name, z.string().max(8192));
 export const mcpSchema = z
   .object({
     id: name,
-    engine: z.enum(["both", "pi", "opencode"]).default("opencode"),
     enabled: z.boolean().default(true),
     config: z.discriminatedUnion("type", [
       z
@@ -89,8 +116,12 @@ export const mcpSchema = z
   .strict();
 export const settingsSchema = z
   .object({
-    piConfigDirectory: z.string().max(4096).default(""),
-    opencodeConfigFile: z.string().max(4096).default(""),
+    schemaVersion: z.literal(2).default(2),
+    defaultAgent: agentIdSchema.default("pi"),
+    agents: z
+      .array(agentSchema)
+      .length(4)
+      .default(() => agentIds.map((id) => agentSchema.parse({ id }))),
     providers: z.array(providerSchema).max(50).default([]),
     skills: z.array(skillSchema).max(200).default([]),
     mcp: z.array(mcpSchema).max(100).default([]),
@@ -104,18 +135,85 @@ export const settingsSchema = z
           path: [key],
           message: "Duplicate ID",
         });
+    const issue = (path: (string | number)[], message: string) =>
+      context.addIssue({ code: "custom", path, message });
+    if (new Set(value.agents.map((agent) => agent.id)).size !== 4)
+      issue(["agents"], "Each agent must occur exactly once");
+    value.agents.forEach((agent, index) => {
+      for (const [refs, resources] of [
+        ["skillIds", "skills"],
+        ["mcpIds", "mcp"],
+      ] as const) {
+        if (new Set(agent[refs]).size !== agent[refs].length)
+          issue(["agents", index, refs], "Duplicate resource reference");
+        for (const id of agent[refs])
+          if (!value[resources].some((entry) => entry.id === id))
+            issue(["agents", index, refs], `Unknown resource: ${id}`);
+      }
+      const keys = agent.models.map((model) => JSON.stringify(model));
+      if (new Set(keys).size !== keys.length)
+        issue(["agents", index, "models"], "Duplicate model reference");
+      for (const model of agent.models) {
+        const provider = value.providers.find(
+          (entry) => entry.id === model.providerID,
+        );
+        if (!provider?.models.some((entry) => entry.id === model.modelID))
+          issue(["agents", index, "models"], "Unknown model reference");
+        if (agent.id === "codex" && provider?.api !== "openai-responses")
+          issue(
+            ["agents", index, "models"],
+            "Codex 需要使用 Responses 协议的模型连接",
+          );
+      }
+      if (
+        agent.defaultModel &&
+        !agent.models.some(
+          (model) =>
+            model.providerID === agent.defaultModel!.providerID &&
+            model.modelID === agent.defaultModel!.modelID,
+        )
+      )
+        issue(
+          ["agents", index, "defaultModel"],
+          "Default model must be enabled for this agent",
+        );
+      if (
+        agent.enabled &&
+        (!agent.defaultModel ||
+          !value.providers.some(
+            (p) => p.id === agent.defaultModel!.providerID && p.enabled,
+          ))
+      )
+        issue(
+          ["agents", index, "defaultModel"],
+          "已启用的 Agent 需要可用的默认模型连接；请先更换默认模型或停用 Agent",
+        );
+    });
   });
 export type Settings = z.infer<typeof settingsSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export interface SettingsView {
   settings: Settings;
   revision: string;
-  restartRequired: boolean;
-  local: { pi: string; opencode: string };
-  effectivePiDirectory: string;
-  externalOpenCode: boolean;
-  environmentProvider: boolean;
-  packages: string[];
-  piMcp: { configFile: string; adapterDetected: boolean; serverCount: number };
+  dataDirectory: string;
 }
+export interface AgentView {
+  id: AgentId;
+  enabled: boolean;
+  health: EngineHealth;
+  directory: string;
+  configFile: string;
+  savedRevision: string;
+  appliedRevision: string | null;
+  pendingChanges: boolean;
+  operation: "enable" | "disable" | "stop" | "apply" | null;
+  error: string | null;
+  activeRuns: number;
+  queuedRuns: number;
+  models: ModelOption[];
+  capabilities: { permissions: boolean; questions: boolean; recovery: boolean };
+}
+export const agentActionSchema = z
+  .object({ action: z.enum(["enable", "disable", "stop", "apply"]) })
+  .strict();
 export const hiddenSecret = "********";

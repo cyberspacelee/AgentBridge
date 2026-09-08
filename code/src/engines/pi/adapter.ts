@@ -33,7 +33,8 @@ import {
   piDirectory,
   syncPiMcp,
   piProviders,
-  readSettings,
+  engineSettings,
+  configuredModels,
   diagnosticSecrets,
 } from "../../settings.js";
 
@@ -55,7 +56,7 @@ const usageOf = (v: unknown): Usage | null => {
     output: number(u.output),
     cacheRead: number(u.cacheRead),
     cacheWrite: number(u.cacheWrite),
-    costUsd: u.cost ? number(object(u.cost).total) : null,
+    costUsd: null,
     source: "reported",
   };
 };
@@ -101,26 +102,7 @@ export class PiAdapter implements EngineAdapter {
     return piDirectory(this.config);
   }
   async models() {
-    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    const models = await ModelRuntime.create({
-      authPath: path.join(this.configDirectory, "auth.json"),
-      modelsPath: path.join(this.configDirectory, "models.json"),
-      modelsStorePath: path.join(this.configDirectory, "models-store.json"),
-      allowModelNetwork: false,
-    });
-    for (const [id, provider] of Object.entries(piProviders(this.config)))
-      models.registerProvider(id, provider);
-    if (models.getError())
-      throw engineError(
-        "Pi model configuration could not be loaded",
-        models.getError(),
-        diagnosticSecrets(this.config),
-      );
-    return (await models.getAvailable()).map((model) => ({
-      providerID: model.provider,
-      modelID: model.id,
-      name: model.name,
-    }));
+    return configuredModels(this.config, this.id);
   }
   health() {
     return {
@@ -191,7 +173,7 @@ export class PiAdapter implements EngineAdapter {
     }
   }
   async createSession(session: Session) {
-    await mkdir(path.join(this.config.dataDirectory, "pi-sessions"), {
+    await mkdir(path.join(this.configDirectory, "sessions"), {
       recursive: true,
     });
     // Pi initializes an existing empty file immediately, before the first model response.
@@ -199,11 +181,11 @@ export class PiAdapter implements EngineAdapter {
     return this.openSession(session);
   }
   private sessionFile(id: string) {
-    return path.join(this.config.dataDirectory, "pi-sessions", `${id}.jsonl`);
+    return path.join(this.configDirectory, "sessions", `${id}.jsonl`);
   }
   private async openSession(session: Session, expectedNativeId?: string) {
-    const settings = readSettings(this.config);
-    const mcpEnvironment = syncPiMcp(this.config, settings);
+    const settings = engineSettings(this.config, this.id);
+    const mcpEnvironment = syncPiMcp(this.config);
     const child = startProcess(
       this.config.pi.command,
       [
@@ -213,11 +195,13 @@ export class PiAdapter implements EngineAdapter {
         this.sessionFile(session.id),
         "--extension",
         path.join(codeRoot, "tools/pi-extension.mjs"),
-        ...settings.skills
-          .filter((skill) => skill.enabled && skill.engine !== "opencode")
-          .flatMap((skill) => ["--skill", skill.path]),
+        ...(settings.mcp.length
+          ? ["--extension", path.join(codeRoot, "tools/pi-mcp.mjs")]
+          : []),
+        "--no-skills",
+        "--no-extensions",
+        ...settings.skills.flatMap((skill) => ["--skill", skill.path]),
         "--no-prompt-templates",
-        "--no-context-files",
         "--offline",
         "--append-system-prompt",
         toolInstructions(session.directory),
@@ -292,11 +276,11 @@ export class PiAdapter implements EngineAdapter {
       )
         throw engineError("Pi interaction extension did not load");
       if (
-        settings.mcp.some((m) => m.engine !== "opencode" && m.enabled) &&
+        settings.mcp.length > 0 &&
         !commands.some((command) => object(command).name === "mcp")
       )
         throw engineError(
-          "Pi MCP is configured but pi-mcp-adapter did not load; install the extension in the selected Pi directory",
+          "Pi MCP extension did not load",
           processDiagnostic(child),
           diagnosticSecrets(this.config),
         );

@@ -18,6 +18,11 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -62,6 +67,7 @@ export const labels: Record<string, string> = {
   queued: "排队中",
   running: "执行中",
   stopping: "正在停止",
+  disabled: "已停用",
   completed: "已完成",
   failed: "失败",
   timed_out: "超时",
@@ -244,14 +250,29 @@ export function Failure({ error }: { error?: Error | null }) {
     <Alert variant="destructive">
       <AlertCircle />
       <AlertTitle>
-        {error instanceof ApiError ? error.code : "请求失败"}
+        {error instanceof ApiError
+          ? ((
+              {
+                CONFLICT: "配置或状态已变化",
+                VALIDATION_ERROR: "请检查配置",
+                SERVICE_UNAVAILABLE: "服务暂不可用",
+                NOT_FOUND: "内容不存在",
+              } as Record<string, string>
+            )[error.code] ?? "请求失败")
+          : "请求失败"}
       </AlertTitle>
       <AlertDescription className="break-words">
-        {error.message}
-        {error instanceof ApiError && error.requestId && (
-          <div className="mt-1 font-mono text-xs">
-            Request ID: {error.requestId}
-          </div>
+        <span>{error.message}</span>
+        {error instanceof ApiError && (
+          <Collapsible className="mt-1 text-xs">
+            <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+              诊断信息
+            </CollapsibleTrigger>
+            <CollapsibleContent className="font-mono">
+              {error.code}
+              {error.requestId ? ` · ${error.requestId}` : ""}
+            </CollapsibleContent>
+          </Collapsible>
         )}
       </AlertDescription>
     </Alert>
@@ -343,7 +364,13 @@ export function ConfirmDialog({
     </AlertDialog>
   )
 }
-export function Blank({ children }: { children: ReactNode }) {
+export function Blank({
+  children,
+  action,
+}: {
+  children: ReactNode
+  action?: ReactNode
+}) {
   return (
     <Empty className="workspace-empty">
       <EmptyHeader>
@@ -352,6 +379,7 @@ export function Blank({ children }: { children: ReactNode }) {
         </EmptyMedia>
         <EmptyTitle className="tracking-normal">{children}</EmptyTitle>
       </EmptyHeader>
+      {action}
     </Empty>
   )
 }

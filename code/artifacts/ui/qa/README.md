@@ -1,13 +1,44 @@
 <!-- Hallmark pre-emit critique: Philosophy 4, Hierarchy 4, Execution 4, Specificity 4, Restraint 5, Variety 3. -->
 # 逐页 QA 与问题记录
 
+## 2026-09-08 配置与工作台体验整改
+
+本次按用户任务重新组织界面。设计判断和状态规则归入 `design.md`，交互由现有 shadcn 组件承担；前后截图与行为测试分别记录，不以测试通过代替设计验收。
+
+- Agent 默认进入模型配置，首次无模型时提供直接操作；共享资源独立导航，并携带来源 Agent 与标签返回。
+- 引用与策略草稿按实例保存在当前浏览器会话，切页、刷新和远端冲突均保留输入。资源密钥不进入浏览器缓存，关闭已修改的资源表单需确认。
+- 保存、应用与启用集中在底部操作栏。异步受理不代表生效，操作中的锁定与最终失败均由状态快照确认，去掉遮挡操作栏的配置成功浮层。
+- MCP 使用命令、参数与键值行；模型连接可以选择具体模型测试并在行内查看结果；系统信息使用带单位的运行限制。
+- 完整对话与单次执行的状态、错误和用量范围分开；手机顶栏收紧为 56px，任务标签与执行筛选合并为一行。
+- 观测接口的全部范围返回各 Agent 状态，单值 health 为 null，禁止用默认 Agent 冒充整体健康。无执行样本和真实零值分别呈现。
+
+同一全停用、无模型配置下的对比：[Agent 手机整改前](redesign-before-agent-390.png) / [整改后](redesign-agents-pi-390.png)，[观测桌面整改前](redesign-before-observability-1440.png) / [整改后](redesign-observability-1440.png)。另记录实际入口的 1440、390、320px 下五类页面，共 15 张 `redesign-*.png`；均为同一隔离预览实例，无真实密钥。几何检查无横向溢出、顶栏为 56px，浏览器无页面异常。
+
+交互截图使用隔离测试引擎：[首次启用失败手机](agent-activation-failed-mobile.png)、[草稿恢复桌面](agent-draft-desktop.png)、[运行配置手机](agents-runtime-mobile.png)。这里验证的是界面状态处理，不将模拟失败当成真实模型供应商验收。
+
+验证结果：后端完整回归 34 passed / 1 failed / 6 skipped，失败项为错误文案更新后的旧断言；改为检查 CONFLICT 错误码后，配置模块 3 项复测通过，合计覆盖 35 个通过用例。浏览器完整回归 46 passed / 2 failed / 4 skipped，两个失败均定位到资源标签退出面板短暂残留；共享层隐藏 inert 面板后，Agent／任务／观测标签流程 6 项定向复测通过，合计覆盖 48 个通过用例。类型检查、前后端构建、前端 lint 与 `git diff --check` 通过。6 项原生 CLI 集成测试本轮按默认条件跳过，4 项手机矩阵跳过项已由桌面项目执行跨视口矩阵。
+
+预览使用独立数据目录和全停用配置，仅检查配置与状态，未写入真实模型凭据或启用 Agent。验证服务已按要求停止。
+
+## 2026-09-08 统一 Agent 管理
+
+本次替代旧配置页面的模型、Skill、MCP 和个人目录约定：`/agents` 管理四个 Agent 与共享资源，`/settings` 只展示系统诊断。Pi 任意插件安装和个人原生目录挂载入口已移除。下面较早的配置页、插件页、地址与启动命令仅为历史记录。
+
+完整回归：后端 35 passed / 6 skipped，浏览器 44 passed / 4 skipped；跳过项按测试环境定义记录。Pi/OpenCode 的原生生命周期和本地模型工具流程、Codex/Grok 的原生模型与重启恢复分别单独通过。四个 CLI 均验证选中 Skill 可见、未选中项目 Skill 不可见；具体原生与外部验收边界见 [交付记录](../../../../docs/design/DELIVERY.md)。类型检查、lint、前后端构建及差异格式检查通过。
+
+新增管理流程覆盖模型连接编辑、模型分配、Skill/MCP 引用、保存/应用、停用/启用、错误与配置冲突。多次执行默认连续显示，切换执行筛选后只保留对应消息；已修正筛选切换时重复挂载对话的问题。桌面/手机截图人工检查无内容遮挡或横向溢出。
+
+截图：[Agent 列表桌面](agents-list-desktop.png)、[Agent 列表手机](agents-list-mobile.png)、[运行详情桌面](agents-runtime-desktop.png)、[运行详情手机](agents-runtime-mobile.png)、[模型表单桌面](agents-model-form-desktop.png)、[模型表单手机](agents-model-form-mobile.png)。数据均来自隔离测试配置。
+
+另用实际生产入口与全停用配置检查桌面 1440x1000、手机 390x844：四个 Agent 开关、系统设置和页面请求正常，无 JavaScript 错误或横向溢出。预览启动在 `http://127.0.0.1:3000/agents`，使用 `/tmp/agentbridge-preview.jjWOGJ` 独立数据目录，不复用旧数据库或个人模型配置；实际进程是否仍运行以当前环境为准。
+
 ## 2026-09-07 配置页面
 
 补充验证：同供应商配置两个模型，分别保存 32000/4096 与 200000/16384 的上下文/最大输出限制；重新编辑第二个模型并刷新后保留独立数值，删除行与取消编辑在桌面/手机均通过（配置页专项 2 passed）。后端完整回归 23 passed / 4 skipped；另外启用两个原生引擎的本地模型测试，验证正常工具调用及 401 拒绝，任务错误和运行日志均包含拒绝原因并隐藏测试密钥，数据库与事件记录读取后仍保留错误详情。目录消失的产物扫描警告保留 ENOENT/路径且不阻止模型执行；另检查 Windows EPERM 文本、网络底层原因、stderr 截断及凭据脱敏。Windows 实机的原始失败原因尚待部署更新后复测，未启动常驻服务。
 
 新增 `/settings`，覆盖兼容模型增删改、密钥掩码与保留、Skill 目录启停、OpenCode MCP 配置和 Pi 插件目录/安装入口。桌面 1440 × 1000、手机 390 × 844 的保存、刷新、编辑和删除流程通过，截图检查无横向溢出。浏览器完整回归 33 passed / 3 skipped，后端 19 passed / 4 skipped；另外分别启用两个原生引擎的本地模型测试，均完成真实进程的工具调用和手动权限交互。临时本地 Pi 插件完成安装、实际加载和卸载验证。第三方 MCP/subagent 插件及真实供应商未逐一验收。
 
-构建、前端 lint 和差异格式检查通过。此轮曾通过 <http://127.0.0.1:3000/settings> 验证真实页面入口，托管 OpenCode 使用 4097，避免占用已有的 4096 服务；验证服务已按要求停止。下文旧局域网地址和临时目录属于历史验收记录，不表示目前仍有服务运行。
+构建、前端 lint 和差异格式检查通过。此轮曾通过 <http://127.0.0.1:3000/settings> 验证真实页面入口，托管 OpenCode 使用 4097，避免占用已有的 4096 服务；验证服务已按要求停止。下文启动配置和临时目录属于历史验收记录，不表示目前仍有服务运行。
 
 截图：[模型桌面](settings-models-desktop.png)、[模型手机](settings-models-mobile.png)、[表单桌面](settings-model-form-desktop.png)、[表单手机](settings-model-form-mobile.png)、[MCP 桌面](settings-mcp-desktop.png)、[MCP 手机](settings-mcp-mobile.png)、[Pi 插件桌面](settings-pi-desktop.png)、[Pi 插件手机](settings-pi-mobile.png)。使用隔离测试数据，未显示真实密钥。
 
@@ -17,9 +48,9 @@
 
 结果：累计记录的 17 项功能/布局和局域网兼容问题已修复并复测。本轮完整回归与修正后的定向复测合并覆盖 31 个通过的浏览器用例、3 个按项目规则跳过的用例；最后的布局与任务流程定向回归为 7 passed / 1 skipped。后端测试 17 passed / 4 skipped，补充的双引擎观测复测 2 passed；前后端构建、前端 lint、`git diff --check` 均通过。
 
-局域网入口：<http://192.168.8.211:3000/tasks>。服务监听 `0.0.0.0:3000`，Pi 0.85.1 和 OpenCode 1.18.29 同时就绪，沿用独立 SQLite 数据目录 `/tmp/agentbridge-ui-qa-live.No4Dx9`，保持运行供检查。`--engine pi` 指定未显式选引擎时的默认值，新任务可独立选择任一引擎。
+验证时服务监听 `0.0.0.0:3000`，Pi 0.85.1 和 OpenCode 1.18.29 同时就绪，使用独立 SQLite 数据目录。`--engine pi` 指定未显式选引擎时的默认值，新任务可独立选择任一引擎。
 
-已用上述局域网 IP 完成 Chromium 检查：真实非安全 HTTP 上下文下，页面、SSE、侧栏、观测选择器和友好 404 正常；提交测试请求到达后端并按预期拒绝不存在的工作目录，没有调用真实模型，页面无 JavaScript 异常。复制降级在桌面/手机回归中通过实际复制粘贴验证。另一个局域网设备的连通性由用户验收。
+已通过局域网访问完成 Chromium 检查：真实非安全 HTTP 上下文下，页面、SSE、侧栏、观测选择器和友好 404 正常；提交测试请求到达后端并按预期拒绝不存在的工作目录，没有调用真实模型，页面无 JavaScript 异常。复制降级在桌面/手机回归中通过实际复制粘贴验证。另一个局域网设备的连通性由用户验收。
 
 启动命令：在 `code/` 执行 `AGENT_DATA_DIR=/tmp/agentbridge-ui-qa-live.No4Dx9 ENGINE_B_CONFIG_DIR=/home/cyberspace/.pi/agent pnpm start --engine pi --host 0.0.0.0 --port 3000`。
 

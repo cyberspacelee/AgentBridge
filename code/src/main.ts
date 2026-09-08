@@ -3,9 +3,16 @@ import { Store } from "./storage/sqlite.js";
 import { SessionRuntime } from "./runtime/sessions.js";
 import { OpenCodeAdapter } from "./engines/opencode/adapter.js";
 import { PiAdapter } from "./engines/pi/adapter.js";
+import { CodexAdapter } from "./engines/codex/adapter.js";
+import { GrokAdapter } from "./engines/grok/adapter.js";
 import { createServer } from "./gateway/server.js";
 const config = readConfig();
-const adapters = [new OpenCodeAdapter(config), new PiAdapter(config)];
+const adapters = [
+  new OpenCodeAdapter(config),
+  new PiAdapter(config),
+  new CodexAdapter(config),
+  new GrokAdapter(config),
+];
 const store = new Store(config.database, config.limits.maxEventBytes);
 const runtime = new SessionRuntime(
   store,

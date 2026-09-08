@@ -5,9 +5,11 @@ import {
   NavLink,
   Route,
   Routes,
+  useLocation,
 } from "react-router-dom"
 import {
   Activity,
+  Bot,
   ListTodo,
   Network,
   RefreshCw,
@@ -15,16 +17,12 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings as SettingsIcon,
+  Plug,
+  SunMoon,
 } from "lucide-react"
 import type { RuntimeInfo } from "../../shared/contracts"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import {
-  Choice,
-  Failure,
-  IconButton,
-  Notice,
-  Status,
-} from "@/components/workspace-ui"
+import { Failure, IconButton, Notice, Status } from "@/components/workspace-ui"
 import {
   Sheet,
   SheetContent,
@@ -43,6 +41,13 @@ import { GatewayContext } from "@/lib/gateway"
 import { Tasks } from "@/pages/tasks"
 import { useTheme } from "@/components/theme-provider"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "@/components/ui/dropdown-menu"
 const Observability = lazy(() =>
   import("@/pages/observability").then((module) => ({
     default: module.Observability,
@@ -53,6 +58,9 @@ const Task = lazy(() =>
 )
 const Settings = lazy(() =>
   import("@/pages/settings").then((module) => ({ default: module.Settings }))
+)
+const Agents = lazy(() =>
+  import("@/pages/agents").then((module) => ({ default: module.Agents }))
 )
 
 export default function App() {
@@ -68,31 +76,7 @@ export default function App() {
       return false
     }
   })
-  const navigation = (
-    <nav aria-label="主导航" className="workspace-nav">
-      {[
-        { to: "/tasks", label: "任务工作台", icon: ListTodo },
-        { to: "/observability", label: "网关观测", icon: Activity },
-        { to: "/settings", label: "配置", icon: SettingsIcon },
-      ].map(({ to, label, icon: Icon }) => (
-        <Tooltip key={to}>
-          <TooltipTrigger
-            render={
-              <NavLink
-                to={to}
-                aria-label={label}
-                onClick={() => setMenuOpen(false)}
-              />
-            }
-          >
-            <Icon aria-hidden="true" />
-            <span>{label}</span>
-          </TooltipTrigger>
-          <TooltipContent side="right">{label}</TooltipContent>
-        </Tooltip>
-      ))}
-    </nav>
-  )
+  const navigation = <WorkspaceNavigation close={() => setMenuOpen(false)} />
   return (
     <BrowserRouter>
       <TooltipProvider delay={800}>
@@ -126,7 +110,7 @@ export default function App() {
                       String(collapsed)
                     )
                   } catch {
-                    /* Navigation remains usable when storage is blocked. */
+                    /* Optional layout preference. */
                   }
                 }}
               >
@@ -146,22 +130,38 @@ export default function App() {
                 </SheetContent>
               </Sheet>
               <span className="header-brand">AgentBridge</span>
-              <span className="connection" role="status">
+              <span
+                className="connection"
+                role="status"
+                aria-label={`网关事件连接：${events.state}`}
+              >
+                <span className="connection-label">网关</span>
                 <Status state={events.state} />
               </span>
               <div className="header-runtime">
-                <Choice
-                  label="主题"
-                  value={theme}
-                  onChange={(value) =>
-                    setTheme(value as "light" | "dark" | "system")
-                  }
-                  options={[
-                    { value: "light", label: "浅色" },
-                    { value: "dark", label: "深色" },
-                    { value: "system", label: "跟随系统" },
-                  ]}
-                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<IconButton label="主题" />}>
+                    <SunMoon />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuRadioGroup
+                      value={theme}
+                      onValueChange={(value) => {
+                        setTheme(value as "light" | "dark" | "system")
+                      }}
+                    >
+                      <DropdownMenuRadioItem value="light" closeOnClick>
+                        浅色
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="dark" closeOnClick>
+                        深色
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="system" closeOnClick>
+                        跟随系统
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <IconButton label="刷新网关状态" onClick={runtime.reload}>
                   <RefreshCw />
                 </IconButton>
@@ -190,6 +190,8 @@ export default function App() {
                   <Route path="/tasks/:id" element={<Task />} />
                   <Route path="/observability" element={<Observability />} />
                   <Route path="/settings" element={<Settings />} />
+                  <Route path="/agents" element={<Agents />} />
+                  <Route path="/agents/:id" element={<Agents />} />
                   <Route path="/" element={<Navigate to="/tasks" replace />} />
                   <Route
                     path="*"
@@ -208,5 +210,42 @@ export default function App() {
         </GatewayContext>
       </TooltipProvider>
     </BrowserRouter>
+  )
+}
+
+function WorkspaceNavigation({ close }: { close: () => void }) {
+  const { pathname } = useLocation()
+  return (
+    <nav aria-label="主导航" className="workspace-nav">
+      {[
+        { to: "/tasks", label: "任务工作台", icon: ListTodo },
+        { to: "/agents", label: "Agent 管理", icon: Bot },
+        { to: "/agents/resources", label: "共享资源", icon: Plug },
+        { to: "/observability", label: "运行观测", icon: Activity },
+        { to: "/settings", label: "系统信息", icon: SettingsIcon },
+      ].map(({ to, label, icon: Icon }) => (
+        <Tooltip key={to}>
+          <TooltipTrigger
+            render={
+              <NavLink
+                to={to}
+                className={({ isActive }) =>
+                  isActive &&
+                  !(to === "/agents" && pathname === "/agents/resources")
+                    ? "active"
+                    : ""
+                }
+                aria-label={label}
+                onClick={close}
+              />
+            }
+          >
+            <Icon aria-hidden="true" />
+            <span>{label}</span>
+          </TooltipTrigger>
+          <TooltipContent side="right">{label}</TooltipContent>
+        </Tooltip>
+      ))}
+    </nav>
   )
 }
