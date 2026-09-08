@@ -12,9 +12,11 @@ declare global {
   }
 }
 export const desktop = window.agentBridge
+export let desktopVersion = ""
 export async function initializeDesktop() {
   if (!desktop?.initialize) return
   const initial = await desktop.initialize()
+  desktopVersion = initial.version
   for (const key of ["theme", "agentbridge:sidebar-collapsed"]) {
     const value = initial.preferences[key]
     if (typeof value === "string") localStorage.setItem(key, value)

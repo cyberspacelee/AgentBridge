@@ -1,6 +1,6 @@
 # AgentBridge Design System
 
-版本：1.3 · 2026-09-08。状态：统一配置与工作台交互规范；功能回归与视觉验收分别记录，不以自动测试通过替代体验判断。
+版本：1.4 · 2026-09-09。整体风格已同步到 Web 与 Electron 共用前端；本轮验收见 docs/design/UI_DIRECTION.md。历史截图仅对应其记录日期。
 
 本文统一企业 Agent 网关的视觉与组件规则。页面行为以 [FRONTEND.md](docs/design/FRONTEND.md) 为准，领域与线上字段以 [DOMAIN.md](docs/design/DOMAIN.md)、[CONTRACTS.md](docs/design/CONTRACTS.md) 和 [共享类型](code/shared/contracts.ts) 为准。施工范围、现状证据和验收见 [整改方案](docs/design/UI_REMEDIATION.md)。后续页面共用本系统，新增规则先修改本文。
 
@@ -10,11 +10,24 @@
 
 AgentBridge 是 Agent 配置、任务执行、人工决策、结果交付与故障定位的工作台。优先服务三个连续流程：管理员连接模型、配置并启用 Agent；业务使用者提交要求、处理审批、取得文件；运维使用者查看可用性、定位失败执行、回到任务。
 
+### 整体风格
+
+**安静、清晰、有秩序的 Agent 工作空间。** 采用具有桌面工具感的现代极简风格：暖灰导航、纸白内容面、石墨灰文字、松绿色强调。通过稳定布局、留白和文字层级建立专业感。沿用 AgentBridge 字标、Network 品牌图标与 Lucide 线性图标。
+
+会话以阅读与输入为中心，管理以扫描与配置为中心。所有页面共用表面层级、标题起点、控件尺寸与交互反馈；通过内容组织区分页面职责。风格关键词为克制、柔和、精确、内容优先。
+
+- 导航退居背景，主内容保持连续。用背景层级与细分隔组织空间，避免双侧栏长期挤占正文。
+- 松绿集中在品牌、主要动作和焦点；选中项使用低饱和背景，正常历史状态降低强调，异常和待回复优先突出。
+- 页面标题、正文、辅助信息保持明确主次。避免到处粗体、过密小字、重复标题和图标按钮堆叠。
+- 控件适度圆角，表格和列表平直连续。阴影只用于浮层，不使用渐变、玻璃效果、装饰光晕或卡片套卡片。
+
+风格形成依据与本轮截图问题见 [整体设计方向记录](docs/design/UI_DIRECTION.md)；本文为统一规则的权威来源。
+
 ### 页面职责与交互约束
 
 | 页面 | 首要判断 | 首屏内容 | 次级内容 |
 | --- | --- | --- | --- |
-| 会话 | 与哪个 Agent 对话 | 历史会话、新会话输入、当前对话 | 模型与策略、执行记录、目录 |
+| 会话 | 要完成什么、与哪个 Agent 对话 | 历史会话、新会话输入、Agent 与必填目录、当前对话 | 模型与策略、执行记录 |
 | Agent 管理 | 谁可用、缺什么配置 | Agent 状态、模型、配置入口 | 进程、路径、修订号 |
 | 共享资源 | 哪些连接可复用 | 资源列表、添加、逐模型测试、引用关系 | 协议参数、原生配置导入 |
 | 运行观测 | 谁异常、怎样定位 | 各 Agent 健康与异常入口 | 趋势、资源、调用链 |
@@ -34,8 +47,8 @@ AgentBridge 是 Agent 配置、任务执行、人工决策、结果交付与故�
 
 参考 [Vercel 的 design.md 实践](https://vercel.com/blog/how-our-agents-build-on-brand-pages-with-design-md)：判断原则归本文，重复布局与行为归现有组件／CSS，可检查失败归测试。固定首次配置、草稿离开与恢复、外部配置冲突、应用失败、资源返回、长对话审批和手机操作场景，以相同数据与视口保留前后截图。人工评估下一步是否可发现、信息是否有主次、状态是否可信；不新增独立设计评测平台。
 
-- Genre：modern-minimal；应用结构：Workbench。中性灰白底、明确文字层级、细分隔线、紧凑表格。
-- 品牌延续当前 AgentBridge 字标、Network 图标及绿色线索。绿色用于主命令与品牌，运行状态另设蓝色。
+- Genre：modern-minimal；应用结构：Workbench。暖灰导航、纸白阅读面、石墨灰文字、松绿主动作；浅深色具有一致的表面层级。
+- 品牌延续当前 AgentBridge 字标、Network 图标及绿色线索。绿色用于主命令与品牌，运行状态另设蓝色，已完成历史使用低强调中性样式。
 - 页面第一层回答“当前是什么任务 / 网关处于什么状态”，第二层提供操作，第三层才展示详细轨迹与原始数据。
 - 卡片限于单个工具、审批、文件等有明确边界的对象。页面分区使用无外框区域或横向分隔，不堆卡片、不嵌套卡片。系统设置页按用户要求使用 shadcn Card 分组下载源、代理、证书、连接测试与实例信息；Collapsible 收起证书、连接测试、程序路径和运行限制，统一保存与重启操作，不嵌套 Card。
 - 一实例展示四个 Agent 的真实启用和健康状态；任务固定绑定一个 Agent。企业感来自信息准确与操作可追踪，不新增租户、组织、计费、工作流画布或虚构 Agent 团队。
@@ -54,18 +67,19 @@ AgentBridge 是 Agent 配置、任务执行、人工决策、结果交付与故�
 
 | Token | 浅色 | 深色 | 用途 |
 | --- | --- | --- | --- |
-| `--background` | `#FAFAFA` | `#141414` | 页面底色 |
-| `--foreground` | `#171717` | `#F5F5F5` | 正文、标题 |
-| `--card`, `--popover` | `#FFFFFF` | `#1C1C1C` | 工具面板、弹层、输入表面 |
-| `--muted`, `--secondary` | `#F5F5F5` | `#262626` | 表头、用户消息、代码底色 |
-| `--muted-foreground` | `#525252` | `#B3B3B3` | 时间、单位、说明 |
-| `--border` | `#E5E5E5` | `#383838` | 装饰分隔，不作为唯一控件边界 |
-| `--input` | `#737373` | `#858585` | 输入框、单选、多选边界 |
-| `--primary`, `--ring` | `#047857` | `#34D399` | 主命令、品牌、焦点 |
-| `--primary-foreground` | `#FFFFFF` | `#10251C` | 主按钮文字 |
-| `--primary-hover` | `#065F46` | `#6EE7B7` | 主命令 hover / active |
-| `--accent` | `#ECFDF5` | `#17382B` | 选中导航、选项背景 |
-| `--accent-foreground` | `#065F46` | `#6EE7B7` | 选中导航文字 |
+| `--sidebar` | `#F3F4F2` | `#181B19` | 导航与应用底层 |
+| `--background` | `#FCFCFA` | `#202421` | 连续主内容面 |
+| `--foreground` | `#202622` | `#EDF0EC` | 正文、标题 |
+| `--card`, `--popover` | `#FFFFFF` | `#282D29` | 工具面板、弹层、输入表面 |
+| `--muted`, `--secondary` | `#F3F4F2` | `#282D29` | 表头、用户消息、代码底色 |
+| `--muted-foreground` | `#646D66` | `#A7B0A9` | 时间、单位、说明 |
+| `--border` | `#DEE3DD` | `#3B443D` | 装饰分隔，不作为唯一控件边界 |
+| `--input` | `#7B857D` | `#7F8D82` | 输入框、单选、多选边界 |
+| `--primary`, `--ring` | `#286047` | `#92CEAA` | 主命令、品牌、焦点 |
+| `--primary-foreground` | `#FFFFFF` | `#18281E` | 主按钮文字 |
+| `--primary-hover` | `#214E3B` | `#A6DABA` | 主命令 hover / active |
+| `--accent` | `#E5ECE5` | `#303D33` | 选中导航、选项背景 |
+| `--accent-foreground` | `#286047` | `#92CEAA` | 选中导航文字 |
 | `--info` / `--info-soft` | `#1D4ED8` / `#EFF6FF` | `#93C5FD` / `#172554` | 执行中、普通链接 |
 | `--success` / `--success-soft` | `#166534` / `#F0FDF4` | `#86EFAC` / `#142B20` | 已完成、已就绪 |
 | `--warning` / `--warning-soft` | `#92400E` / `#FFFBEB` | `#FCD34D` / `#302411` | 等待回复、待处理 |
@@ -76,7 +90,7 @@ AgentBridge 是 Agent 配置、任务执行、人工决策、结果交付与故�
 
 图表通过官方 shadcn ChartContainer / ChartTooltipContent 组合现有 Recharts。`--chart-1` 至 `--chart-5` 分别映射 info、success、warning、destructive、muted-foreground；每个指标保持固定色义，并有名称、单位和线型 / 点型，不能靠颜色猜测系列。禁止在 `.trend` 内重新定义固定绿色。
 
-对比度已按上述不透明颜色计算：主按钮浅 / 深 5.48 / 8.38，次级文字 7.17 / 7.22，四组状态最小 5.72，输入边界最小 4.62。仅说明 token 配对符合目标，不代替实际页面验收；透明度、叠层、hover 和组件组合仍需检查。目标为正文 4.5:1、重要图形及控件边界 3:1。
+对比度按本版不透明颜色计算：主按钮文字浅 / 深 7.36 / 8.55，hover 文字 9.47 / 9.81；次级文字相对主内容面 5.21 / 7.06；输入边界相对输入表面 3.82 / 4.03。必要元信息不额外降低透明度。仅说明 token 配对符合目标，不代替实际页面验收；透明度、叠层、hover 和组件组合仍需检查。目标为正文 4.5:1、重要图形及控件边界 3:1。
 
 ## 4. 字体、尺寸与间距
 
@@ -94,7 +108,7 @@ AgentBridge 是 Agent 配置、任务执行、人工决策、结果交付与故�
 | 页面标题 | 24 / 32 px | 600 | 窄屏 20 / 28 px；每页一个 h1 |
 | 区域标题 | 16 / 24 px | 600 | 不使用宣传页大标题 |
 | 正文、表格、按钮 | 14 / 22 px | 400 / 500 | 表头 500，关键标题 600 |
-| Agent 长文 | 15 / 26 px | 400 | 阅读宽度最多 72ch，受容器约束 |
+| Agent 长文 | 桌面 15 / 26 px，窄屏 16 / 26 px | 400 | 对话列最大 800 px，正文不超过 72ch，并受容器约束 |
 | 元信息、状态 | 12 / 18 px | 400 / 500 | 禁止 10 / 11 px 承担必要信息 |
 | 代码、路径、ID | 13 / 20 px | 400 | 等宽；表格数字使用 tabular-nums |
 | 指标数值 | 28 / 36 px | 600 | 单位降为 12 px；窄屏 24 / 32 px |
@@ -103,43 +117,46 @@ AgentBridge 是 Agent 配置、任务执行、人工决策、结果交付与故�
 
 间距共用 Tailwind 的 4 px 刻度：4、8、12、16、24、32、48 px，对应 `gap-1/2/3/4/6/8/12` 等。控件内部 8 / 12，消息段落 12，消息之间 24，页面区块之间 24 / 32。桌面页面边距 24，窄屏 16。
 
-圆角：普通控件 6 px，工具 / 审批 / 弹层 8 px；状态标签 4 px，圆点与头像可圆形。页面区块无圆角。阴影只用于浮层，不用于每张工具行。
+圆角：按钮与普通输入控件 8 px，工具 / 审批 8 px，组合对话输入面与弹层 12 px，状态标签 4 px；圆点与头像可圆形。页面分区与连续列表保持平直，不把普通按钮变成胶囊。阴影只用于浮层，不用于每张工具行。
 
-尺寸：桌面按钮与输入默认高 36 px，紧凑图标按钮 32 px；触控操作区域至少 44 px。表头 36 px，任务行最小 56 px，工具摘要行最小 40 px。长内容允许行增高，图标、状态、操作列不被挤压。
+尺寸：桌面按钮与输入默认高 36 px，紧凑图标按钮 32 px，导航与侧栏底部操作行高 40 px；触控操作区域至少 44 px。图标采用 Lucide 线性风格，常规 16 px，主要导航可用 18 px。表头 36 px，任务行最小 56 px，工具摘要行最小 40 px。长内容允许行增高，图标、状态、操作列不被挤压。
 
 ## 5. 应用布局
 
-统一壳层：左侧导航、顶部上下文、主内容。主入口为会话、Agent 管理、共享资源、运行观测；系统信息为辅助入口。
+统一壳层：单一左侧栏、顶部上下文、连续主内容。主入口为会话、Agent 管理、共享资源、运行观测；系统信息为辅助入口。会话模块将主导航与历史合并进同一侧栏，取消主导航之外常驻第二根历史栏的设计。
 
 | 宽度 | 导航 | 主内容 | 任务信息 |
 | --- | --- | --- | --- |
-| ≥ 1280 px | 208 px 侧栏 | 24 px 页边距，最大 1500 px | 280 px 右栏，默认收起，按需展开 |
-| 1024–1279 px | 64 px 图标栏，有名称与 Tooltip | 24 px 页边距 | 按需打开信息弹层 |
-| 768–1023 px | 顶栏菜单 | 24 px 页边距 | 按需打开信息弹层 |
-| < 768 px | 56 px 顶栏 + 菜单弹层 | 16 px 页边距，单列 | 信息入口打开弹层 |
+| ≥ 1280 px | 272 px 统一侧栏，可收为 64 px | 24 px 页边距，管理页最大 1500 px，对话列最大 800 px | 280 px 右栏，默认收起；正文不足 720 px 时使用弹层 |
+| 1024–1279 px | 默认 64 px 图标栏，可展开统一侧栏 | 24 px 页边距，对话随可用宽度收缩 | 按需打开信息弹层 |
+| 768–1023 px | 顶栏入口打开统一导航 Sheet | 24 px 页边距 | 按需打开信息弹层 |
+| < 768 px | 56 px 顶栏 + 统一导航 Sheet | 16 px 页边距，单列 | 信息入口打开弹层 |
 
-主内容列统一 `minmax(0, 1fr)`。桌面顶栏 56 px，展示面包屑、当前引擎、连接状态和主题。存储类型、Instance ID 放诊断信息；连接异常在当前可视区呈现，不要求滚至页尾。会话首屏直接输入，历史列表独立滚动；宽屏历史栏 240 px，窄屏使用 Sheet。
+主内容列统一 `minmax(0, 1fr)`。桌面顶栏 56 px，仅展示当前上下文、必要操作、低强调连接状态与主题。引擎和模型靠近对话标题或输入区，存储类型、Instance ID 放诊断信息。连接异常在当前可视区升级为明确提示，不要求滚至页尾。不重复堆叠“会话 / 完整对话 / 对话”等同义标题。
 
-主题提供浅色、深色、跟随系统三个选项，沿用 ThemeProvider 存储。新会话默认选择就绪的默认 Agent，也可显式选择其他就绪 Agent；已创建会话不允许更换引擎。消息和工作目录直接填写，标题、模型与策略放在“模型与会话设置”。桌面折叠按钮固定在侧栏底部，Header 不提供与当前内容无关的刷新。
+侧栏从上到下为品牌、主模块导航、当前模块上下文、底部辅助操作。会话上下文包括新会话、搜索、状态筛选和按更新时间分组的历史列表。历史区域独立滚动，主导航与底部操作固定可达。图标栏提供直接打开历史的入口；窄屏的主导航与历史入口打开同一个 Sheet，并定位相应区域，不叠加两个导航抽屉。
+
+系统信息与折叠操作位于侧栏底部。展开时使用“图标 + 文字”整行按钮，统一行高、左右缩进与图标起点；收起时使用居中的图标与 Tooltip，操作含义和焦点状态保持清楚。折叠操作保留 aria-expanded、可访问名称和布局偏好。
+
+主题提供浅色、深色、跟随系统三个选项，沿用 ThemeProvider 存储。新会话以简短标题和组合输入面为视觉中心，下接 Agent、目录和高级设置，避免排列成多个同等强调的大表单区。默认选择就绪的默认 Agent，也可选择其他就绪 Agent；已创建会话不允许更换引擎。必填工作目录在首次提交前始终可发现，标题、模型与策略放在“模型与会话设置”。Header 不提供与当前内容无关的刷新。
 
 任务详情的空间顺序：
 
 ```text
-主导航 | 历史会话 | 会话标题 / 状态 / 停止 / 删除
-       | 第 N 轮 · 执行记录  交付物  交互  诊断
-       | 执行消息 / 本轮状态 / 耗时 / 跟随输出 / 专注阅读
-       | 用户要求                         | 任务信息
-       | Agent 正文                       | 引擎 / 模型
-       |   工具摘要 -> 可展开输入、结果    | 工作目录
-       |   待处理交互 -> 就地回复          | 用量 / 时间
-       | Agent 结果 / 本轮文件入口         |
-       | 新进度悬浮入口                   |
-       | 紧凑追加输入条 / 发送             |
+统一侧栏（272 px） | 当前会话标题 / 状态 / 必要操作
+品牌与主导航      | 对话 / 交付物 / 交互 / 诊断 · 执行筛选
+新会话与搜索      | 连续正文（最大 800 px）       | 按需任务信息
+按时间分组的历史  | 用户要求 / Agent 回答        | 引擎 / 模型
+  标题            | 工具摘要 -> 展开结果与输入   | 工作目录
+  Agent / 时间    | 待处理交互 -> 就地回复       | 用量 / 时间
+  活动或异常状态  | 本轮文件 / 新进度入口        |
+系统信息          |                              |
+收起侧栏          | 追加输入 / 模型上下文 / 发送  |
 ```
 
 这是结构示意，不是应用截图。执行正文不包进大卡片，工具面板内部用小标题和分隔线分区。
 
-执行消息是任务详情页的主工作区。执行页使用壳层分配的可用视口高度，消息区域 `min-height: 0; overflow-y: auto`，输入区作为同一 flex 列的固定兄弟元素，不覆盖最后一条消息。桌面轮次和标签共用一行，窄屏自然分行。任务信息默认收起；专注阅读收起任务标题、标签导航和信息栏，保留本轮状态、跟随开关、退出入口与追加输入。新进度入口悬浮于消息区底部，出现时不改变正文高度。输入条按内容增高，上限为 160 px 或 20dvh 中较小值，避免长草稿挤空消息区。窄屏同样由动态视口和 flex 分配剩余空间，不使用固定 `65svh`；输入区始终保持可达。
+执行消息是任务详情页的主工作区。执行页使用壳层分配的可用视口高度，消息区域 `min-height: 0; overflow-y: auto`，输入区作为同一 flex 列的固定兄弟元素，不覆盖最后一条消息。桌面执行筛选和标签共用一行；窄屏降低筛选控件宽度，标签文字保持单行，避免多层工具栏挤占正文。任务信息默认收起；专注阅读收起任务标题、标签导航和信息栏，保留本轮状态、跟随开关、退出入口与追加输入。新进度入口悬浮于消息区底部，出现时不改变正文高度。输入条按内容增高，上限为 160 px 或 20dvh 中较小值，避免长草稿挤空消息区。窄屏同样由动态视口和 flex 分配剩余空间，不使用固定 `65svh`；输入区始终保持可达。
 
 表格、代码块各自允许局部横向滚动；页面本身不可横向滚动。根节点可用 `overflow-x: clip` 作边界防护，但不能用它隐藏溢出的按钮或必要内容。窄屏任务列表改为单列紧凑行，标题、状态、模型和时间可读，其余字段在详情查看。四个详情标签在 320 px 仍须完整可用；长观测标签窄屏改为具名 Select。
 
@@ -222,9 +239,13 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
 
 执行期间提交称“提交新一轮”，明确进入排队，不暗示修改正在执行的请求。停止对应当前 Session 的 abort 语义，确认框说明实际影响范围；收到请求成功后继续等待真实 stopping / cancelled 状态。网络重试复用 submissionId，不自动重放失败工具或整轮任务。
 
-## 9. 任务列表、交付物与观测
+## 9. 历史会话、管理列表、交付物与观测
 
-任务列表复用现有 Table、搜索、Select 和游标分页。桌面优先显示标题 / 目录、状态、引擎 / 模型、最近活动、轮次与耗时；模型和路径完整值可通过键盘访问的详情查看。新建任务为唯一主按钮，刷新和翻页使用图标。自动更新稳定保留正在操作的行与筛选。
+历史会话复用路由链接、ScrollArea、搜索、Select 和游标分页，不采用多列表格。按本地日期组织“今天 / 昨天 / 更早”时间组；标题优先，最多两行，Agent 与更新时间为次级。当前项同时使用选中背景和字重，完整名称通过键盘与指针可访问。已完成记录使用中性图标与文字，执行中、失败和待回复保持明确状态色。时间分组仅组织当前已加载页，不暗示已加载所有历史。
+
+搜索无结果与首次无会话使用不同文案。切换历史会话保留搜索、状态和分页参数，切换对话标签不清除历史筛选；新会话入口明确回到创建视图。自动更新稳定保留正在操作的行与筛选，不在鼠标或焦点下重排。
+
+Agent 与共享资源使用连续表格或列表，以名称、可用性和操作为主，模型、路径与版本为次级；完整值通过可访问详情查看。统一页面标题起点、工具栏间距与列对齐。系统设置保持单层 Card 分组、字段标签和集中保存反馈，低频配置使用 Collapsible。
 
 交付物优先显示名称、类型、大小、可用性、检查结果、预览 / 下载。`availability` 与 `validation` 分列，分别显示 available、missing、changed、unavailable 以及 not_checked、passed、failed。Run 已完成只标“执行完成”，检查 passed 只标“文件检查通过”。未知检查范围不写“业务验收通过”。文本沿用 1 MiB 预览上限，Office 文件提供下载。
 
@@ -244,7 +265,9 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
 | 失败，destructive | failed、timed_out、degraded、unavailable、interrupted | CircleAlert |
 | 中性，muted | queued、pending、not_started、cancelled、expired | Clock / Square |
 
-状态映射集中在 workspace-ui，文字以 GLOSSARY 为准。resolved 仅说明交互已处理，具体允许 / 拒绝仍需显示 reply，不把绿色处理完成误解为批准。未知状态显示原始状态名及中性样式。
+状态语义映射集中在 workspace-ui，文字以 GLOSSARY 为准。上表表示语义色；历史列表中的 completed 使用中性低强调呈现，仍显示“已完成”和 Check，不改变领域状态，也不降低异常及待回复的显著性。resolved 仅说明交互已处理，具体允许 / 拒绝仍需显示 reply，不把绿色处理完成误解为批准。未知状态显示原始状态名及中性样式。
+
+主操作使用实心松绿按钮，同一操作区域只突出一个主动作；次级操作使用中性弱底色或描边，辅助操作使用文字或具名图标按钮。危险操作在明确动作和确认处使用红色强调，必要入口不依赖 hover 才出现。
 
 控件覆盖默认、hover、focus-visible、active、disabled、loading、error、success；不适用的状态在验收中标 N/A。按钮加载不改宽度；禁用原因在邻近文字或可访问说明中给出。表单错误关联 `aria-describedby` 和 `aria-invalid`。
 
@@ -256,7 +279,7 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
 
 ## 11. Exports
 
-本文是设计规则的权威记录；CSS 运行时唯一来源为 [tokens.css](code/web/src/tokens.css)，已由 index.css 接入。以下保留映射规格。P1 已从原 index.css 整理 token，保留 Tailwind、shadcn、字体导入和组件样式；不维护两套互相覆盖的调色板。浮层遮罩补充 `--overlay: #00000040`，只用于真实弹层。
+本文是设计规则的权威记录；CSS 运行时唯一来源为 [tokens.css](code/web/src/tokens.css)，已由 index.css 接入，目前仍为旧版值。本版实现时按第三节同步该文件及既有组件样式；下方为目标映射，不表示代码已更新。不维护两套互相覆盖的调色板。浮层遮罩补充 `--overlay: #00000040`，只用于真实弹层。
 
 ### tokens.css / shadcn 映射
 
@@ -267,7 +290,7 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
   --card-foreground: var(--foreground);
   --popover-foreground: var(--foreground);
   --secondary-foreground: var(--foreground);
-  --sidebar: var(--card);
+  /* --sidebar 在浅深色主题内分别使用第三节值，不与 card 共用。 */
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
@@ -280,8 +303,8 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
   --chart-3: var(--warning);
   --chart-4: var(--destructive);
   --chart-5: var(--muted-foreground);
-  --radius: 0.5rem;
-  --radius-control: 0.375rem;
+  --radius: 0.75rem;
+  --radius-control: 0.5rem;
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -305,10 +328,61 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
   --color-primary-hover: var(--primary-hover);
   --font-sans: var(--font-body);
   --font-mono: var(--font-code);
+  --radius-sm: calc(var(--radius-control) / 2);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
 }
 ```
 
 已有 `--color-accent` 是 shadcn 的选中 / 悬停背景，不能因 Hallmark 的 accent 命名习惯将它误改为品牌实色；品牌实色用 `--primary`。
+
+### 2026 官方实践与本项目样式边界
+
+检索日期：2026-09-08。依据 shadcn/ui 当前官方文档、2026 年 CLI 更新及 Tailwind CSS v4 文档。下列文件归属和限制是 AgentBridge 的工程选择；官方提供主题、组合与层叠机制，不规定本项目配色、侧栏宽度或页面结构。
+
+| 层级 | 唯一职责 | 修改位置 |
+| --- | --- | --- |
+| 设计规则 | 风格、语义、尺寸、状态与验收依据 | 根目录 design.md |
+| 运行时 token | 浅深色值、字体、圆角和动效值 | `code/web/src/tokens.css` |
+| Tailwind 接入与壳层 | `@theme inline` 映射、基础元素、共享布局与断点 | `code/web/src/index.css` |
+| 基础控件 | Button、Input、Select、Dialog 等的尺寸、变体与交互状态 | `code/web/src/components/ui/` |
+| 业务组合 | 状态、工具结果、消息、目录选择等已有业务语义 | `code/web/src/components/` |
+| 页面 | 内容、数据与布局，选择已有控件变体 | `code/web/src/pages/` |
+
+**1. 使用语义 token 和前景 / 背景配对。** shadcn 推荐 CSS 变量主题；同一组件使用 `bg-primary text-primary-foreground` 等语义类名，浅深色覆盖对应变量。项目保持 `cssVariables: true`，页面不写临时 HEX 或各自一套 `dark:bg-*` 色板。`components.json` 记录生成配置，实际定制颜色以 tokens.css 为准。[shadcn Theming](https://ui.shadcn.com/docs/theming)
+
+**2. Tailwind v4 使用 CSS 主题接口。** 需要生成 utility 的设计值通过 `@theme` 暴露；映射其他 CSS 变量时使用 `@theme inline`，普通运行时变量保留在 `:root` / `.dark`。保持当前 CSS 入口，不为主题增加一份 v3 风格 JS 配置。Web/Desktop 共用同一前端入口与 token 文件。[Tailwind Theme variables](https://tailwindcss.com/docs/theme)
+
+**3. 统一组件变体，按真实复用提取。** 基础控件的颜色、字号、圆角和交互状态由其 `variant` / `size` 负责；沿用现有 CVA 与 cn，不新增替代库。页面的 `className` 主要处理宽度、排列、间距。跨页面重复的结构优先组合已有 React 组件；同一文件内简单布局无需为少量重复另造抽象。官方允许局部 utility 覆盖，本项目对基础控件外观采用更严格的集中管理规则。[shadcn Button](https://ui.shadcn.com/docs/components/base/button)、[Tailwind Managing duplication](https://tailwindcss.com/docs/styling-with-utility-classes#managing-duplication)
+
+**4. 明确 CSS 层叠归属。** 元素默认值放 `@layer base`，确需共享的布局类放 `@layer components`，局部布局用 utility。自定义 utility 确有需要时使用 `@utility`。`@apply` 可用于既有共享布局，但不把所有 utility 包装成另一套 CSS 类。避免在文件末尾反复追加同名规则、通过深层选择器修改控件内部或依赖 `!important` 修补；普通未分层声明会压过分层声明，调整时先确认真正生效来源。[Tailwind Adding custom styles](https://tailwindcss.com/docs/adding-custom-styles)
+
+**5. 暗色模式只使用一个状态来源。** ThemeProvider 控制根节点 `.dark` 与系统偏好；业务组件消费同名语义 token。Tailwind 的 `dark:` 机制本身有效，基础组件确有独立状态差异时可集中使用；业务页不再实现第二个主题开关或重复计算系统主题。[Tailwind Dark mode](https://tailwindcss.com/docs/dark-mode)
+
+**6. 尺度和生成结果都要可检查。** 字体、行高、间距、圆角、控件高度和断点使用本规范的有限尺度。颜色等动态分支映射到完整静态类名，不拼接 `bg-${color}-500`；Tailwind 按源码文本检测类名。来自运行时的真实动态数值可使用受控 CSS 变量，不因框架扫描限制改动业务数据。[Tailwind Detecting classes](https://tailwindcss.com/docs/detecting-classes-in-source-files)
+
+**7. 2026 preset 用于可复现配置，现有定制按差异维护。** CLI v4 提供 preset 和项目上下文能力；2026 年 4 月起 `apply --only theme` / `--only font` 可局部应用 preset。当前已有 base-nova、Base UI、Geist 和自定义状态色，本次按确定的 token 更新，不重新初始化或整包覆盖控件。以后引入 registry 组件先核对 Base UI、图标和语义 token，再审查 diff。`shadcn info` 检出的 preset 含 fallback 时不能当作自定义主题的精确备份。[CLI v4](https://ui.shadcn.com/docs/changelog/2026-03-cli-v4)、[Partial Preset Apply](https://ui.shadcn.com/docs/changelog/2026-04-partial-preset-apply)
+
+### 当前工程的实现边界
+
+已通过本地 CLI 核对：Vite、Tailwind v4、base-nova / Base UI、Lucide；项目已具备单一 token 文件、ThemeProvider、CVA 变体与基础组件边界 ESLint 规则。无需新增主题框架。
+
+- 本版浅深色 token 已同步到 tokens.css；页面通过语义类消费，不补局部颜色。
+- index.css 已映射 `--radius-md: var(--radius-control)` 对应 8px，`--radius-lg` / `--radius-xl: var(--radius)` 对应 12px。其他较大派生圆角仅在确有对应组件需求时使用。
+- index.css 的共享规则已统一到 components 层并合并同级重复选择器；响应式布局优先在调用点使用 utility，避免与控件内置 utility 争夺显示方式。
+- 当前 ESLint 主要限制绕过基础组件，并未自动检查全部颜色、间距与圆角规则。沿用现有检查和浏览器测试，增加与实际改动对应的断言；不能把 lint 通过当作全局风格一致的证明。
+- 代表性验收应同时展示 Button / Input / Select / Tabs / Badge 的主要状态，以及侧栏、历史、对话、管理表格和设置表单。浅深色、窄屏、键盘和错误状态共用同一检查清单。
+
+### Electron 窗口与滚动基线（2026-09-09）
+
+Web 与打包后的 Electron 加载同一份生产 CSS、字体和控件，不引入桌面专用色板。保留原生标题栏、窗口按钮、系统菜单与快捷键；窗口初始隐藏，在 ready-to-show 后展示。nativeTheme.themeSource 与持久化的浅色 / 深色 / 跟随系统同步；系统主题变更同步更新窗口底色。主进程启动背景的两个颜色常量镜像 tokens.css 的 background，并由包体冒烟检查一致性，避免跨进程增加主题生成管线。[Electron BrowserWindow](https://www.electronjs.org/docs/latest/api/browser-window)、[nativeTheme](https://www.electronjs.org/docs/latest/api/native-theme)
+
+Electron 底部提供 32px 最小高度的状态栏，显示唯一一处网关事件连接和应用版本；异常说明仍在内容上方展开。状态栏不随正文滚动，也不覆盖输入区。Web 保留顶栏连接状态，二者复用同一事件状态源。
+
+主内容使用原生滚动，scrollbar-gutter: stable both-edges 在经典滚动条环境预留两侧空间，保持居中且避免列表长短变化导致跳动；系统叠加滚动条仍遵循平台行为。scrollbar-color 消费现有语义 token，保留默认滚动条宽度与系统高对比适配。历史、消息等已有 Base UI ScrollArea 保留原生滚动能力，统一 12px 轨道和清晰滑块，不叠加第二条原生滚动条，不全局隐藏滚动条，不拦截滚轮模拟滚动。[MDN scrollbar-gutter](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/scrollbar-gutter)、[scrollbar-width](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/scrollbar-width)、[Base UI Scroll Area](https://base-ui.com/react/components/scroll-area)
+
+验收覆盖 Linux 实际目录包、760×560 内容视口、浅深色与跟随系统、侧栏切换、滚动区、状态栏、重启后的偏好恢复。Windows/macOS 窗框与系统菜单由对应操作系统绘制，需在目标平台实测，不从 Linux 截图推断一致外观。
 
 ### DTCG
 
@@ -319,11 +393,11 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
   "light": {
     "primary": {
       "$type": "color",
-      "$value": { "colorSpace": "srgb", "components": [0.0156862745, 0.4705882353, 0.3411764706], "alpha": 1, "hex": "#047857" }
+      "$value": { "colorSpace": "srgb", "components": [0.1568627451, 0.3764705882, 0.2784313725], "alpha": 1, "hex": "#286047" }
     }
   },
   "font": { "body": { "$type": "fontFamily", "$value": ["Geist Variable", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "system-ui", "sans-serif"] } },
-  "radius": { "control": { "$type": "dimension", "$value": { "value": 6, "unit": "px" } } },
+  "radius": { "control": { "$type": "dimension", "$value": { "value": 8, "unit": "px" } } },
   "duration": { "fast": { "$type": "duration", "$value": { "value": 120, "unit": "ms" } } }
 }
 ```
@@ -332,10 +406,10 @@ pending 可提交，replying 显示“正在提交”并锁定操作，resolved 
 
 统一检查 320、375、414、768、1024、1440、1920 px，保留现有 390 px 测试；浅 / 深两主题，跟随系统、键盘、200% 缩放及 reduced-motion 都须可用。截图至少覆盖任务列表、执行中、工具失败、待审批、长 Markdown、交付物和观测。
 
-本轮已完成源码对照、颜色配对、静态检查、构建和浏览器交互验证；三页面在七个宽度、浅深色下的截图，以及字体放大、审批和文件场景见 [验收记录](code/artifacts/ui/README.md)。键盘焦点和 reduced-motion 已自动检查，Windows 实机、屏幕阅读器人工验收及双引擎真实任务验收仍需分别进行。新增结构化 Tool 结果或来源引用先补字段与样本；各页面不得自行编造状态或另建主题。
+本版只完成设计文档调整与基础颜色配对计算，单侧栏、时间分组、底部按钮及新表面样式均待实现和截图验收。验收需覆盖展开 / 收起导航、同一 Sheet 的历史入口、搜索后切换会话、长标题、输入区与按需任务信息，确认没有必要操作被遮挡。旧版静态检查、构建、浏览器交互与截图见 [历史验收记录](code/artifacts/ui/README.md)，这些结果不证明本版设计已实现。Windows 实机、屏幕阅读器人工验收及真实引擎任务验收需分别记录。新增结构化 Tool 结果或来源引用先补字段与样本；各页面不得自行编造状态或另建主题。
 
 ## 2026-09-08 会话与控件复审补充
 
-页面 h1 统一桌面 24/32、窄屏 20/28，区域 h2 16/24，弹窗标题 18/28，均正体。输入、下拉与组合输入统一 36 px 高、6 px 圆角和 card 背景，窄屏至少 44 px；文本输入窄屏 16 px 防止缩放。聚焦采用 1 px 语义边框加 2 px 低透明度外环，InputGroup 只由外层绘制焦点，选中值本身不增加常驻边框；失焦后恢复普通边框，错误状态保留红色和文字。
+页面 h1 统一桌面 24/32、窄屏 20/28，区域 h2 16/24，弹窗标题 18/28，均正体。普通输入与下拉统一 36 px 高、8 px 圆角和 card 背景，组合对话输入面使用 12 px 圆角并随文本增高，窄屏操作目标至少 44 px；文本输入窄屏 16 px 防止缩放。聚焦采用 1 px 语义边框加 2 px ring 色外环，焦点指示与相邻背景对比至少 3:1，InputGroup 只由外层绘制焦点，选中值本身不增加常驻边框；失焦后恢复普通边框，错误状态保留红色和文字。
 
 问题使用官方 Questionnaire，支持逐题、单选、多选、自由回答与上一题；服务端不允许跳过的题目不展示 Skip。审批仍为本次允许、始终允许、拒绝，不能套用问卷后改变授权语义。

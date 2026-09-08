@@ -1,20 +1,20 @@
 /* Hallmark: modern-minimal / Workbench / design.md / designed-as-app */
 :root {
   color-scheme: light;
-  --background: #fafafa;
-  --foreground: #171717;
+  --background: #fcfcfa;
+  --foreground: #202622;
   --card: #ffffff;
   --popover: var(--card);
-  --muted: #f5f5f5;
+  --muted: #f3f4f2;
   --secondary: var(--muted);
-  --muted-foreground: #525252;
-  --border: #e5e5e5;
-  --input: #737373;
-  --primary: #047857;
+  --muted-foreground: #646d66;
+  --border: #dee3dd;
+  --input: #7b857d;
+  --primary: #286047;
   --primary-foreground: #ffffff;
-  --primary-hover: #065f46;
-  --accent: #ecfdf5;
-  --accent-foreground: #065f46;
+  --primary-hover: #214e3b;
+  --accent: #e5ece5;
+  --accent-foreground: #286047;
   --info: #1d4ed8;
   --info-soft: #eff6ff;
   --success: #166534;
@@ -29,7 +29,7 @@
   --card-foreground: var(--foreground);
   --popover-foreground: var(--foreground);
   --secondary-foreground: var(--foreground);
-  --sidebar: var(--card);
+  --sidebar: #f3f4f2;
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
@@ -47,27 +47,28 @@
     system-ui, sans-serif;
   --font-code:
     ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
-  --radius: 0.5rem;
-  --radius-control: 0.375rem;
+  --radius: 0.75rem;
+  --radius-control: 0.5rem;
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .dark {
+  --sidebar: #181b19;
   color-scheme: dark;
-  --background: #141414;
-  --foreground: #f5f5f5;
-  --card: #1c1c1c;
-  --muted: #262626;
-  --muted-foreground: #b3b3b3;
-  --border: #383838;
-  --input: #858585;
-  --primary: #34d399;
-  --primary-foreground: #10251c;
-  --primary-hover: #6ee7b7;
-  --accent: #17382b;
-  --accent-foreground: #6ee7b7;
+  --background: #202421;
+  --foreground: #edf0ec;
+  --card: #282d29;
+  --muted: #282d29;
+  --muted-foreground: #a7b0a9;
+  --border: #3b443d;
+  --input: #7f8d82;
+  --primary: #92ceaa;
+  --primary-foreground: #18281e;
+  --primary-hover: #a6daba;
+  --accent: #303d33;
+  --accent-foreground: #92ceaa;
   --info: #93c5fd;
   --info-soft: #172554;
   --success: #86efac;

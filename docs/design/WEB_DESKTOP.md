@@ -91,3 +91,13 @@ Node 后端继续作为独立 Node 进程运行：这样 Web 无需 Electron，�
 - 回归覆盖无凭据 HTTP/SSE、局域网监听、配置修订冲突、改端口、端口占用回滚、完整启动器重启后的持久化，以及评测脚本成功/取消退出码。
 - Linux x64 目录包构建、Electron 开发态和移至仓库外的包体冒烟通过；包体测试清除主机 Node 搜索路径，验证内置 Node/server、文档、配置页面、自动重连、代理、偏好和退出。
 - 图形测试使用 Xvfb，并通过测试环境变量关闭 Chromium 启动沙箱；生产代码仍启用 sandbox/contextIsolation。Windows/macOS 安装包和真实供应商模型未在本次测试。
+
+## 桌面视觉与滚动（2026-09-09）
+
+视觉基线遵循 [design.md](../../design.md) 的 Electron 窗口与滚动章节。生产包与 Web 共用 tokens.css；原生窗口通过 nativeTheme 同步偏好与背景，保留系统框架、菜单和窗口操作。网关状态在 Electron 底部固定显示，Web 仍在顶栏，二者共享 SSE 状态。
+
+原生主滚动区预留对称滚动条空间；Base UI ScrollArea 统一滑块颜色和 12px 轨道。高对比、键盘滚动和减少动态效果沿用平台及组件能力。最小窗口内容区按 760×560 检查正文与底部状态栏的可达性。
+
+依据 2026-09-09 检索的 [Electron nativeTheme](https://www.electronjs.org/docs/latest/api/native-theme)、[BrowserWindow](https://www.electronjs.org/docs/latest/api/browser-window) 和 [MDN scrollbar-gutter](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/scrollbar-gutter)。这些机制支持主题同步、无闪烁展示和滚动稳定；具体色值、状态栏位置与尺寸是项目设计选择。
+
+本轮验证：前后端类型检查、前端 lint、生产构建与 Linux x64 目录包构建通过。浏览器完整回归 84 项通过、4 项按项目条件跳过；最终细节另有 14 项相关回归通过、2 项重复矩阵跳过。Electron 开发态与移到仓库外的 Linux 包体冒烟通过，包含原生 / 页面主题颜色一致、最小内容视口、状态栏、偏好恢复、网关重启与原有隔离检查。Windows/macOS 未实机验证。临时截图已按发布清理要求删除，复现入口为 browser.spec.ts 与 desktop-smoke.mjs。

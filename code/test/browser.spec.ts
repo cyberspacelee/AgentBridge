@@ -230,7 +230,7 @@ async function captureQa(page: Page, name: string) {
       page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     )
     .toBe(true);
-  const clipped = await page
+  await expect.poll(() => page
     .locator(
       'header button:visible, main button:visible, main [role="combobox"]:visible, [role="dialog"] button:visible, [role="alertdialog"] button:visible',
     )
@@ -244,11 +244,11 @@ async function captureQa(page: Page, name: string) {
           (element) =>
             element.getAttribute("aria-label") || element.textContent,
         ),
-    );
-  expect(clipped).toEqual([]);
-  await mkdir("artifacts/ui/qa", { recursive: true });
+    )).toEqual([]);
+  const directory = process.env.AGENT_UI_ARTIFACT_DIR ?? "artifacts/ui/qa";
+  await mkdir(directory, { recursive: true });
   await page.screenshot({
-    path: `artifacts/ui/qa/${name}.png`,
+    path: `${directory}/${name}.png`,
     animations: "disabled",
   });
   if (
@@ -259,7 +259,7 @@ async function captureQa(page: Page, name: string) {
     ))
   )
     await page.screenshot({
-      path: `artifacts/ui/qa/${name}-full.png`,
+      path: `${directory}/${name}-full.png`,
       fullPage: true,
       animations: "disabled",
     });
@@ -408,6 +408,27 @@ test("conversation history scrolls independently and composer stays reachable", 
   }
   await expect(page.getByLabel("消息", { exact: true })).toBeInViewport();
   await captureQa(page, `conversation-history-${info.project.name}`);
+});
+
+test("history groups local days and preserves filters when opening a conversation", async ({ page }, info) => {
+  const detail = designFixture();
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const earlier = new Date(today);
+  earlier.setDate(today.getDate() - 3);
+  await mockTask(page, detail);
+  await page.route("**/api/tasks?*", route => route.fulfill({ json: {
+    items: [today, yesterday, earlier].map((day, i) => ({ ...detail.task, id: i ? `older-${i}` : detail.task.id, title: `日期分组 ${i}`, updatedAt: day.toISOString() })), nextCursor: null,
+  }}));
+  await page.goto("/tasks?q=日期&status=completed&cursor=next");
+  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
+  const history = page.locator(".conversation-history:visible");
+  await expect(history.locator(".history-day")).toHaveText(["今天", "昨天", "更早"]);
+  await history.getByRole("link", { name: "日期分组 0", exact: true }).click();
+  expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({ q: "日期", status: "completed", cursor: "next" });
+  if (info.project.name === "mobile") await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: detail.task.title, exact: true })).toBeVisible();
 });
 
 test("empty task and observation lists fill the remaining workspace", async ({
@@ -626,6 +647,10 @@ test("task rounds, follow mode, information panel and narrow dialogs", async ({
     await captureQa(page, "task-info-collapsed");
     await page.getByRole("button", { name: "任务信息", exact: true }).click();
     await expect(page.locator(".task-aside")).toBeVisible();
+    expect(await page.locator(".task-main").evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(720);
+    await page.setViewportSize({ width: 1340, height: 1000 });
+    await expect(page.locator(".task-aside")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "任务信息", exact: true })).toHaveAttribute("aria-expanded", "false");
   }
   await page.setViewportSize({ width: 320, height: 640 });
   await page.getByRole("button", { name: "任务信息", exact: true }).click();

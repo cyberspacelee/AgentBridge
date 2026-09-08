@@ -5,6 +5,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  nativeTheme,
   safeStorage,
   session,
   shell,
@@ -34,6 +35,13 @@ try {
 } catch {
   /* First launch or invalid non-critical preferences. */
 }
+nativeTheme.themeSource = ["system", "light", "dark"].includes(preferences?.theme)
+  ? preferences.theme : "system";
+// Native startup surface mirrors tokens.css; desktop smoke checks both themes.
+const windowBackground = () => nativeTheme.shouldUseDarkColors ? "#202421" : "#fcfcfa";
+nativeTheme.on("updated", () => {
+  if (window && !window.isDestroyed()) window.setBackgroundColor(windowBackground());
+});
 let origin;
 let supervisor;
 let window;
@@ -112,6 +120,7 @@ function savePreferences(value) {
     const next = { ...preferences, ...allowed };
     await atomicJson(preferenceFile, next);
     preferences = next;
+    if (allowed.theme) nativeTheme.themeSource = allowed.theme;
   });
   return preferenceWrite;
 }
@@ -257,7 +266,7 @@ async function createWindow() {
     minHeight: 560,
     show: false,
     title: "AgentBridge",
-    backgroundColor: "#ffffff",
+    backgroundColor: windowBackground(),
     webPreferences: {
       session: isolated,
       preload: path.join(import.meta.dirname, "preload.cjs"),

@@ -117,6 +117,16 @@ export function Task() {
   const [actionFocus, setActionFocus] = useState<HTMLElement | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
+  useEffect(() => {
+    if (!showInfo) return
+    const layout = document.querySelector<HTMLElement>(".task-layout")
+    if (!layout) return
+    const observer = new ResizeObserver(() => {
+      if (layout.clientWidth < 1032) setShowInfo(false)
+    })
+    observer.observe(layout)
+    return () => observer.disconnect()
+  }, [showInfo])
   const [focused, setFocused] = useState(false)
   const [positions] = useState(
     () => new Map<string, { top: number; follow: boolean }>()
@@ -198,7 +208,11 @@ export function Task() {
                 label="任务信息"
                 aria-expanded={showInfo}
                 onClick={() => {
-                  if (window.matchMedia("(min-width: 1280px)").matches)
+                  if (
+                    window.matchMedia("(min-width: 1280px)").matches &&
+                    (document.querySelector<HTMLElement>(".task-layout")
+                      ?.clientWidth ?? 0) >= 1032
+                  )
                     setShowInfo((v) => !v)
                   else setInfoOpen(true)
                 }}
@@ -564,7 +578,7 @@ function Execution({
       <div className="execution-controls">
         <div className="execution-context">
           <h2 className="text-sm font-semibold">
-            {run ? `执行 #${run.sequence}` : "完整对话"}
+            {run ? `执行 #${run.sequence}` : agentName}
           </h2>
           <span role="status">{run && <Status state={run.state} />}</span>
           {run && (

@@ -34,7 +34,7 @@ if (executable) {
   await inspectLinks(portable);
   executable = path.join(portable, path.relative(source, executable));
 }
-const artifactDirectory = path.join(code, "artifacts/desktop");
+const artifactDirectory = process.env.AGENT_UI_ARTIFACT_DIR ?? path.join(code, "artifacts/desktop");
 const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined));
 env.AGENT_DESKTOP_DATA_DIR = data;
 env.AGENT_HOST = "127.0.0.1";
@@ -71,6 +71,26 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForURL(/\/agents$/);
   await expect(page.getByRole("heading", { name: "Agent 管理", exact: true })).toBeVisible();
+  await mkdir(artifactDirectory, { recursive: true });
+  await expect(page.getByRole("contentinfo", { name: "桌面状态栏" })).toBeInViewport();
+  for (const [label, theme] of [["浅色", "light"], ["深色", "dark"], ["跟随系统", "system"]]) {
+    await page.getByRole("button", { name: "主题", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: label, exact: true }).click();
+    await expect.poll(() => application.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe(theme);
+    const dark = await application.evaluate(({ nativeTheme }) => nativeTheme.shouldUseDarkColors);
+    await expect(page.locator("html")).toHaveClass(dark ? /dark/ : /light/);
+    const nativeBackground = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBackgroundColor());
+    const rendererBackground = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--background").trim());
+    assert.equal(nativeBackground.toLowerCase(), rendererBackground.toLowerCase());
+    await page.screenshot({ path: path.join(artifactDirectory, `desktop-${theme}.png`) });
+  }
+  assert.equal(await page.locator("main").evaluate(el => getComputedStyle(el).scrollbarGutter), "stable both-edges");
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(760, 560));
+  await expect(page.getByRole("contentinfo", { name: "桌面状态栏" })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "打开导航", exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.screenshot({ path: path.join(artifactDirectory, "desktop-minimum.png") });
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 860));
   let origin = new URL(page.url()).origin;
   const { storeId, engine: defaultEngine } = await page.evaluate(async () => (await fetch("/api/runtime")).json());
   assert.equal(defaultEngine, "pi");

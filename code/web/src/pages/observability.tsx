@@ -276,7 +276,7 @@ export function Observability() {
         value={tab}
         onValueChange={(v) => change("tab", String(v))}
       >
-        <TabsList variant="line" className="mb-4">
+        <TabsList variant="line" className="mb-4 hidden md:inline-flex">
           <TabsTrigger value="overview">运行概览</TabsTrigger>
           <TabsTrigger value="engine">引擎与资源</TabsTrigger>
           <TabsTrigger value="tools">工具与用量</TabsTrigger>

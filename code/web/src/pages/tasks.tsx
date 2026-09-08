@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react"
+import { Fragment, useState, type FormEvent } from "react"
 import {
   Link,
   NavLink,
@@ -11,6 +11,8 @@ import {
   ArrowLeft,
   ArrowRight,
   History,
+  Check,
+  ChevronDown,
   Plus,
   RefreshCw,
   Search,
@@ -33,6 +35,7 @@ import {
   labels,
   Status,
   Notice,
+  date,
 } from "@/components/workspace-ui"
 import {
   InputGroup,
@@ -46,7 +49,11 @@ import {
   PaginationContent,
   PaginationItem,
 } from "@/components/ui/pagination"
-import { Separator } from "@/components/ui/separator"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -61,50 +68,27 @@ import {
   CollapsibleTrigger,
   CollapsibleContent,
 } from "@/components/ui/collapsible"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export function Conversations() {
-  const [historyOpen, setHistoryOpen] = useState(false)
   return (
-    <div className="conversation-workspace">
-      <aside className="conversation-sidebar" aria-label="历史会话">
-        <ConversationHistory />
-      </aside>
-      <div className="conversation-main">
-        <div className="conversation-mobile-nav">
-          <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
-            <SheetTrigger render={<Button variant="ghost" size="sm" />}>
-              <History data-icon="inline-start" />
-              历史会话
-            </SheetTrigger>
-            <SheetContent side="left">
-              <SheetHeader>
-                <SheetTitle>会话</SheetTitle>
-              </SheetHeader>
-              <ConversationHistory close={() => setHistoryOpen(false)} />
-            </SheetContent>
-          </Sheet>
-          <Button variant="ghost" size="sm" render={<Link to="/tasks" />}>
-            <Plus data-icon="inline-start" />
-            新会话
-          </Button>
-        </div>
-        <Outlet />
-      </div>
+    <div className="conversation-main">
+      <Outlet />
     </div>
   )
 }
 
-function ConversationHistory({ close }: { close?: () => void }) {
+function historyDay(value: string) {
+  const day = new Date(value).toDateString()
+  const today = new Date()
+  if (day === today.toDateString()) return "今天"
+  today.setDate(today.getDate() - 1)
+  return day === today.toDateString() ? "昨天" : "更早"
+}
+
+export function ConversationHistory({ close }: { close?: () => void }) {
   const { revision } = useGateway()
   const [params, setParams] = useSearchParams()
   const { pathname } = useLocation()
@@ -141,7 +125,11 @@ function ConversationHistory({ close }: { close?: () => void }) {
     })
   return (
     <div className="conversation-history">
-      <Button variant="outline" render={<Link to="/tasks" />} onClick={close}>
+      <div className="history-heading">
+        <h2>历史会话</h2>
+        <History aria-hidden="true" />
+      </div>
+      <Button variant="secondary" render={<Link to="/tasks" />} onClick={close}>
         <Plus data-icon="inline-start" />
         新会话
       </Button>
@@ -220,25 +208,55 @@ function ConversationHistory({ close }: { close?: () => void }) {
           {query.loading ? (
             <Skeleton className="h-40" />
           ) : (
-            items?.map((task) => (
-              <NavLink
-                key={task.id}
-                aria-label={task.title}
-                to={`/tasks/${task.id}`}
-                onClick={close}
-                className={cn(
-                  "conversation-link",
-                  pathname === `/tasks/${task.id}` && "active"
+            items?.map((task, index) => (
+              <Fragment key={task.id}>
+                {(index === 0 ||
+                  historyDay(items[index - 1].updatedAt) !==
+                    historyDay(task.updatedAt)) && (
+                  <h3 className="history-day">{historyDay(task.updatedAt)}</h3>
                 )}
-              >
-                <span className="truncate font-medium">{task.title}</span>
-                <span className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span className="truncate">
-                    {agentNames[task.engineId] ?? task.engineId}
-                  </span>
-                  <Status state={task.status} />
-                </span>
-              </NavLink>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <NavLink
+                        aria-label={task.title}
+                        to={`/tasks/${task.id}${listKey ? `?${listKey}` : ""}`}
+                        onClick={close}
+                        className={cn(
+                          "conversation-link",
+                          pathname === `/tasks/${task.id}` && "active"
+                        )}
+                      />
+                    }
+                  >
+                    <span className="history-title">{task.title}</span>
+                    <span className="history-meta">
+                      <span className="truncate">
+                        {agentNames[task.engineId] ?? task.engineId}
+                      </span>
+                      <time dateTime={task.updatedAt}>
+                        {new Date(task.updatedAt).toLocaleDateString("zh-CN", {
+                          month: "2-digit",
+                          day: "2-digit",
+                        })}
+                      </time>
+                      {task.status === "completed" ? (
+                        <span className="history-completed">
+                          <Check aria-hidden="true" />
+                          已完成
+                        </span>
+                      ) : (
+                        <Status state={task.status} />
+                      )}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-72 break-words">
+                    {task.title}
+                    <br />
+                    更新于 {date(task.updatedAt)}
+                  </TooltipContent>
+                </Tooltip>
+              </Fragment>
             ))
           )}
           {!query.loading && !query.error && !query.data?.items.length && (
@@ -289,7 +307,7 @@ export function Tasks() {
       <div className="new-conversation-content">
         <h1>新会话</h1>
         <p className="mt-2 mb-6 text-sm text-muted-foreground">
-          选择 Agent，开始对话。
+          描述要完成的工作，让 Agent 从这里开始。
         </p>
         {!runtime ? (
           <Skeleton className="h-64" />
@@ -416,59 +434,62 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             </InputGroup>
             <FieldError id="prompt-error">{invalid.parts}</FieldError>
           </Field>
-          <Field>
-            <FieldLabel htmlFor="engine">Agent</FieldLabel>
-            <Choice
-              id="engine"
-              label="Agent"
-              value={engineId}
-              disabled={busy}
-              options={(runtime?.engines ?? [])
-                .filter(
-                  (item) =>
-                    item.enabled !== false && item.health.status === "ready"
-                )
-                .map((item) => ({
-                  value: item.id,
-                  label: `${agentNames[item.id] ?? item.id}${item.id === runtime?.engine ? " · 默认" : ""}`,
-                }))}
-              onChange={(value) => {
-                setEngineId(value)
-                const policy = runtime?.engines.find(
-                  (item) => item.id === value
-                )?.interactionPolicy
-                setManualPermission(policy?.permission !== "auto")
-                setManualQuestion(policy?.question !== "auto")
-                setSelectedProvider("")
-                setSelectedModel("")
-                setError(undefined)
-              }}
-            />
-          </Field>
-          <Field data-invalid={!!invalid.directory}>
-            <FieldLabel htmlFor="directory">
-              {desktop ? "工作目录" : "服务器工作目录"}
-            </FieldLabel>
-            <DirectoryInput
-              id="directory"
-              value={directory}
-              onValueChange={setDirectory}
-              aria-invalid={!!invalid.directory}
-              aria-describedby={
-                invalid.directory ? "directory-error" : undefined
-              }
-              name="directory"
-              required
-              placeholder={
-                desktop ? "工作目录的绝对路径" : "服务器上的绝对路径"
-              }
-            />
-            <FieldError id="directory-error">{invalid.directory}</FieldError>
-          </Field>
+          <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(140px,1fr)_minmax(0,2fr)]">
+            <Field>
+              <FieldLabel htmlFor="engine">Agent</FieldLabel>
+              <Choice
+                id="engine"
+                label="Agent"
+                value={engineId}
+                disabled={busy}
+                options={(runtime?.engines ?? [])
+                  .filter(
+                    (item) =>
+                      item.enabled !== false && item.health.status === "ready"
+                  )
+                  .map((item) => ({
+                    value: item.id,
+                    label: `${agentNames[item.id] ?? item.id}${item.id === runtime?.engine ? " · 默认" : ""}`,
+                  }))}
+                onChange={(value) => {
+                  setEngineId(value)
+                  const policy = runtime?.engines.find(
+                    (item) => item.id === value
+                  )?.interactionPolicy
+                  setManualPermission(policy?.permission !== "auto")
+                  setManualQuestion(policy?.question !== "auto")
+                  setSelectedProvider("")
+                  setSelectedModel("")
+                  setError(undefined)
+                }}
+              />
+            </Field>
+            <Field data-invalid={!!invalid.directory}>
+              <FieldLabel htmlFor="directory">
+                {desktop ? "工作目录" : "服务器工作目录"}
+              </FieldLabel>
+              <DirectoryInput
+                id="directory"
+                value={directory}
+                onValueChange={setDirectory}
+                aria-invalid={!!invalid.directory}
+                aria-describedby={
+                  invalid.directory ? "directory-error" : undefined
+                }
+                name="directory"
+                required
+                placeholder={
+                  desktop ? "工作目录的绝对路径" : "服务器上的绝对路径"
+                }
+              />
+              <FieldError id="directory-error">{invalid.directory}</FieldError>
+            </Field>
+          </FieldGroup>
           <Collapsible>
             <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
               <SlidersHorizontal data-icon="inline-start" />
               模型与会话设置
+              <ChevronDown data-icon="inline-end" />
             </CollapsibleTrigger>
             <CollapsibleContent keepMounted>
               <FieldGroup className="pt-4">
@@ -592,8 +613,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             </Button>
           )}
           <Failure error={error} />
-          <Separator />
-          <div className="flex justify-end">
+          <div className="conversation-submit">
             <Button type="submit" disabled={busy || !canSubmit}>
               <Send data-icon="inline-start" />
               {busy ? "正在提交" : "发送消息"}
