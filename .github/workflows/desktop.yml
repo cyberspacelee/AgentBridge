@@ -42,6 +42,7 @@ jobs:
         run: xvfb-run -a pnpm test:desktop
         env:
           AGENT_DESKTOP_EXECUTABLE: ${{ github.workspace }}/code/desktop-release/linux-unpacked/agentbridge
+          DEBUG: pw:browser
       - uses: actions/upload-artifact@v4
         with:
           name: AgentBridge-${{ matrix.os }}

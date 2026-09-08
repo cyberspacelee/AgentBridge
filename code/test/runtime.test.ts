@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, readdir, realpath, symlink, rm } from "node:fs/promises";
 import pino from "pino";
 import os from "node:os";
 import path from "node:path";
@@ -401,7 +401,11 @@ test("Agent immediate stop aborts work; failed enable stays unavailable until an
 test("artifact inventory warnings retain the filesystem cause without failing the model run", async () => {
   const f = await fixture();
   try {
-    const session = await f.runtime.createSession({ directory: f.directory });
+    const alias = path.join(f.directory, "working-alias");
+    await symlink(f.directory, alias, process.platform === "win32" ? "junction" : "dir");
+    const session = await f.runtime.createSession({ directory: alias });
+    assert.equal(session.directory, await realpath(f.directory));
+    assert.notEqual(session.directory, alias);
     await rm(f.directory, { recursive: true });
     const accepted = await f.runtime.submit(input(f.directory), session.id);
     await until(() => f.adapter.executions.has(session.id));
@@ -412,7 +416,7 @@ test("artifact inventory warnings retain the filesystem cause without failing th
       .get(accepted.runId);
     assert.equal(log?.level, "warn");
     assert.match(String(log?.message), /ENOENT/);
-    assert.ok(String(log?.message).includes(f.directory));
+    assert.ok(String(log?.message).includes(session.directory));
     f.adapter.complete(session.id);
     assert.equal((await f.runtime.wait(accepted.runId)).state, "completed");
   } finally {

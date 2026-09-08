@@ -154,14 +154,15 @@ async function inspect(directory) {
 const backendBytes = await inspect(backend);
 
 // A small raster terminal mark used by the installer and system tray.
-const size = 256;
+const size = 1024;
 const pixels = Buffer.alloc(size * (1 + size * 4));
 for (let y = 0; y < size; y++)
   for (let x = 0; x < size; x++) {
     const at = y * (1 + size * 4) + 1 + x * 4;
+    const px = x * 256 / size, py = y * 256 / size;
     const chevron =
-      x >= 52 && x <= 118 && Math.abs(Math.abs(y - 117) - (118 - x)) < 10;
-    const line = x >= 126 && x <= 204 && y >= 165 && y <= 184;
+      px >= 52 && px <= 118 && Math.abs(Math.abs(py - 117) - (118 - px)) < 10;
+    const line = px >= 126 && px <= 204 && py >= 165 && py <= 184;
     const color = chevron
       ? [77, 222, 160]
       : line
