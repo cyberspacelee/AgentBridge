@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { rootCertificates } from "node:tls";
-import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,7 +44,7 @@ process.on('message',m=>{if(m.type==='shutdown')server.close(()=>process.disconn
 });
 
 test("start and dev load proxy, bypass and CA settings before Node initializes", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-startup-"));
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "bridge-startup-")));
   const sockets = new Set<Socket>();
   let proxyRequests = 0;
   const proxy = createServer((_request, response) => {
