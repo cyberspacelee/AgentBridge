@@ -820,7 +820,7 @@ export function createServer(runtime: SessionRuntime) {
     const pathname = request.url.split("?")[0]!;
     const appRoute =
       pathname === "/" ||
-      /^\/(tasks|observability|settings|agents)(\/|$)/.test(pathname);
+      /^\/(conversations|tasks|observability|settings|agents)(\/|$)/.test(pathname);
     const browserPage =
       request.headers.accept?.includes("text/html") &&
       !/^\/(api|session|event|permission|question|health|metrics)(\/|$)/.test(

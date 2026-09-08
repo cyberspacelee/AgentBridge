@@ -418,7 +418,14 @@ test("history has usable space on short windows and restores scroll after detail
   await captureQa(page, `conversation-history-${info.project.name}`);
 });
 
-test("legacy task URLs redirect with filters and detail context intact", async ({ page }) => {
+test("conversation URLs load directly and legacy task URLs preserve context", async ({ page, request }) => {
+  for (const path of ["/conversations", "/conversations/history?q=test", "/conversations/design-fixture", "/tasks"]) {
+    const response = await request.get(path);
+    expect(response.status()).toBe(200);
+    expect(response.headers()["content-type"]).toContain("text/html");
+  }
+  expect((await request.get("/conversations-other")).status()).toBe(404);
+  expect((await request.get("/api/conversations")).status()).toBe(404);
   await page.goto("/tasks?q=日期&status=completed");
   await expect(page).toHaveURL(/\/conversations\/history\?q=.*status=completed/);
   await page.route("**/api/tasks/design-fixture", route => route.fulfill({ json: { detail: designFixture() } }));
