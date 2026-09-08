@@ -45,6 +45,9 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     desktopToken: env.AGENT_DESKTOP_TOKEN
       ? z.string().min(32).max(256).parse(env.AGENT_DESKTOP_TOKEN)
       : null,
+    accessToken: env.AGENT_ACCESS_TOKEN ? z.string().min(32).max(256).parse(env.AGENT_ACCESS_TOKEN) : null,
+    supervised: env.AGENT_SUPERVISED === "true",
+    runtimeSources: {} as Record<string, { mode: "managed" | "external"; command?: string }>,
     managedRuntimes: env.AGENT_MANAGED_RUNTIMES === "true",
     runtimeNode: env.AGENT_RUNTIME_NODE ?? process.execPath,
     runtimeNpm: env.AGENT_RUNTIME_NPM ?? "",

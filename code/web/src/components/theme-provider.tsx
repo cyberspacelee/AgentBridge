@@ -1,3 +1,4 @@
+import { saveDesktopPreference } from "@/lib/desktop"
 /* eslint-disable react-refresh/only-export-components */
 import * as React from "react"
 
@@ -96,6 +97,7 @@ export function ThemeProvider({
   const setTheme = React.useCallback(
     (nextTheme: Theme) => {
       localStorage.setItem(storageKey, nextTheme)
+      saveDesktopPreference(storageKey, nextTheme)
       setThemeState(nextTheme)
     },
     [storageKey]
@@ -168,6 +170,7 @@ export function ThemeProvider({
                 : "dark"
 
         localStorage.setItem(storageKey, nextTheme)
+        saveDesktopPreference(storageKey, nextTheme)
         return nextTheme
       })
     }

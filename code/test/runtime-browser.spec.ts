@@ -4,6 +4,7 @@ import type { RuntimeAction, RuntimeView } from "../shared/runtimes.js";
 
 function runtimeFixture(): RuntimeView {
   return {
+    executable: null, detection: "missing", detectedAt: null, compatibility: "unknown", managedVersion: null,
     id: "pi", managed: true, usable: false, platform: "linux-x64",
     installedVersion: null, latestVersion: null, runningVersion: null,
     checkedAt: null, checkError: null, status: "not_installed",
@@ -145,7 +146,7 @@ test("failed latest checks identify cached versions and host CLIs remain outside
   await expect(page.getByRole("button", { name: "更新到最新版", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "卸载", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "启用", exact: true })).toBeEnabled();
-  expect(checks).toBe(1);
+  expect(checks).toBe(2);
 });
 
 test("desktop directory chooser fills paths and preserves them when cancelled", async ({ page }, info) => {

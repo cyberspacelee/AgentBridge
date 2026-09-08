@@ -28,7 +28,15 @@ function bypassList(value) {
   return [...new Set(entries)];
 }
 
-export function validateNetworkSettings(input, previousPassword = "") {
+export function validateCertificatePem(pem) {
+  if (!pem || Buffer.byteLength(pem) > 2 * 1024 * 1024) throw new Error("CA certificate must be no larger than 2 MiB");
+  const expression = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+  const certificates = pem.match(expression);
+  if (!certificates?.length || pem.replace(expression, "").replace(/^\s*#.*$/gm, "").trim()) throw new Error();
+  for (const certificate of certificates) new X509Certificate(certificate);
+}
+
+export function validateNetworkSettings(input, previousPassword = "", validateCertificate = true) {
   if (!input || typeof input !== "object" || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input)))
     throw new Error("Network settings must be an object");
   const allowed = [...Object.keys(defaultNetworkSettings), "proxyPassword"];
@@ -51,16 +59,13 @@ export function validateNetworkSettings(input, previousPassword = "") {
   }
   if (settings.mode === "manual" && !settings.proxyUrl) throw new Error("Manual proxy mode requires a proxy URL");
   settings.noProxy = bypassList(settings.noProxy).join(",");
-  if (settings.caFile) {
+  if (settings.caFile && validateCertificate) {
     try {
       if (!path.isAbsolute(settings.caFile)) throw new Error();
       const info = statSync(settings.caFile);
       if (!info.isFile() || !info.size || info.size > 2 * 1024 * 1024) throw new Error();
       const pem = readFileSync(settings.caFile, "utf8");
-      const expression = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
-      const certificates = pem.match(expression);
-      if (!certificates?.length || pem.replace(expression, "").replace(/^\s*#.*$/gm, "").trim()) throw new Error();
-      for (const certificate of certificates) new X509Certificate(certificate);
+      validateCertificatePem(pem);
     } catch { throw new Error("CA file must be an existing absolute PEM certificate file no larger than 2 MiB"); }
   }
   return settings;

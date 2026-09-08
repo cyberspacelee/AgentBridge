@@ -10,14 +10,13 @@ import {
   shell,
   Tray,
 } from "electron";
-import { spawn, execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { isWorkspaceUrl, externalUrl, authorizedHeaders } from "./security.mjs";
 import updater from "electron-updater";
-import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment } from "./network.mjs";
 
 app.setName("AgentBridge");
 app.setPath(
@@ -27,30 +26,25 @@ app.setPath(
     : path.join(app.getPath("appData"), "AgentBridge"),
 );
 const dataDirectory = app.getPath("userData");
-mkdirSync(dataDirectory, { recursive: true });
+await mkdir(dataDirectory, { recursive: true });
 const preferenceFile = path.join(dataDirectory, "desktop.json");
 let preferences = {};
 try {
-  preferences = JSON.parse(readFileSync(preferenceFile, "utf8"));
+  preferences = JSON.parse(await readFile(preferenceFile, "utf8"));
 } catch {
   /* First launch or invalid non-critical preferences. */
 }
 const token = randomBytes(32).toString("hex");
 let origin;
-let child;
+let supervisor;
 let window;
 let tray;
 let quitting = false;
 let promptOpen = false;
-let forcedExitTimer;
 let installingUpdate = false;
 let updateBusy = false;
-let restarting = false;
-let testingNetwork = false;
-let networkSettings = { ...defaultNetworkSettings, proxyPassword: "" };
-let appliedNetwork = networkSettings;
-const networkFile = path.join(dataDirectory, "network.json");
-const engineGroups = new Set();
+let appliedNetwork;
+let updateLogin;
 const resources = app.isPackaged
   ? process.resourcesPath
   : path.resolve(import.meta.dirname, "../.desktop-stage");
@@ -74,38 +68,8 @@ const backend =
   process.env.AGENT_DESKTOP_BACKEND ??
   path.join(resources, "backend/dist/src/main.js");
 
-function networkView() {
-  const { proxyPassword, ...settings } = networkSettings;
-  return {
-    settings,
-    hasPassword: Boolean(proxyPassword),
-    restartRequired: JSON.stringify(networkSettings) !== JSON.stringify(appliedNetwork),
-  };
-}
-
-function loadNetworkSettings() {
-  if (!existsSync(networkFile)) return;
-  const { encryptedPassword, ...stored } = JSON.parse(readFileSync(networkFile, "utf8"));
-  if (encryptedPassword)
-    stored.proxyPassword = safeStorage.decryptString(Buffer.from(encryptedPassword, "base64"));
-  networkSettings = validateNetworkSettings(stored);
-}
-
-function saveNetworkSettings(input) {
-  const next = validateNetworkSettings(input, networkSettings.proxyPassword);
-  const stored = { ...next };
-  if (next.proxyPassword && safeStorage.isEncryptionAvailable() &&
-      (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")) {
-    stored.encryptedPassword = safeStorage.encryptString(next.proxyPassword).toString("base64");
-    delete stored.proxyPassword;
-  }
-  // Match the private local storage used for provider credentials when no OS keyring is available.
-  const temporary = `${networkFile}.tmp`;
-  writeFileSync(temporary, JSON.stringify(stored, null, 2), { mode: 0o600 });
-  renameSync(temporary, networkFile);
-  networkSettings = next;
-  return networkView();
-}
+const { Supervisor, atomicJson } = await import(pathToFileURL(path.join(path.dirname(backend), "../host/supervisor.mjs")).href);
+const { networkEnvironment } = await import(pathToFileURL(path.join(path.dirname(backend), "../host/network.mjs")).href);
 
 async function configureUpdateProxy() {
   const env = networkEnvironment(appliedNetwork);
@@ -117,43 +81,15 @@ async function configureUpdateProxy() {
     mode: rules.length ? "fixed_servers" : "direct",
     ...(rules.length ? { proxyRules: rules.join(";"), proxyBypassRules: env.NO_PROXY.replaceAll(",", ";") } : {}),
   });
-  updater.autoUpdater.on("login", (info, callback) => {
+  await updater.autoUpdater.netSession.closeAllConnections();
+  if (updateLogin) updater.autoUpdater.removeListener("login", updateLogin);
+  updateLogin = (info, callback) => {
     const proxy = proxies.find((candidate) => candidate && info.isProxy &&
       candidate.hostname === info.host && Number(candidate.port || (candidate.protocol === "https:" ? 443 : 80)) === info.port);
     if (proxy) callback(decodeURIComponent(proxy.username), decodeURIComponent(proxy.password));
     else callback();
-  });
-}
-
-async function testNetworkSettings(input, target) {
-  if (testingNetwork) throw new Error("已有网络测试正在进行");
-  if (typeof target !== "string" || target.length > 4096) throw new Error("测试地址无效");
-  let url;
-  try { url = new URL(target); } catch { throw new Error("请输入有效的 HTTP 或 HTTPS 测试地址"); }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
-    throw new Error("测试地址仅支持不含用户名和密码的 HTTP 或 HTTPS URL");
-  const settings = validateNetworkSettings(input, networkSettings.proxyPassword);
-  const env = networkEnvironment(settings);
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.NODE_OPTIONS;
-  delete env.AGENT_DESKTOP_TOKEN;
-  testingNetwork = true;
-  try {
-    const script = `const start=Date.now();
-try {
-  const response=await fetch(process.argv[1],{signal:AbortSignal.timeout(10000)});
-  await response.body?.cancel();
-  console.log(JSON.stringify({status:response.status,durationMs:Date.now()-start}));
-} catch(error) {
-  console.log(JSON.stringify({error:error.cause?.code||error.code||error.name||"NETWORK_ERROR"}));
-}`;
-    const { stdout } = await promisify(execFile)(node, ["--input-type=module", "-e", script, url.href], {
-      env, cwd: dataDirectory, windowsHide: true, timeout: 15000, maxBuffer: 16384,
-    });
-    const result = JSON.parse(stdout);
-    if (result.error) throw new Error(`连接失败（${result.error}），请检查代理地址、认证信息或证书。`);
-    return result;
-  } finally { testingNetwork = false; }
+  };
+  updater.autoUpdater.on("login", updateLogin);
 }
 
 function trusted(event) {
@@ -167,19 +103,18 @@ function trusted(event) {
   );
 }
 
+let preferenceWrite = Promise.resolve();
 function savePreferences(value) {
   const allowed = {};
-  if (["system", "light", "dark"].includes(value?.theme))
-    allowed.theme = value.theme;
+  if (["system", "light", "dark"].includes(value?.theme)) allowed.theme = value.theme;
   if (["true", "false"].includes(value?.["agentbridge:sidebar-collapsed"]))
-    allowed["agentbridge:sidebar-collapsed"] =
-      value["agentbridge:sidebar-collapsed"];
-  preferences = allowed;
-  try {
-    writeFileSync(preferenceFile, JSON.stringify(allowed), { mode: 0o600 });
-  } catch (error) {
-    console.error("Could not save desktop preferences:", error.message);
-  }
+    allowed["agentbridge:sidebar-collapsed"] = value["agentbridge:sidebar-collapsed"];
+  preferenceWrite = preferenceWrite.catch(() => {}).then(async () => {
+    const next = { ...preferences, ...allowed };
+    await atomicJson(preferenceFile, next);
+    preferences = next;
+  });
+  return preferenceWrite;
 }
 
 async function openExternal(value) {
@@ -192,46 +127,6 @@ function showWindow() {
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
-}
-
-async function forceStop() {
-  if (process.platform === "win32") {
-    const pids =
-      child?.pid && child.exitCode === null ? [child.pid] : [...engineGroups];
-    await Promise.all(
-      pids.map(
-        (pid) =>
-          new Promise((resolve) => {
-            const killer = spawn(
-              "taskkill",
-              ["/pid", String(pid), "/T", "/F"],
-              {
-                windowsHide: true,
-              },
-            );
-            killer.once("error", resolve);
-            killer.once("exit", resolve);
-          }),
-      ),
-    );
-    engineGroups.clear();
-    return;
-  } else {
-    for (const pid of engineGroups) {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") console.error(error);
-      }
-    }
-    engineGroups.clear();
-  }
-  if (!child?.pid || child.exitCode !== null) return;
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch (error) {
-    if (error.code !== "ESRCH") console.error(error);
-  }
 }
 
 async function requestQuit() {
@@ -265,15 +160,10 @@ async function requestQuit() {
     quitting = true;
     if (drain) {
       tray?.setToolTip("AgentBridge - 等待任务完成");
-      window?.hide();
+      showWindow();
     }
-    if (child?.connected) {
-      child.send({ type: drain ? "drain" : "shutdown" });
-      if (!drain)
-        forcedExitTimer = setTimeout(() => {
-          void forceStop().finally(() => app.exit(1));
-        }, 20000);
-    } else finishQuit();
+    if (supervisor?.child?.exitCode === null) await supervisor.stop(drain ? "wait" : "stop");
+    else finishQuit();
   } catch (error) {
     const result = await dialog.showMessageBox(window, {
       type: "warning",
@@ -284,11 +174,9 @@ async function requestQuit() {
     });
     if (result.response === 1) {
       quitting = true;
-      if (child?.connected) child.send({ type: "shutdown" });
-      forcedExitTimer = setTimeout(() => {
-        void forceStop().finally(() => app.exit(1));
-      }, 20000);
-      if (!child || child.exitCode !== null) finishQuit();
+      await supervisor?.kill();
+      await supervisor?.release();
+      finishQuit();
     }
   } finally {
     promptOpen = false;
@@ -298,7 +186,6 @@ async function requestQuit() {
 function finishQuit() {
   if (installingUpdate) updater.autoUpdater.quitAndInstall(false, true);
   else {
-    if (restarting) app.relaunch();
     app.quit();
   }
 }
@@ -466,82 +353,25 @@ async function createWindow() {
 }
 
 async function launchBackend() {
-  if (!existsSync(node) || !existsSync(backend) || !existsSync(npm))
-    throw new Error(
-      "桌面运行文件不完整，请重新安装或运行 pnpm desktop:prepare。",
-    );
-  const env = {
-    ...networkEnvironment(appliedNetwork),
-    AGENT_HOST: "127.0.0.1",
-    AGENT_PORT: "0",
-    AGENT_DATA_DIR: path.join(dataDirectory, "data"),
-    AGENT_DESKTOP_TOKEN: token,
-    AGENT_MANAGED_RUNTIMES: "true",
-    AGENT_RUNTIME_NODE: node,
-    AGENT_RUNTIME_NPM: npm,
-  };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.NODE_OPTIONS;
-  child = spawn(node, [backend], {
-    env,
-    cwd: dataDirectory,
-    detached: process.platform !== "win32",
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  const secure = await safeStorage.isAsyncEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
+  supervisor = new Supervisor({
+    node, args: [backend], directory: path.join(dataDirectory, "data"), token,
+    protection: secure ? "os" : "file",
+    encrypt: secure ? (value) => safeStorage.encryptStringAsync(value) : undefined,
+    decrypt: async (value) => (await safeStorage.decryptStringAsync(value)).result,
+    env: { AGENT_HOST: "127.0.0.1", AGENT_PORT: "0", AGENT_DESKTOP_TOKEN: token, AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm },
+    onReady: (url) => { origin = url; },
+    onNetwork: async (settings) => { appliedNetwork = settings; await configureUpdateProxy(); },
+    onExit: (code, closing) => {
+      if (!closing) dialog.showErrorBox("AgentBridge 后台已停止", `退出状态：${code}`);
+      quitting = true; finishQuit();
+    },
+    onError: (error) => dialog.showErrorBox("后台操作失败", error.message),
   });
-  let diagnostics = "";
-  for (const stream of [child.stdout, child.stderr])
-    stream.on("data", (chunk) => {
-      diagnostics = (
-        diagnostics + chunk.toString().replaceAll(token, "[redacted]")
-      ).slice(-8192);
-    });
-  child.on("message", (message) => {
-    if (!Number.isSafeInteger(message?.pid) || message.pid <= 1) return;
-    if (message.type === "engine-started") engineGroups.add(message.pid);
-    if (message.type === "engine-exited") engineGroups.delete(message.pid);
-  });
-  child.once("exit", async (code) => {
-    clearTimeout(forcedExitTimer);
-    await forceStop();
-    if (quitting) {
-      finishQuit();
-      return;
-    }
-    dialog.showErrorBox(
-      "AgentBridge 后台已停止",
-      `退出状态：${code ?? "未知"}\n${diagnostics}`,
-    );
-    quitting = true;
-    app.quit();
-  });
-  origin = await new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`后台启动超时\n${diagnostics}`)),
-      45000,
-    );
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("exit", () => {
-      clearTimeout(timer);
-      reject(new Error(`后台启动失败\n${diagnostics}`));
-    });
-    child.on("message", (message) => {
-      if (message?.type === "ready" && typeof message.url === "string") {
-        const url = new URL(message.url);
-        if (
-          url.protocol !== "http:" ||
-          url.hostname !== "127.0.0.1" ||
-          !url.port
-        )
-          return;
-        clearTimeout(timer);
-        resolve(url.origin);
-      }
-    });
-  });
+  await supervisor.initialize();
+  appliedNetwork = supervisor.applied;
+  await configureUpdateProxy();
+  origin = await supervisor.start();
 }
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -554,13 +384,13 @@ else {
       void requestQuit();
     }
   });
-  ipcMain.on("desktop:initial", (event) => {
-    event.returnValue = trusted(event)
-      ? { version: app.getVersion(), preferences }
-      : null;
+  ipcMain.handle("desktop:initial", (event) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    return { version: app.getVersion(), preferences };
   });
-  ipcMain.on("desktop:preferences", (event, value) => {
-    if (trusted(event)) savePreferences(value);
+  ipcMain.handle("desktop:preferences", async (event, value) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    await savePreferences(value);
   });
   ipcMain.handle("desktop:select-directory", async (event) => {
     if (!trusted(event)) throw new Error("Untrusted desktop request");
@@ -570,18 +400,6 @@ else {
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
-  ipcMain.handle("desktop:network-get", (event) => {
-    if (!trusted(event)) throw new Error("Untrusted desktop request");
-    return networkView();
-  });
-  ipcMain.handle("desktop:network-save", (event, input) => {
-    if (!trusted(event)) throw new Error("Untrusted desktop request");
-    return saveNetworkSettings(input);
-  });
-  ipcMain.handle("desktop:network-test", (event, input, url) => {
-    if (!trusted(event)) throw new Error("Untrusted desktop request");
-    return testNetworkSettings(input, url);
-  });
   ipcMain.handle("desktop:select-certificate", async (event) => {
     if (!trusted(event)) throw new Error("Untrusted desktop request");
     const result = await dialog.showOpenDialog(window, {
@@ -590,26 +408,11 @@ else {
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
-  ipcMain.handle("desktop:restart", async (event) => {
-    if (!trusted(event)) throw new Error("Untrusted desktop request");
-    if (quitting || promptOpen || updateBusy) return false;
-    restarting = true;
-    await requestQuit();
-    if (!quitting) restarting = false;
-    return quitting;
-  });
   void app.whenReady().then(async () => {
     try {
       updater.autoUpdater.on("error", () => {});
-      let networkError;
-      try { loadNetworkSettings(); } catch {
-        networkError = "保存的代理或证书配置无法读取，已临时使用环境设置。请在系统信息中的网络与代理重新配置。";
-      }
-      appliedNetwork = networkSettings;
-      await configureUpdateProxy();
       await launchBackend();
       await createWindow();
-      if (networkError) dialog.showErrorBox("网络配置需要修复", networkError);
       const iconFile = path.join(import.meta.dirname, "icon.png");
       if (existsSync(iconFile)) {
         tray = new Tray(
@@ -686,7 +489,8 @@ else {
       );
     } catch (error) {
       quitting = true;
-      await forceStop();
+      await supervisor?.kill();
+      await supervisor?.release();
       dialog.showErrorBox("AgentBridge 启动失败", error.message);
       app.quit();
     }

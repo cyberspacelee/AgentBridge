@@ -18,7 +18,7 @@
 
 Electron 主进程管理窗口、托盘和受管 Node 子进程；现有 Fastify/SQLite/SessionRuntime 在该子进程运行，React 继续使用同源 HTTP/SSE。桌面仅监听随机 loopback 端口，窗口请求使用每次启动独立的访问凭据，renderer 不获得 Node 或任意 IPC 权限。关闭窗口继续后台运行，显式退出复用任务等待/取消和引擎清理。
 
-默认桌面包含 Node/npm 和网关，不含四个 Agent CLI；管理页按需安装官方最新版、更新和卸载，程序与用户状态分目录保存。安装切换在 Agent 生命周期入口串行执行，停止原生进程并备份原生目录/会话绑定后切换，失败恢复旧版，卸载保留历史与配置。应用构建依赖固定，CLI 版本独立更新。源码 Web 模式继续使用主机 CLI。
+默认桌面包含 Node/npm 和网关，不含四个 Agent CLI；管理页按需安装官方最新版、更新和卸载，程序与用户状态分目录保存。安装切换在 Agent 生命周期入口串行执行，停止原生进程并备份原生目录/会话绑定后切换，失败恢复旧版，卸载保留历史与配置。应用构建依赖固定，CLI 版本独立更新。Web 和 Desktop 共用 `host/Supervisor`、网络策略和逐 Agent CLI 来源。Desktop 仅负责窗口、托盘、系统对话框、偏好和应用更新；业务页面通过同一 HTTP/SSE API。详见 [统一运行](docs/design/WEB_DESKTOP.md)。
 
 文件边界、资源与平台验收见 [桌面引入](docs/design/DESKTOP_FRAMEWORK.md)，安装状态与接口见 [运行时安装](docs/design/RUNTIME_INSTALL.md)。
 
@@ -96,7 +96,7 @@ code/
       evaluation.ts             # 赛题 schema，与原始协议核对
     storage/
       sqlite.ts                 # 事务、实体查询与已提交事件
-      migrations/               # 可追踪数据库迁移
+      schema.ts                 # 当前数据库建表定义；拒绝历史格式
     gateway/
       routes.ts                 # 1.2 HTTP 接口
       app-routes.ts             # 前端任务查询、异步提交和产物接口
@@ -350,7 +350,7 @@ sequenceDiagram
 
 1. 设计基线：先审阅总体方案、统一术语、Domain、应用契约、页面和完整验收；补齐 1.2 schema、1.1 的八个路由及字段差异、事件包装、取消语义和完成判定。
 2. Windows 可行性：两引擎固定版本，无交互启动，中文目录读写，指定模型，工具调用，中止及清理。
-3. 领域与网关：状态转换、SQLite 迁移、事务、队列、幂等、恢复、消息合并和 HTTP/SSE，用可控测试适配器验证故障和并发。
+3. 领域与网关：状态转换、当前 SQLite 格式初始化、事务、队列、幂等、恢复、消息合并和 HTTP/SSE，用可控测试适配器验证故障和并发。
 4. OpenCode 闭环：全局事件过滤、目录上下文、真实消息完成、权限/问题自动回复和原生删除。
 5. Pi 闭环：RPC 分帧、进程会话映射、模型设置、最终收敛与取消；复用同一网关契约测试。
 6. 前端闭环：任务操作与详情、网关观测、刷新恢复、中止、交互回复和产物访问；同步验证指标口径与故障定位。

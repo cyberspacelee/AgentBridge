@@ -1,3 +1,5 @@
+import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { useEffect, useRef, useState } from "react"
 import { Download, RefreshCw, Trash2, X } from "lucide-react"
 import type { RuntimeAction, RuntimeView } from "../../../shared/runtimes"
@@ -47,6 +49,26 @@ export function RuntimeInstaller({
   const [actionError, setActionError] = useState<Error>()
   const [confirming, setConfirming] = useState(false)
   const checked = useRef(false)
+  const [command, setCommand] = useState("")
+  const [sourceBusy, setSourceBusy] = useState(false)
+  async function source(mode: "managed" | "external") {
+    setSourceBusy(true)
+    setActionError(undefined)
+    try {
+      await api(`/api/runtimes/${agent.id}/source`, {
+        method: "PUT",
+        body: JSON.stringify({
+          mode,
+          ...(mode === "external" ? { command } : {}),
+        }),
+      })
+    } catch (error) {
+      setActionError(error as Error)
+    } finally {
+      setSourceBusy(false)
+      reload()
+    }
+  }
   async function perform(action: RuntimeAction) {
     setPending(action)
     setActionError(undefined)
@@ -64,7 +86,7 @@ export function RuntimeInstaller({
     }
   }
   useEffect(() => {
-    if (!runtime?.managed || checked.current) return
+    if (!runtime || checked.current) return
     checked.current = true
     if (!runtime.operation)
       void api(`/api/runtimes/${agent.id}/actions`, {
@@ -77,7 +99,7 @@ export function RuntimeInstaller({
 
   if (!runtime)
     return error ? <Failure error={error} /> : <Skeleton className="h-64" />
-  const busy = !!pending || !!runtime.operation
+  const busy = sourceBusy || !!pending || !!runtime.operation
   const latest = runtime.latestVersion
   const isLatest =
     !runtime.checkError && !!latest && latest === runtime.installedVersion
@@ -102,7 +124,7 @@ export function RuntimeInstaller({
                 ? "程序不可用"
                 : installationLabels[runtime.status]}
           </Badge>
-          {runtime.managed && (
+          {
             <IconButton
               label="检查更新"
               disabled={busy}
@@ -110,7 +132,7 @@ export function RuntimeInstaller({
             >
               <RefreshCw />
             </IconButton>
-          )}
+          }
         </div>
       </div>
       <Failure error={error} />
@@ -135,7 +157,12 @@ export function RuntimeInstaller({
         </div>
         <div>
           <dt>已安装版本</dt>
-          <dd>{runtime.installedVersion ?? "未安装"}</dd>
+          <dd>
+            {runtime.installedVersion ??
+              (runtime.managed || runtime.detection === "missing"
+                ? "未安装"
+                : "未检测")}
+          </dd>
         </div>
         <div>
           <dt>当前运行版本</dt>
@@ -175,8 +202,14 @@ export function RuntimeInstaller({
             {runtime.operation === "uninstall"
               ? "等待当前任务结束后卸载"
               : runtime.updateStatus === "switching"
-                ? updateLabels.switching
-                : "正在下载并校验"}
+                ? runtime.operation === "source"
+                  ? "等待任务结束并切换来源"
+                  : updateLabels.switching
+                : runtime.operation === "detect"
+                  ? "正在检测外部 CLI"
+                  : runtime.operation === "source"
+                    ? "正在验证候选 CLI"
+                    : "正在下载并校验"}
             {progress !== undefined ? ` · ${Math.round(progress)}%` : ""}
           </p>
           <progress
@@ -192,6 +225,79 @@ export function RuntimeInstaller({
           )}
         </div>
       )}
+      <dl className="agent-facts">
+        <div>
+          <dt>程序路径</dt>
+          <dd className="break-all">{runtime.executable ?? "未检测"}</dd>
+        </div>
+        <div>
+          <dt>检测状态</dt>
+          <dd>
+            {
+              {
+                unknown: "未检测",
+                checking: "检测中",
+                present: "程序存在",
+                missing: "程序缺失",
+                failed: "检测失败",
+              }[runtime.detection ?? "unknown"]
+            }
+          </dd>
+        </div>
+        <div>
+          <dt>协议状态</dt>
+          <dd>
+            {runtime.compatibility === "compatible"
+              ? "兼容"
+              : runtime.compatibility === "incompatible"
+                ? "不兼容"
+                : "尚未验证"}
+          </dd>
+        </div>
+      </dl>
+      {!runtime.managed && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => void perform("detect")}
+          >
+            检测外部 CLI
+          </Button>
+          <Button disabled={busy} onClick={() => void perform("install")}>
+            安装受管最新版
+          </Button>
+          <Button
+            disabled={busy || !runtime.managedVersion}
+            onClick={() => void source("managed")}
+          >
+            切换到受管版本
+            {runtime.managedVersion ? ` ${runtime.managedVersion}` : ""}
+          </Button>
+        </div>
+      )}
+      <Field>
+        <FieldLabel htmlFor={`runtime-command-${agent.id}`}>
+          外部 CLI 命令或绝对路径
+        </FieldLabel>
+        <Input
+          id={`runtime-command-${agent.id}`}
+          value={command}
+          onChange={(event) => setCommand(event.target.value)}
+          placeholder={runtime.executable ?? agent.id}
+          disabled={busy}
+        />
+        <FieldDescription>
+          先验证版本与协议，等待当前任务结束后切换。不会修改或卸载外部程序。
+        </FieldDescription>
+        <Button
+          variant="outline"
+          disabled={busy || !command.trim()}
+          onClick={() => void source("external")}
+        >
+          验证并切换到外部 CLI
+        </Button>
+      </Field>
       {runtime.managed && (
         <div className="flex flex-wrap gap-2">
           <Button
@@ -221,17 +327,23 @@ export function RuntimeInstaller({
               卸载
             </Button>
           )}
-          {runtime.cancelable && (
-            <Button
-              variant="outline"
-              disabled={!!pending}
-              onClick={() => void perform("cancel")}
-            >
-              <X data-icon="inline-start" />
-              取消下载
-            </Button>
-          )}
         </div>
+      )}
+      {runtime.cancelable && (
+        <Button
+          variant="outline"
+          disabled={!!pending}
+          onClick={() => void perform("cancel")}
+        >
+          <X data-icon="inline-start" />
+          {runtime.operation === "source"
+            ? "取消验证"
+            : runtime.operation === "detect"
+              ? "取消检测"
+              : runtime.operation === "check"
+                ? "取消检查"
+                : "取消下载"}
+        </Button>
       )}
       <ConfirmDialog
         open={confirming}

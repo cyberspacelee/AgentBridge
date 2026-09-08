@@ -1,8 +1,10 @@
-import { useContext } from "react"
+import { desktop } from "@/lib/desktop"
+import type { SystemView } from "../../../shared/system"
+import { useContext, useState } from "react"
 import { Link } from "react-router-dom"
 import { RefreshCw, Bot } from "lucide-react"
 import type { SettingsView } from "../../../shared/settings"
-import { useQuery } from "@/lib/api"
+import { api, useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
 import { Failure, IconButton, duration, bytes } from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
@@ -10,7 +12,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { NetworkSettingsPanel } from "./network-settings"
 
 export function Settings() {
-  const { runtime } = useContext(GatewayContext)
+  const [accessError, setAccessError] = useState<Error>()
+  const { runtime, revision } = useContext(GatewayContext)
+  const system = useQuery<SystemView>("/api/system", revision)
   const settings = useQuery<SettingsView>("/api/settings")
   return (
     <div className="page settings-page">
@@ -21,7 +25,29 @@ export function Settings() {
         </IconButton>
       </div>
       <NetworkSettingsPanel />
-      <Failure error={settings.error} />
+      <Failure error={accessError ?? settings.error ?? system.error} />
+      {system.data?.maintenance !== "ready" && system.data && (
+        <p role="status">
+          服务正在
+          {system.data.maintenance === "draining" ? "等待任务完成" : "停止"}
+          ，暂不接受新操作。
+        </p>
+      )}
+      {!desktop && system.data?.capabilities.restart && (
+        <Button
+          variant="outline"
+          onClick={async () => {
+            try {
+              await api("/api/access", { method: "DELETE" })
+              window.dispatchEvent(new CustomEvent("agentbridge:unauthorized"))
+            } catch (error) {
+              setAccessError(error as Error)
+            }
+          }}
+        >
+          断开浏览器连接
+        </Button>
+      )}
       {!runtime || !settings.data ? (
         <Skeleton className="h-48" />
       ) : (
@@ -32,6 +58,24 @@ export function Settings() {
               <div>
                 <dt>实例</dt>
                 <dd>{runtime.instanceId}</dd>
+              </div>
+              <div>
+                <dt>应用版本</dt>
+                <dd>{system.data?.version ?? "未知"}</dd>
+              </div>
+              <div>
+                <dt>Node.js</dt>
+                <dd>{system.data?.nodeVersion ?? "未知"}</dd>
+              </div>
+              <div>
+                <dt>Node 路径</dt>
+                <dd className="break-all">{system.data?.nodePath ?? "未知"}</dd>
+              </div>
+              <div>
+                <dt>npm 路径</dt>
+                <dd className="break-all">
+                  {system.data?.npmPath ?? "未发现"}
+                </dd>
               </div>
               <div>
                 <dt>存储</dt>

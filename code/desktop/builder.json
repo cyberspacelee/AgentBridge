@@ -8,7 +8,6 @@
     "main.mjs",
     "preload.cjs",
     "security.mjs",
-    "network.mjs",
     "icon.png",
     "package.json"
   ],

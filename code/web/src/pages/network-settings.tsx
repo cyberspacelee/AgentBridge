@@ -1,6 +1,21 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useContext, useRef, useState, type FormEvent } from "react"
 import { FileInput, RefreshCw, Save, Trash2, Zap } from "lucide-react"
-import { desktop, type NetworkSettings, type NetworkView } from "@/lib/desktop"
+import { desktop } from "@/lib/desktop"
+import type {
+  NetworkSettings,
+  NetworkView,
+  SystemView,
+} from "../../../shared/system"
+import { api, useQuery } from "@/lib/api"
+import { GatewayContext } from "@/lib/gateway"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -21,34 +36,28 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Choice, Failure, IconButton, Notice } from "@/components/workspace-ui"
 
 export function NetworkSettingsPanel() {
-  const [view, setView] = useState<NetworkView>()
-  const [error, setError] = useState<Error>()
-  useEffect(() => {
-    if (!desktop) return
-    let active = true
-    void desktop.getNetworkSettings().then(
-      (value) => {
-        if (active) setView(value)
-      },
-      (error) => {
-        if (active) setError(error as Error)
-      }
-    )
-    return () => {
-      active = false
-    }
-  }, [])
+  const { revision } = useContext(GatewayContext)
+  const system = useQuery<SystemView>("/api/system", revision)
+  const network = useQuery<NetworkView>(
+    system.data?.capabilities.network ? "/api/system/network" : null,
+    revision
+  )
   return (
-    <section className="settings-section" aria-labelledby="network-heading">
+    <section
+      className="settings-section min-w-0"
+      aria-labelledby="network-heading"
+    >
       <h2 id="network-heading">网络与代理</h2>
-      {!desktop ? (
-        <p className="text-sm text-muted-foreground">
-          源码 Web 模式通过启动目录的 .env 配置代理，修改后重启网关。
-        </p>
-      ) : view ? (
-        <NetworkForm initial={view} />
-      ) : error ? (
-        <Failure error={error} />
+      <Failure error={system.error ?? network.error} />
+      {network.data ? (
+        <NetworkForm
+          key={network.data.appliedRevision}
+          initial={network.data}
+        />
+      ) : system.data && !system.data.capabilities.network ? (
+        <Notice title="启动管理器未连接">
+          请通过 pnpm start、pnpm dev 或桌面入口启动服务，以管理网络和重启。
+        </Notice>
       ) : (
         <Skeleton className="h-64" />
       )}
@@ -62,12 +71,14 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
   const [password, setPassword] = useState<string>()
   const [target, setTarget] = useState("https://registry.npmjs.org/")
   const [busy, setBusy] = useState<
-    "save" | "test" | "certificate" | "restart"
+    "save" | "test" | "certificate" | "restart" | "refresh"
   >()
   const [error, setError] = useState<Error>()
   const [invalid, setInvalid] = useState<Record<string, string>>({})
   const [result, setResult] = useState<{ status: number; durationMs: number }>()
   const [saved, setSaved] = useState(false)
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const certificateInput = useRef<HTMLInputElement>(null)
   const dirty =
     password !== undefined ||
     JSON.stringify(draft) !== JSON.stringify(view.settings)
@@ -101,11 +112,14 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
   }
   async function save(event: FormEvent) {
     event.preventDefault()
-    if (!desktop || busy || !validate()) return
+    if (busy || !validate()) return
     setBusy("save")
     setError(undefined)
     try {
-      const next = await desktop.saveNetworkSettings(input)
+      const next = await api<NetworkView>("/api/system/network", {
+        method: "PUT",
+        body: JSON.stringify({ settings: input, revision: view.revision }),
+      })
       setView(next)
       setDraft(next.settings)
       setPassword(undefined)
@@ -118,12 +132,20 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
     }
   }
   async function testConnection() {
-    if (!desktop || busy || !validate(true)) return
+    if (busy || !validate(true)) return
     setBusy("test")
     setError(undefined)
     setResult(undefined)
     try {
-      setResult(await desktop.testNetworkSettings(input, target))
+      setResult(
+        await api<{ status: number; durationMs: number }>(
+          "/api/system/network/test",
+          {
+            method: "POST",
+            body: JSON.stringify({ settings: input, url: target }),
+          }
+        )
+      )
     } catch (error) {
       setError(error as Error)
     } finally {
@@ -131,10 +153,14 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
     }
   }
   async function certificate() {
-    if (!desktop || busy) return
+    if (busy) return
     setBusy("certificate")
     setError(undefined)
     try {
+      if (!desktop) {
+        certificateInput.current?.click()
+        return
+      }
       const file = await desktop.selectCertificate()
       if (file) change({ caFile: file })
     } catch (error) {
@@ -143,12 +169,16 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
       setBusy(undefined)
     }
   }
-  async function restart() {
-    if (!desktop || busy) return
+  async function restart(mode: "wait" | "stop") {
+    if (busy) return
     setBusy("restart")
     setError(undefined)
     try {
-      await desktop.restart()
+      await api("/api/system/lifecycle", {
+        method: "POST",
+        body: JSON.stringify({ action: "restart", mode }),
+      })
+      setConfirmRestart(false)
     } catch (error) {
       setError(error as Error)
     } finally {
@@ -156,9 +186,43 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
     }
   }
   return (
-    <form onSubmit={save} noValidate className="flex max-w-2xl flex-col gap-5">
-      <Failure error={error} />
-      <FieldSet disabled={!!busy}>
+    <form
+      onSubmit={save}
+      noValidate
+      className="flex w-full max-w-2xl min-w-0 flex-col gap-5"
+    >
+      <Failure
+        error={error ?? (initial.error ? new Error(initial.error) : undefined)}
+      />
+      <Input
+        ref={certificateInput}
+        type="file"
+        accept=".pem,.crt,.cer"
+        className="hidden"
+        aria-label="上传 CA 证书"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ""
+          if (!file) return
+          if (file.size > 2 * 1024 * 1024) {
+            setError(new Error("证书不能超过 2 MiB"))
+            return
+          }
+          setBusy("certificate")
+          void file
+            .text()
+            .then((pem) =>
+              api<{ path: string }>("/api/system/certificates", {
+                method: "POST",
+                body: JSON.stringify({ pem }),
+              })
+            )
+            .then((result) => change({ caFile: result.path }))
+            .catch(setError)
+            .finally(() => setBusy(undefined))
+        }}
+      />
+      <FieldSet className="min-w-0" disabled={!!busy}>
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="network-mode">代理模式</FieldLabel>
@@ -337,7 +401,8 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
           }
           variant={result.status >= 400 ? "destructive" : "default"}
         >
-          HTTP {result.status} · {result.durationMs} ms
+          网关连接：HTTP {result.status} · {result.durationMs} ms。Agent
+          的模型连接请在模型页单独测试。
         </Notice>
       )}
       {(saved || view.restartRequired) && (
@@ -366,18 +431,79 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
           <Save data-icon="inline-start" />
           {busy === "save" ? "保存中" : "保存"}
         </Button>
-        {view.restartRequired && (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!!busy}
+          onClick={async () => {
+            setBusy("refresh")
+            try {
+              const next = await api<NetworkView>("/api/system/network")
+              setView(next)
+              setDraft(next.settings)
+              setPassword(undefined)
+              setError(undefined)
+              setSaved(false)
+            } catch (error) {
+              setError(error as Error)
+            } finally {
+              setBusy(undefined)
+            }
+          }}
+        >
+          重新加载
+        </Button>
+        {
           <Button
             type="button"
             variant="outline"
             disabled={!!busy || dirty}
-            onClick={() => void restart()}
+            onClick={() => setConfirmRestart(true)}
           >
             <RefreshCw data-icon="inline-start" />
-            重启应用
+            {view.restartRequired ? "应用设置并重启服务" : "重启服务"}
           </Button>
-        )}
+        }
       </div>
+      <p className="text-sm text-muted-foreground">
+        代理凭据保护：
+        {view.protection === "os" ? "系统密钥存储" : "实例私有文件"}
+        。运行中的连接使用已生效配置。
+      </p>
+      <Dialog open={confirmRestart} onOpenChange={setConfirmRestart}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>应用网络设置并重启服务？</DialogTitle>
+            <DialogDescription>
+              等待期间仍可处理审批。停止会取消排队任务和当前执行；历史记录保留。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmRestart(false)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!!busy}
+              onClick={() => void restart("wait")}
+            >
+              等待任务完成
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!!busy}
+              onClick={() => void restart("stop")}
+            >
+              停止任务后重启
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   )
 }

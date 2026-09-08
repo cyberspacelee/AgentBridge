@@ -1,9 +1,19 @@
+import { accessSync, constants, statSync } from "node:fs";
 import spawn from "cross-spawn";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import { engineError } from "../errors.js";
 import { within } from "../async.js";
+
+export function resolveExecutable(command: string) {
+  const paths = path.isAbsolute(command) ? [command] : /[\\/]/.test(command) ? [path.resolve(command)] : (process.env.PATH ?? "").split(path.delimiter).flatMap((directory) => process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";")].map((extension) => path.join(directory, command + extension)) : [path.join(directory, command)]);
+  for (const candidate of paths) {
+      try { accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK); if (statSync(candidate).isFile()) return candidate; }
+      catch { /* Continue executable discovery. */ }
+    }
+  return undefined;
+}
 
 const stderrTails = new WeakMap<ChildProcessWithoutNullStreams, string>();
 export function processDiagnostic(
@@ -18,7 +28,7 @@ export function startProcess(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): ChildProcessWithoutNullStreams {
-  const { AGENT_DESKTOP_TOKEN: _desktopToken, ...childEnvironment } = env;
+  const { AGENT_DESKTOP_TOKEN: _desktopToken, AGENT_ACCESS_TOKEN: _accessToken, ...childEnvironment } = env;
   if (env.AGENT_RUNTIME_NODE) {
     const searchPath = env.PATH ?? env[Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH"] ?? "";
     for (const key of Object.keys(childEnvironment)) if (key.toLowerCase() === "path") delete childEnvironment[key];
@@ -31,7 +41,7 @@ export function startProcess(
     windowsHide: true,
     detached: process.platform !== "win32",
   }) as ChildProcessWithoutNullStreams;
-  if (env.AGENT_MANAGED_RUNTIMES === "true" && process.send) {
+  if (process.send) {
     if (child.pid && process.connected) process.send({ type: "engine-started", pid: child.pid }, () => {});
     child.once("exit", () => {
       if (child.pid && process.platform !== "win32") {

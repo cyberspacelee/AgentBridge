@@ -2,7 +2,7 @@
 
 更新日期：2026-09-05。适用于网关、引擎适配器及前端开发。先审阅 [完整设计基线](docs/design/README.md)，按统一术语、Domain、接口、页面和验收约束开展业务实现；分阶段施工不缩小完整前后端交付范围。赛题原始 schema 到位后补充契约测试，不能将设计中的假设视为已验证要求。
 
-当前已完成前端 CLI 初始化；网关、OpenCode/Pi 适配器、任务工作台及观测业务页面尚未实现。本地验证不能代替 Windows 沙箱验收。
+当前已实现四 Agent 网关、任务工作台、观测与 Electron；Web/Desktop 共用业务与启动管理。本地验证不能代替 Windows 沙箱验收。
 
 ## 1. 技术基线
 
@@ -50,7 +50,7 @@ pnpm web:build
 - `typecheck` 使用 `tsc -b`，覆盖应用与 Vite 配置两个 TypeScript project reference。
 - 前端 build 产物位于 `code/web/dist`；在前端目录运行 `pnpm preview` 仅用于本地检查构建结果。
 - 格式化使用现有 Prettier 配置；在前端目录对本次修改文件执行 `pnpm exec prettier --write <files>`。
-- 网关实现后，生产环境同源提供静态资源和 API；开发代理到实际网关地址，避免页面硬编码端口。
+- 生产环境同源提供静态资源和 API；开发代理到实际网关地址，避免页面硬编码端口。
 
 ## 3. 组件管理与 Base UI 约束
 

@@ -1,6 +1,8 @@
+import { accessControl } from "./access.js";
+import { systemRoutes } from "./system.js";
 import Fastify from "fastify";
 import staticFiles from "@fastify/static";
-import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
@@ -24,7 +26,7 @@ import { artifactPath } from "../runtime/artifacts.js";
 import { Telemetry } from "../observability/metrics.js";
 import { evaluationEvent, evaluationMessage } from "./serialization.js";
 import { agentConfiguration } from "../settings.js";
-import { agentIdSchema, agentActionSchema } from "../../shared/settings.js";
+import { agentIdSchema, agentActionSchema, runtimeSourceSchema } from "../../shared/settings.js";
 import { runtimeActionSchema } from "../../shared/runtimes.js";
 
 const id = (params: unknown) =>
@@ -118,22 +120,16 @@ export function createServer(runtime: SessionRuntime) {
     bodyLimit: 1024 * 1024,
     requestTimeout: 0,
   });
+  accessControl(server, config);
+  systemRoutes(server, runtime);
   const telemetry = new Telemetry(runtime);
   let connections = 0;
   let artifactDownloads = 0;
   const closeStreams = new Set<() => void>();
   server.addHook("onRequest", async (request, reply) => {
     reply.header("X-Request-ID", request.id);
-    if (config.desktopToken) {
-      const expected = Buffer.from(`Bearer ${config.desktopToken}`);
-      const supplied = Buffer.from(request.headers.authorization ?? "");
-      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
-        throw new GatewayError("FORBIDDEN", "Desktop authentication required", 403);
-      reply.header("Cache-Control", "no-store");
-      reply.header("X-Content-Type-Options", "nosniff");
-      reply.header("Referrer-Policy", "no-referrer");
-      reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
-    }
+    if (runtime.lifecycle !== "ready" && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !/^\/(?:api\/access|api\/system\/lifecycle|api\/interactions\/|permission\/|question\/|session\/[^/]+\/abort)/.test(request.url))
+      throw new GatewayError("SERVICE_UNAVAILABLE", "网关正在维护，仍可处理已有审批", 503);
     if (["127.0.0.1", "localhost", "::1"].includes(config.host)) {
       let hostname: string;
       try {
@@ -276,6 +272,7 @@ export function createServer(runtime: SessionRuntime) {
     runtime.saveSettings(request.body),
   );
   server.get("/api/agents", async () => ({ agents: runtime.agentViews() }));
+  server.put("/api/runtimes/:id/source", async (request, reply) => reply.code(202).send({ runtime: await runtime.runtimes.bind(agentIdSchema.parse(id(request.params)), runtimeSourceSchema.parse(request.body)) }));
   server.get("/api/runtimes", async () => ({ runtimes: runtime.runtimes.views() }));
   server.post("/api/runtimes/:id/actions", async (request, reply) => reply.code(202).send({
     runtime: runtime.runtimes.action(agentIdSchema.parse(id(request.params)), runtimeActionSchema.parse(request.body).action),

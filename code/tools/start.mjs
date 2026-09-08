@@ -1,22 +1,15 @@
-import { spawn } from "node:child_process";
 import { loadEnvFile } from "node:process";
-
-try {
-  loadEnvFile();
-} catch (error) {
-  if (error.code !== "ENOENT") throw error;
-}
-
-// Proxy and CA variables must exist before the application Node process starts.
-const child = spawn(process.execPath, process.argv.slice(2), {
-  stdio: "inherit",
+import path from "node:path";
+import { Supervisor } from "../host/supervisor.mjs";
+try { loadEnvFile(); } catch (error) { if (error.code !== "ENOENT") throw error; }
+const supervisor = new Supervisor({
+  directory: path.resolve(process.env.AGENT_DATA_DIR ?? ".agentbridge"),
+  node: process.execPath, args: process.argv.slice(2), cwd: process.cwd(),
+  onOutput: (value, stream) => process[stream].write(value),
+  onExit: (code) => { process.exitCode = code; },
+  onError: (error) => { console.error(error.message); process.exitCode = error.exitCode ?? 1; },
 });
-for (const signal of ["SIGINT", "SIGTERM"])
-  process.on(signal, () => child.kill(signal));
-child.once("error", (error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
-child.once("exit", (code) => {
-  process.exitCode = code ?? 1;
-});
+try { await supervisor.initialize(); } catch (error) { await supervisor.release(); throw error; }
+console.error(`AgentBridge 管理配对码（仅本次启动有效）：${supervisor.token}`);
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { void supervisor.stop(); });
+try { await supervisor.start(); } catch (error) { console.error(error.message); await supervisor.kill(); await supervisor.release(); process.exitCode = error.exitCode ?? 1; }

@@ -1,4 +1,6 @@
-import { lazy, Suspense, useState } from "react"
+import { AccessGate } from "@/components/access-gate"
+import { saveDesktopPreference } from "@/lib/desktop"
+import { lazy, Suspense, useState, useEffect } from "react"
 import {
   BrowserRouter,
   Navigate,
@@ -30,6 +32,7 @@ import {
   SheetTrigger,
   SheetHeader,
 } from "@/components/ui/sheet"
+import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
 import {
   Tooltip,
@@ -64,6 +67,20 @@ const Agents = lazy(() =>
 )
 
 export default function App() {
+  useEffect(() => {
+    const failed = () => toast.error("桌面偏好保存失败，当前窗口的设置仍然保留")
+    window.addEventListener("agentbridge:preference-error", failed)
+    return () =>
+      window.removeEventListener("agentbridge:preference-error", failed)
+  }, [])
+  return (
+    <AccessGate>
+      <WorkspaceApp />
+    </AccessGate>
+  )
+}
+
+function WorkspaceApp() {
   const events = useEvents()
   const { theme, setTheme } = useTheme()
   const runtime = useQuery<RuntimeInfo>("/api/runtime", events.revision)
@@ -104,6 +121,10 @@ export default function App() {
                 onClick={() => {
                   const collapsed = !sidebarCollapsed
                   setSidebarCollapsed(collapsed)
+                  saveDesktopPreference(
+                    "agentbridge:sidebar-collapsed",
+                    String(collapsed)
+                  )
                   try {
                     localStorage.setItem(
                       "agentbridge:sidebar-collapsed",

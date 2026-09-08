@@ -7,7 +7,7 @@ AgentBridge 在同一个工作台管理 Pi、OpenCode、Codex CLI 和 Grok Build
 ## 功能
 
 - 四个 Agent 独立启用、停用、强停和应用配置，运行中的任务保持明确的生命周期。
-- 桌面基础包不携带四个 Agent CLI；在 Agent 管理页按需安装最新版、更新或卸载，保留配置和历史。
+- Web 与 Desktop 共用运行时管理；每个 Agent 可选择受管安装或外部 CLI，按需安装、检测、更新和切换来源。
 - 共享 OpenAI 兼容模型连接、Skills 和 MCP，每个 Agent 独立选择引用与默认模型。
 - 模型只支持 Chat Completions 或 Responses；Codex 要求 Responses。不使用登录、OAuth 或个人 CLI 认证。
 - 一个任务保留连续会话；每次追加形成 Run，用于排队、超时、取消、诊断与用量归属。
@@ -32,13 +32,13 @@ pnpm desktop:dev
 
 托盘可用时，关闭窗口会隐藏到托盘，后台任务继续运行；菜单或托盘中的“退出”以及 `Ctrl/Cmd+Q` 才会退出应用。有任务时可选择取消、等待完成后退出或停止任务并退出。桌面数据保存在 Electron 用户数据目录下的 `data/`，可用 `AGENT_DESKTOP_DATA_DIR` 指定用户数据根目录；应用菜单可直接打开日志目录。
 
-桌面端在“系统信息 → 网络与代理”配置网络：可继承启动环境的代理、手动填写 HTTP/HTTPS 代理，或不使用代理。手动代理支持独立用户名、密码和绕过地址；本机回环连接始终直连。保存后重启应用生效；“测试连接”使用当前表单在独立进程中验证，不会修改运行中的网络配置。已保存密码不回显，留空保留，使用清除按钮删除。继承环境模式读取环境变量，不会自动读取操作系统代理或 PAC。
+Web 与 Desktop 均在“系统信息 → 网络与代理”配置网络：可继承启动环境的代理、手动填写 HTTP/HTTPS 代理，或不使用代理。手动代理支持独立用户名、密码和绕过地址；本机回环连接始终直连。保存后重启服务生效；“测试连接”使用当前表单在独立进程中验证，不会修改运行中的网络配置。已保存密码不回显，留空保留，使用清除按钮删除。继承环境模式读取环境变量，不会自动读取操作系统代理或 PAC。
 
 系统证书选项和附加 CA 文件用于 Node 网关；附加 CA 也下发给支持 `NODE_EXTRA_CA_CERTS` 的 Agent，其他原生 CLI 是否采用取决于其证书支持。应用更新使用操作系统证书库，企业代理的根证书需安装到操作系统，单独选择附加 CA 文件不会改变更新器的证书信任。
 
 ### 源码 Web 模式
 
-需要上述 Node.js 和 pnpm。Pi、OpenCode 和 Pi MCP 扩展仍由源码开发依赖提供；Codex、Grok 使用主机已有 CLI，可通过 `CODEX_COMMAND`、`GROK_COMMAND` 指定可执行文件。源码模式的主机 CLI 不由桌面安装管理器更新或卸载。
+需要上述 Node.js 和 pnpm。新实例默认使用受管 CLI，与 Desktop 使用同一个安装与版本页面；也可逐个 Agent 绑定主机已有 CLI，先检测版本、协议和会话恢复能力再切换。外部来源不会被更新或卸载。
 
 ```sh
 cd code
@@ -48,13 +48,13 @@ pnpm web:build
 pnpm start
 ```
 
-打开 [Agent 管理](http://127.0.0.1:3000/agents)：在共享资源中添加模型连接，给 Agent 选择模型并保存，然后启用。首次启动未配置模型时，四个 Agent 均停用，管理界面仍可访问。任务入口是 [任务工作台](http://127.0.0.1:3000/tasks)。
+打开 [Agent 管理](http://127.0.0.1:3000/agents)，输入启动终端显示的实例配对码；先安装所需 CLI，再在共享资源中添加模型连接，给 Agent 选择模型并保存，然后启用。首次启动未配置模型时，四个 Agent 均停用，管理界面仍可访问。任务入口是 [任务工作台](http://127.0.0.1:3000/tasks)。
 
-唯一管理配置是 `AGENT_DATA_DIR/settings.json`。原生配置单向生成到 `agents/<id>/`；Codex/Grok 的会话配置与上下文放在其下的 `sessions/<sessionId>/`。任务 cwd 始终是实际工作目录。不会复用或修改个人 `~/.codex`、`~/.grok`、Pi 或 OpenCode 配置。
+业务配置是 `AGENT_DATA_DIR/settings.json`（schemaVersion 3），系统网络配置是 `system.json`。不兼容历史配置或数据库，不提供迁移；请使用新的数据目录重新配置。原生配置单向生成到 `agents/<id>/`；Codex/Grok 的会话配置与上下文放在其下的 `sessions/<sessionId>/`。任务 cwd 始终是实际工作目录。不会复用或修改个人 `~/.codex`、`~/.grok`、Pi 或 OpenCode 配置。
 
 保存资源更改后，受影响 Agent 显示“待应用”；应用时取消尚未开始的排队项，等待当前执行结束后重启该 Agent，随后尝试恢复原生上下文，不重放历史执行。停用也等待当前执行结束；“立即停止”会中断执行。原生导入只读预览已支持字段，密钥需重新填写。
 
-详细配置、限制与 API 示例见 [安装与验收](INSTRUCTION.md)。桌面 CLI 下载、更新和卸载流程见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
+详细配置、限制与 API 示例见 [安装与验收](INSTRUCTION.md)。CLI 来源、下载、更新和卸载流程见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
 
 ## 局域网访问
 
@@ -66,7 +66,7 @@ pnpm start --host 0.0.0.0 --port 3000
 
 同一局域网的设备访问 `http://<服务器局域网 IP>:3000/tasks`，并确保主机防火墙允许 TCP 3000。前端构建由网关直接提供，不需要额外启动 Vite。
 
-当前版本用于受信任的本地或局域网环境，新 Agent 的交互策略默认人工处理，尚未提供用户登录和多租户隔离；公网部署需要额外的认证与访问控制。
+Web 使用实例管理配对码，浏览器凭据为 HttpOnly Cookie；API 客户端使用 Bearer token。配对拥有整个实例的管理权限，不提供多租户隔离；跨主机部署应通过 HTTPS 保护凭据。
 
 ## 常用配置
 
@@ -76,7 +76,9 @@ pnpm start --host 0.0.0.0 --port 3000
 | `AGENT_HOST` / `AGENT_PORT` | 默认 `127.0.0.1` / `3000`；CLI 参数优先 |
 | `AGENT_DATA_DIR` | 源码模式默认当前目录下 `.agentbridge`，存放 SQLite、日志和引擎数据 |
 | `AGENT_DESKTOP_DATA_DIR` | 桌面用户数据根目录，业务数据位于其 `data/` 子目录 |
-| `ENGINE_A_COMMAND` / `ENGINE_B_COMMAND` | OpenCode / Pi 命令 |
+| `AGENT_MANAGED_RUNTIMES=false` | 仅初始化时选择外部来源，保存后由每个 Agent 的 runtime 配置管理 |
+| `AGENT_ACCESS_TOKEN` | 可选的固定管理凭据（32–256 字符）；默认每次启动生成 |
+| `ENGINE_A_COMMAND` / `ENGINE_B_COMMAND` | 初始化外部来源时的 OpenCode / Pi 命令 |
 | `CODEX_COMMAND` / `GROK_COMMAND` | Codex / Grok 可执行命令 |
 | `ENGINE_A_PORT` | 托管 OpenCode 的内部端口，默认 0 自动分配 |
 | `AGENT_OPENAI_BASE_URL` / `AGENT_OPENAI_MODELS` | 无 settings.json 时初始化的兼容服务地址 / 模型 ID |
@@ -145,6 +147,7 @@ Hallmark 是可选的个人设计工具，本项目忽略其安装目录 `.agent
 | `code/src/gateway/` | HTTP、SSE 和评测接口 |
 | `code/src/storage/`、`code/src/observability/` | SQLite 持久化、指标和观测 |
 | `code/web/` | React 工作台 |
+| `code/host/` | Web/Desktop 共用的 Node 启动、网络策略与退出管理 |
 | `code/desktop/` | Electron 窗口、托盘、目录选择与分发配置 |
 | `code/tools/` | Pi 交互扩展与源码打包脚本 |
 | `code/test/` | 运行时、原生引擎与 Playwright 测试 |

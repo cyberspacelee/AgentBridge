@@ -203,11 +203,11 @@ TaskView 不接受直接赋值，按下列优先级计算：
 
 ## 7. 持久化与恢复
 
-默认 SQLite 存储以下记录：sessions、runs、messages、message_parts、tool_calls、interactions、artifacts、artifact_validations、submissions、engine_bindings、events、schema_migrations。关系通过外键与唯一约束表达，JSON 仅用于实际可变的工具参数、结果和事件 payload。
+默认 SQLite 存储以下记录：sessions、runs、messages、message_parts、tool_calls、interactions、artifacts、artifact_validations、submissions、engine_bindings、events。关系通过外键与唯一约束表达，JSON 仅用于实际可变的工具参数、结果和事件 payload。
 
 事件是事务提交后的可靠通知记录，不是领域唯一数据源；不通过全量事件重放重建数据库。默认仅一个网关拥有一个数据目录，第二个写入实例启动失败。SQLite 放在本地磁盘，备份走一致性备份方式，不直接复制运行中的单个数据库文件而漏掉 WAL。
 
-启动恢复顺序：取得数据目录锁 → 检查/迁移 schema → 创建 instanceId → 核对并清理旧实例拥有的残留进程 → 收尾旧实例的非终态 Run → 将不可确认恢复的绑定标记 unavailable → 使旧 Interaction 过期 → 记录恢复事件 → 启动已启用 Agents → 分别开放接收。
+启动恢复顺序：取得数据目录锁 → 检查当前 schema（历史格式拒绝） → 创建 instanceId → 核对并清理旧实例拥有的残留进程 → 收尾旧实例的非终态 Run → 将不可确认恢复的绑定标记 unavailable → 使旧 Interaction 过期 → 记录恢复事件 → 启动已启用 Agents → 分别开放接收。
 
 残留进程必须通过所有权记录、创建时间和启动身份核对，不能只凭 PID 终止进程。无法确认停止的执行资源及其工作目录保持隔离，禁止新的任务继续使用；解除隔离需要明确的清理确认，不能仅因新引擎启动成功就取消隔离。
 

@@ -1,5 +1,7 @@
 # 桌面端选型：Tauri 与 Electron
 
+本文保留选型与前次构件证据；当前共享运行实现与验证见 [Web/Desktop 统一运行](WEB_DESKTOP.md)。
+
 状态：Electron 桌面端、受管 CLI 安装与三平台构建配置已实现；Linux 已实际打包验证，Windows/macOS、签名和线上更新仍待目标环境验收。更新日期：2026-09-08。
 代码基线：`origin/master` 的 `731d4d7386295abb21696a9053b7494f5da5ca55`，分支 `research/desktop-tauri-vs-electron`。
 
@@ -114,27 +116,15 @@ builder v26 的过滤器会排除复制来源根目录下的 `node_modules`，�
 
 ### 运行与安全边界
 
-Electron 在 `127.0.0.1:0` 启动独立 Node 网关，等待 IPC 就绪消息再打开已有 `/agents` 页面；HTTP/SSE 业务接口保持同源。桌面默认数据位于系统 appData 下的 `AgentBridge/data`，不写安装目录，`AGENT_DESKTOP_DATA_DIR` 可覆盖桌面数据根目录。网页模式仍用原有启动命令与主机 CLI。
+Electron 在 `127.0.0.1:0` 启动独立 Node 网关，等待 IPC 就绪消息再打开已有 `/agents` 页面；HTTP/SSE 业务接口保持同源。桌面默认数据位于系统 appData 下的 `AgentBridge/data`，不写安装目录，`AGENT_DESKTOP_DATA_DIR` 可覆盖桌面数据根目录。Web 使用相同 Supervisor 与逐 Agent CLI 来源；当前边界见 [统一运行](WEB_DESKTOP.md)。
 
 每次启动生成随机 token，只由主进程为受管窗口、精确网关 origin 注入 Authorization；API、SSE、静态资源、产物、metrics 均校验。token 不暴露给 renderer 或 CLI 子进程，也不会随外链发送。桌面网关收紧 Origin 校验，拒绝 Web 开发 origin 例外。renderer 启用 sandbox/contextIsolation，关闭 nodeIntegration，拒绝权限请求、webview、不可信导航和 IPC；HTTP/HTTPS 外链交由系统浏览器。产物使用原生保存对话框，不自动运行下载文件。[E2]
 
 关闭窗口隐藏到托盘，任务继续；显式退出有活动任务时可取消、等待完成或停止并退出。等待时暂停新提交，保留审批回复能力。受控退出通过 IPC 清理后端和引擎；后端丢失父 IPC 时退出，主进程追踪引擎进程组作为异常清理补充。随机端口变化后通过小型本地偏好文件恢复主题和侧栏状态，不保存网页认证会话。
 
-### 桌面网络配置
+### 共享网络与 CLI 管理
 
-“系统信息 → 网络与代理”提供继承启动环境、手动 HTTP/HTTPS 代理、不使用代理三种模式。手动模式将代理地址与用户名、密码分开输入，可配置绕过地址、系统 CA 和附加 CA 证书文件；回环地址始终绕过代理，保证内置网关和本机 Agent 通信。继承模式读取进程环境变量，不自动读取操作系统代理设置或 PAC。
-
-网络设置保存在桌面用户数据目录，通过受信任窗口的 IPC 访问，返回值仅报告是否保存密码。省略密码保留原值，显式清除才删除。保存不改变运行中的连接，重启后在 Node 网关启动前应用；测试连接使用当前表单启动隔离 Node 请求，支持 HTTP/HTTPS 测试目标并显示状态与耗时，不要求先保存或重启。桌面网络设置独立于共享模型资源，源码 Web 模式继续使用启动环境和现有 `.env` 配置。
-
-系统证书开关与附加 CA 配置作用于 Node 网关及隔离连接测试；附加 CA 通过 `NODE_EXTRA_CA_CERTS` 下发给支持该变量的 Agent，不保证所有原生 CLI 都采用。应用更新走 Electron 网络栈与操作系统证书库，企业根证书须安装到操作系统；附加 CA 文件不会改变更新器的证书信任。
-
-### CLI 按需安装
-
-默认不下载 OpenCode、Pi、Codex、Grok。用户在 Agent 详情进入“安装与版本”，安装官方最新版、检查更新、更新或卸载。安装不启用 Agent；配置模型后另行启用。已安装版本可离线启动，检查更新失败不破坏旧版本。每次动作重新解析 latest，动作内固定实际构件并记录来源/完整性信息；无当前平台构件或握手失败时明确报错，不静默降级。
-
-npm 安装禁用生命周期脚本，限定官方 registry，核验 package-lock；OpenCode 直接安装对应 CPU/libc 的官方平台包，避免 wrapper postinstall 复制出第二份大二进制。Pi 的 MCP 依赖随 Pi 安装。Grok 直接下载官方 GCS 构件，固定对象 generation 并检查官方 MD5；不执行会修改个人 shell 的安装脚本。Grok 的 MD5 用于传输完整性，信任来源依赖 HTTPS 官方对象元数据，不能称为签名或 SHA-256 发布验证。
-
-下载期间旧版继续服务；切换或卸载时拒绝新任务、取消未执行队列、等待当前任务结束。先停止原生进程，再备份完整原生目录和会话绑定，探测/恢复成功才保留新版本；失败或中途退出恢复旧版及快照。卸载只删受管程序，保留模型配置、原生会话、历史与产物。详细接口和状态见 [RUNTIME_INSTALL](RUNTIME_INSTALL.md)。
+网络策略、访问保护、CLI 来源与后端重启已统一到 Web/Desktop 共享服务，见 [统一运行](WEB_DESKTOP.md) 和 [CLI 版本管理](RUNTIME_INSTALL.md)。本文保留桌面选型、打包与平台证据，避免维护另一套业务定义。
 
 ### 应用更新与平台分发
 

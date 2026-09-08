@@ -1,6 +1,6 @@
 # CLI 运行时安装与更新
 
-状态：2026-09-08 已实现桌面受管模式，四个 CLI 的 Linux 最新版安装、协议握手与卸载已验证。Agent CLI 不固定在桌面应用版本中，安装与启用为独立操作；Windows/macOS 实机验收仍待完成。
+状态：2026-09-08 已实现 Web/Desktop 统一来源管理，四个 CLI 的 Linux 最新版安装、协议握手与卸载已验证。Agent CLI 不固定在桌面应用版本中，安装与启用为独立操作；Windows/macOS 实机验收仍待完成。
 
 ## 目标与可行性
 
@@ -10,7 +10,7 @@
 
 适配器实现仍随网关发布。新 CLI 必须通过版本与协议能力检查；缺少必需协议时标记不兼容，不启用或切换为当前运行版本，更新失败保留原来可用版本。未经过完整业务验收不能显示为“已验证”；安装最新版不承诺其上游协议一定向后兼容。
 
-桌面受管模式通过运行时清单解析四个 Agent 的绝对程序路径；用户个人 CLI 不参与更新，不写全局 npm、PATH 或 shell 启动文件。源码 Web 模式保持原有主机 CLI 语义，Pi/OpenCode 仅留在开发依赖中。
+受管来源通过运行时清单解析四个 Agent 的绝对程序路径；用户个人 CLI 不参与更新，不写全局 npm、PATH 或 shell 启动文件。每个 Agent 在 settings.json 的 runtime 字段明确选择 managed 或 external。外部 CLI 检测实际文件和版本；切换前验证协议，切换失败恢复原来源、原生状态和会话绑定。
 
 ## 目录与状态
 
@@ -70,10 +70,10 @@ settings.json 继续管理 Agent 配置和启用状态，不新增固定 CLI 目
 
 - `GET /api/runtimes`：返回四个运行包视图。
 - `POST /api/runtimes/:id/actions`：`{ action: "check" | "install" | "update" | "uninstall" | "cancel" }`，返回 202；按 Agent 串行执行，页面轮询当前状态。
-- `AGENT_MANAGED_RUNTIMES=true` 启用受管模式；`AGENT_RUNTIME_NODE`、`AGENT_RUNTIME_NPM` 分别指定实际 Node 与 npm-cli.js，桌面自动设置。普通 Web 模式对管理动作返回 409。
+- `AGENT_MANAGED_RUNTIMES=false` 仅在首次初始化时选择外部来源；默认受管；`AGENT_RUNTIME_NODE`、`AGENT_RUNTIME_NPM` 分别指定实际 Node 与 npm-cli.js，桌面自动设置。两种入口使用相同管理 API。外部来源禁止直接更新或卸载，可先准备受管安装再显式切换。
 - npm 使用官方 registry、完整性锁与 `--ignore-scripts`；Pi 同时安装 MCP 所需依赖。OpenCode 使用匹配平台的独立二进制包，避免 wrapper 复制。
 - Grok 使用官方 GCS stable 与固定 generation，校验 HTTPS 返回的 MD5 和长度；MD5 不是签名认证。
-- 每个 Run 持久化实际 `runtimeVersion`；旧记录为空，通过追加 SQLite migration 保留已有数据。
+- 每个 Run 持久化实际 `runtimeVersion`；无法取得版本时为空；历史数据库不兼容，不提供迁移。
 - npm 进度不可精确计算时显示忙碌状态；Grok 提供下载字节进度。npm staging 每 500ms 检查 2GiB 上限，不提供硬磁盘配额。
 
 ## 实际限制

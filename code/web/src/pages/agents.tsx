@@ -674,7 +674,7 @@ function AgentsEditor({
                           (!agent.enabled &&
                             (!saved.defaultModel ||
                               !installed ||
-                              (installed.managed && !installed.usable))) ||
+                              !installed.usable)) ||
                           !!installed?.operation
                         }
                         onCheckedChange={(enabled) =>
@@ -1007,7 +1007,7 @@ function AgentEditor({
 }) {
   const { runtime } = useContext(GatewayContext)
   const { draft, setDraft, dirty, conflict, reset, accept, rebase } =
-    useAgentDraft(agent, runtime?.instanceId ?? "unknown")
+    useAgentDraft(agent, runtime?.storeId ?? "unknown")
   const [params, setParams] = useSearchParams()
   const tab =
     ["models", "skills", "mcp", "runtime", "installation"].find(
@@ -1372,8 +1372,7 @@ function AgentEditor({
               busy ||
               conflict ||
               !configured ||
-              (!state.enabled &&
-                (!installed || (installed.managed && !installed.usable))) ||
+              (!state.enabled && (!installed || !installed.usable)) ||
               !!installed?.operation ||
               (state.enabled && !dirty && !state.pendingChanges && !state.error)
             }

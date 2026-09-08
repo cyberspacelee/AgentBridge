@@ -13,7 +13,7 @@ import type {
   Snapshot,
   Submission,
 } from "../../shared/contracts.js";
-import { migrations } from "./migrations.js";
+import { databaseSchema, databaseVersion } from "./schema.js";
 
 type Entities = {
   sessions: Session;
@@ -54,33 +54,21 @@ export class Store {
     this.db = new DatabaseSync(filename, { timeout: 100 });
     try {
       this.db.exec(
-        "PRAGMA foreign_keys=ON; PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN EXCLUSIVE; COMMIT;",
+        "PRAGMA foreign_keys=ON; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;",
       );
       const version = Number(
         this.db.prepare("PRAGMA user_version").get()?.user_version ?? 0,
       );
-      if (version > migrations.length)
-        throw new Error("Database schema is newer than this gateway");
-      if (
-        version > 0 &&
-        !this.db
-          .prepare("PRAGMA table_info(runs)")
-          .all()
-          .some((column) => column.name === "configRevision")
-      )
-        throw new Error(
-          "Unsupported legacy database. Use a new AGENT_DATA_DIR; the existing database has been preserved.",
-        );
-      migrations.slice(version).forEach((sql, i) => {
+      if (version !== databaseVersion && (version !== 0 || this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").get()))
+        throw new Error("Unsupported legacy database. Use a new AGENT_DATA_DIR; no migration is provided and the existing data has been preserved.");
+      this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
+      if (version !== databaseVersion) {
         this.db.exec("BEGIN IMMEDIATE");
         try {
-          this.db.exec(sql);
-          this.db.exec(`PRAGMA user_version=${version + i + 1}; COMMIT;`);
-        } catch (error) {
-          this.db.exec("ROLLBACK");
-          throw error;
-        }
-      });
+          this.db.exec(databaseSchema);
+          this.db.exec(`PRAGMA user_version=${databaseVersion}; COMMIT;`);
+        } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+      }
       this.storeId = this.meta("storeId") ?? randomUUID();
       this.setMeta("storeId", this.storeId);
       if (!this.meta("revision")) this.setMeta("revision", "0");

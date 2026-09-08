@@ -138,6 +138,7 @@ class BrowserEngine implements EngineAdapter {
 }
 const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-browser-"));
 const config = readConfig([], {
+  ENGINE_A_COMMAND: process.execPath, ENGINE_B_COMMAND: process.execPath, CODEX_COMMAND: process.execPath, GROK_COMMAND: process.execPath,
   AGENT_STORAGE: "memory",
   AGENT_DATA_DIR: directory,
 });
@@ -185,6 +186,8 @@ const runtime = new SessionRuntime(
   ],
 );
 await runtime.start();
+// Fake adapters use a real executable for the shared external-CLI availability contract.
+for (const id of ["pi", "opencode", "codex", "grok"] as const) await runtime.runtimes.detect(id);
 const server = createServer(runtime);
 server.get("/__test/directory", async () => ({ directory }));
 await server.listen({ host: "127.0.0.1", port: 3010 });

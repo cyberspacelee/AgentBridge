@@ -8,7 +8,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Socket } from "node:net";
-import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment, proxyAddress } from "../desktop/network.mjs";
+import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment, proxyAddress } from "../host/network.mjs";
 
 test("network settings validate fixed fields, proxy addresses, bypass rules and secret preservation", () => {
   assert.deepEqual(validateNetworkSettings({}), { ...defaultNetworkSettings, proxyPassword: "" });

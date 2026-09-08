@@ -4,12 +4,12 @@ import { chmod, cp, mkdir, open, readdir, readFile, rename, rm, stat, statfs, wr
 import path from "node:path";
 import { createRequire } from "node:module";
 import { z } from "zod";
-import { agentIds, type AgentId } from "../../shared/settings.js";
+import { agentIds, runtimeSourceSchema, type AgentId, type RuntimeSource } from "../../shared/settings.js";
 import type { RuntimeAction, RuntimeView } from "../../shared/runtimes.js";
 import type { Config } from "../config.js";
 import { GatewayError, errorDetail } from "../errors.js";
-import { agentDirectory, applyAgentConfiguration, diagnosticSecrets } from "../settings.js";
-import { startProcess, stopProcess } from "../engines/process.js";
+import { agentDirectory, applyAgentConfiguration, diagnosticSecrets, readSettings } from "../settings.js";
+import { startProcess, stopProcess, resolveExecutable } from "../engines/process.js";
 import { within } from "../async.js";
 import { PiAdapter } from "../engines/pi/adapter.js";
 import { OpenCodeAdapter } from "../engines/opencode/adapter.js";
@@ -31,17 +31,20 @@ const installedSchema = z.object({ version: stableVersion, directory: z.string()
 const bindingSchema = z.object({ sessionId: z.string(), nativeSessionId: z.string(), processGeneration: z.number(), instanceId: z.string() });
 type RuntimeBinding = z.infer<typeof bindingSchema>;
 const manifestSchema = z.object({
+  schemaVersion: z.literal(1),
   current: installedSchema.nullable().default(null),
   rollback: z.object({ previous: installedSchema.nullable(), directory: z.string().uuid(), snapshot: z.boolean(), bindings: z.array(bindingSchema).default([]) }).nullable().default(null),
+  sourceRollback: z.object({ previous: runtimeSourceSchema, directory: z.string().uuid(), snapshot: z.boolean(), bindings: z.array(bindingSchema) }).nullable().default(null),
   uninstallPending: z.boolean().default(false),
   latestVersion: stableVersion.nullable().default(null), checkedAt: z.string().nullable().default(null), checkError: z.string().nullable().default(null),
-  operation: z.enum(["check", "install", "update", "uninstall"]).nullable().default(null),
+  operation: z.enum(["check", "detect", "install", "update", "uninstall"]).nullable().default(null),
   error: z.string().nullable().default(null),
 });
 type Manifest = z.infer<typeof manifestSchema>;
 type Release = { version: string; source: string; integrity: string; bytes?: number; dependencies?: Record<string, string> };
 type Hooks = {
   runningVersion(id: AgentId): string | null;
+  saveSource?(id: AgentId, source: RuntimeSource): void;
   snapshotBindings?(id: AgentId): RuntimeBinding[];
   restoreBindings?(id: AgentId, bindings: RuntimeBinding[]): void;
   switch(id: AgentId, activate: () => Promise<void>, rollback: () => Promise<void>, uninstall: boolean): Promise<void>;
@@ -64,20 +67,24 @@ export async function directorySize(directory: string): Promise<number> {
   return total;
 }
 
+
 export class RuntimeManager {
   private manifests = new Map<AgentId, Manifest>();
   private states = new Map<AgentId, Partial<RuntimeView>>();
   private operations = new Map<AgentId, { controller: AbortController; done: Promise<void> }>();
   private closed = false;
+  private detections = new Map<AgentId, Partial<RuntimeView>>();
   private readonly dependencies: RuntimeDependencies;
   constructor(readonly config: Config, private hooks: Hooks, dependencies: Partial<RuntimeDependencies> = {}) {
     this.dependencies = { fetch, ...dependencies };
     for (const id of agentIds) {
-      let manifest = manifestSchema.parse({});
-      if (config.managedRuntimes) {
+      config.runtimeSources[id] = readSettings(config).agents.find((agent) => agent.id === id)!.runtime;
+      if (!this.managed(id)) config[id].command = config.runtimeSources[id]!.command!;
+      let manifest = manifestSchema.parse({ schemaVersion: 1 });
+      {
         mkdirSync(this.directory(id), { recursive: true, mode: 0o700 });
         try { manifest = manifestSchema.parse(JSON.parse(readFileSync(this.manifestFile(id), "utf8"))); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") manifest.error = "Runtime manifest is invalid; reinstall the runtime"; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Unsupported or invalid ${id} runtime manifest; use a new data directory. No migration is provided.`); }
         if (manifest.rollback) {
           const backup = path.join(config.dataDirectory, "backups", id, manifest.rollback.directory);
           if (manifest.rollback.snapshot) {
@@ -88,11 +95,27 @@ export class RuntimeManager {
           this.hooks.restoreBindings?.(id, manifest.rollback.bindings);
           manifest.current = manifest.rollback.previous; manifest.rollback = null;
         }
+        if (manifest.sourceRollback) {
+          const rollback = manifest.sourceRollback;
+          const backup = path.join(config.dataDirectory, "backups", id, rollback.directory);
+          if (rollback.snapshot) {
+            if (!existsSync(backup)) throw new Error(`Interrupted ${id} source switch is missing its native backup`);
+            const native = agentDirectory(config, id);
+            rmSync(native, { recursive: true, force: true }); cpSync(backup, native, { recursive: true });
+          } else rmSync(agentDirectory(config, id), { recursive: true, force: true });
+          config.runtimeSources[id] = rollback.previous;
+          if (rollback.previous.mode === "external") config[id].command = rollback.previous.command!;
+          this.hooks.saveSource?.(id, rollback.previous);
+          this.hooks.restoreBindings?.(id, rollback.bindings);
+          manifest.sourceRollback = null;
+          manifest.error = "来源切换被中断，已恢复原来源和会话";
+        }
         if (manifest.operation) { manifest.error = "Installation was interrupted by gateway shutdown; retry the operation"; manifest.operation = null; }
         rmSync(path.join(this.directory(id), "staging"), { recursive: true, force: true });
       }
       this.manifests.set(id, manifest);
-      if (config.managedRuntimes) { this.select(id); this.persist(id); }
+      if (this.managed(id)) this.select(id);
+      this.persist(id);
     }
   }
   private directory(id: AgentId) { return path.join(this.config.dataDirectory, "runtimes", id); }
@@ -108,9 +131,93 @@ export class RuntimeManager {
       ? path.join(this.directory(id), "versions", current.directory, current.command)
       : path.join(this.directory(id), "not-installed");
   }
+  managed(id: string) { return this.config.runtimeSources[id]?.mode === "managed"; }
   installed(id: string) {
+    if (!agentIds.includes(id as AgentId)) return true;
     const manifest = this.manifests.get(id as AgentId);
-    return !this.config.managedRuntimes || (!!manifest?.current && !manifest.uninstallPending && existsSync(this.config[id as AgentId].command));
+    if (!this.managed(id)) return !!resolveExecutable(this.config[id as AgentId].command) && this.detections.get(id as AgentId)?.detection !== "failed";
+    return !!manifest?.current && !manifest.uninstallPending && existsSync(this.config[id as AgentId].command);
+  }
+  async detect(id: AgentId, signal: AbortSignal = AbortSignal.timeout(10000)) {
+    if (this.managed(id)) return this.view(id);
+    this.detections.set(id, { detection: "checking", compatibility: "unknown", installedVersion: null });
+    let executable: string | undefined;
+    const command = this.config[id].command;
+    executable = resolveExecutable(command);
+    if (!executable) this.detections.set(id, { executable: null, detection: "missing", detectedAt: timestamp(), installedVersion: null, compatibility: "unknown", error: "找不到外部 CLI，请检查命令或切换到受管安装" });
+    else {
+      try {
+        const output = await this.command(executable, ["--version"], this.config.dataDirectory, AbortSignal.any([signal, AbortSignal.timeout(10000)]));
+        const version = output.match(/\d+\.\d+\.\d+/)?.[0];
+        if (!version) throw new Error("CLI 未返回可识别的版本");
+        this.detections.set(id, { executable, detection: "present", detectedAt: timestamp(), installedVersion: version, compatibility: "unknown", error: null });
+      } catch (error) { this.detections.set(id, { executable, detection: "failed", detectedAt: timestamp(), installedVersion: null, compatibility: "unknown", error: errorDetail(error, diagnosticSecrets(this.config)) }); }
+    }
+    return this.view(id);
+  }
+  async bind(id: AgentId, source: RuntimeSource) {
+    if (this.closed || this.busy(id)) throw new GatewayError("CONFLICT", "运行时操作尚未结束", 409);
+    const previous = { ...this.config.runtimeSources[id]! };
+    const previousCommand = this.config[id].command;
+    const controller = new AbortController();
+    this.states.set(id, { operation: "source", cancelable: true, updateStatus: "checking" });
+    const manifest = this.manifests.get(id)!;
+    const operation = randomUUID();
+    const backup = path.join(this.config.dataDirectory, "backups", id, operation);
+    const native = agentDirectory(this.config, id);
+    const done = Promise.resolve().then(async () => {
+      try {
+        if (source.mode === "managed" && !this.manifests.get(id)?.current) throw new Error("请先安装受管 CLI，再切换来源");
+        if (source.mode === "external") {
+            const output = await this.command(source.command!, ["--version"], this.config.dataDirectory, AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]));
+            const version = output.match(/\d+\.\d+\.\d+/)?.[0];
+            if (!version) throw new Error("外部 CLI 未返回版本");
+            const probeDirectory = path.join(this.directory(id), "source-probe", randomUUID());
+            await mkdir(probeDirectory, { recursive: true });
+            try { await this.probe(id, source.command!, probeDirectory, controller.signal, version, true); }
+            finally { await rm(probeDirectory, { recursive: true, force: true }); }
+        }
+        controller.signal.throwIfAborted();
+        this.states.set(id, { operation: "source", cancelable: false, updateStatus: "switching" });
+        await this.hooks.switch(id, async () => {
+          const snapshot = existsSync(native);
+          if (snapshot) {
+            const size = await directorySize(native);
+            const disk = await statfs(native);
+            if (disk.bavail * disk.bsize < size + 64 * 1024 * 1024) throw new Error("原生会话备份空间不足");
+            await mkdir(path.dirname(backup), { recursive: true }); await cp(native, backup, { recursive: true });
+          }
+          manifest.sourceRollback = { previous, directory: operation, snapshot, bindings: this.hooks.snapshotBindings?.(id) ?? [] };
+          this.persist(id);
+          this.config.runtimeSources[id] = source;
+          if (source.mode === "managed") this.select(id); else this.config[id].command = source.command!;
+          this.hooks.saveSource?.(id, source);
+          this.detections.delete(id);
+        }, async () => {
+          this.config.runtimeSources[id] = previous; this.config[id].command = previousCommand;
+          this.hooks.saveSource?.(id, previous);
+          if (manifest.sourceRollback) {
+            await rm(native, { recursive: true, force: true });
+            if (manifest.sourceRollback.snapshot) await cp(backup, native, { recursive: true });
+          }
+          if (manifest.sourceRollback) this.hooks.restoreBindings?.(id, manifest.sourceRollback.bindings);
+          manifest.sourceRollback = null; this.persist(id);
+        }, false);
+        manifest.sourceRollback = null; manifest.error = null; this.persist(id);
+        if (source.mode === "external") {
+          await this.detect(id);
+          if (this.detections.get(id)?.detection === "present") this.detections.set(id, { ...this.detections.get(id), compatibility: "compatible" });
+        }
+        await rm(backup, { recursive: true, force: true });
+      } catch (error) {
+        manifest.error = errorDetail(error, diagnosticSecrets(this.config)); this.persist(id);
+        this.detections.set(id, { ...this.detections.get(id), error: manifest.error });
+        if (!manifest.sourceRollback) await rm(backup, { recursive: true, force: true });
+      }
+      finally { this.operations.delete(id); this.states.delete(id); }
+    });
+    this.operations.set(id, { controller, done });
+    return this.view(id);
   }
   busy(id: string) { return this.operations.has(id as AgentId); }
   views(): RuntimeView[] { return agentIds.map((id) => this.view(id)); }
@@ -119,18 +226,22 @@ export class RuntimeManager {
     const current = manifest.current;
     const runningVersion = this.hooks.runningVersion(id);
     return {
-      id, managed: this.config.managedRuntimes, usable: this.installed(id), platform: `${process.platform}-${process.arch}`,
-      installedVersion: this.config.managedRuntimes ? current?.version ?? null : runningVersion,
+      id, managed: this.managed(id), usable: this.managed(id) ? this.installed(id) : this.installed(id) && (this.detections.get(id)?.detection === "present" || !!runningVersion),
+      detectedAt: null, executable: this.config[id].command, detection: this.managed(id) ? (this.installed(id) ? "present" : "missing") : "unknown", compatibility: runningVersion ? "compatible" : "unknown", platform: `${process.platform}-${process.arch}`,
+      installedVersion: this.managed(id) ? current?.version ?? null : runningVersion,
+      managedVersion: current?.version ?? null,
       runningVersion, latestVersion: manifest.latestVersion, checkedAt: manifest.checkedAt, checkError: manifest.checkError,
-      status: manifest.error ? "failed" : current || (!this.config.managedRuntimes && runningVersion) ? "installed" : "not_installed",
+      status: manifest.error ? "failed" : (this.managed(id) && current) || (!this.managed(id) && (runningVersion || this.detections.get(id)?.installedVersion)) ? "installed" : "not_installed",
       updateStatus: manifest.latestVersion && current && manifest.latestVersion !== current.version ? "available" : "idle",
       operation: manifest.operation, cancelable: false, progress: null, downloadedBytes: 0, totalBytes: null,
       sizeBytes: current?.size ?? null, error: manifest.error, source: current?.source ?? null, integrity: current?.integrity ?? null,
+      ...this.detections.get(id),
       ...this.states.get(id),
+      ...(runningVersion ? { compatibility: "compatible" as const } : {}),
     };
   }
   action(id: AgentId, action: RuntimeAction) {
-    if (!this.config.managedRuntimes) throw new GatewayError("CONFLICT", "Host CLIs are managed outside AgentBridge", 409);
+    if (!this.managed(id) && !["check", "detect", "install", "cancel"].includes(action)) throw new GatewayError("CONFLICT", "外部 CLI 不允许覆盖更新或卸载，请先切换到受管来源", 409);
     if (this.closed) throw new GatewayError("SERVICE_UNAVAILABLE", "Gateway is shutting down", 503);
     const pending = this.operations.get(id);
     if (action === "cancel") {
@@ -141,12 +252,13 @@ export class RuntimeManager {
     if (pending) throw new GatewayError("CONFLICT", "Runtime operation is already in progress", 409);
     const manifest = this.manifests.get(id)!;
     manifest.operation = action; manifest.error = null;
-    this.states.set(id, { operation: action, cancelable: action !== "uninstall", ...(action === "check" ? { updateStatus: "checking" } : action === "uninstall" ? { status: "uninstalling" } : { status: manifest.current ? "installed" : "installing", updateStatus: "downloading" }) });
+    this.states.set(id, { operation: action, cancelable: action !== "uninstall", ...(action === "detect" ? { detection: "checking" } : action === "check" ? { updateStatus: "checking" } : action === "uninstall" ? { status: "uninstalling" } : { status: manifest.current ? "installed" : "installing", updateStatus: "downloading" }) });
     this.persist(id);
     const controller = new AbortController();
     const done = Promise.resolve().then(async () => {
       await rm(path.join(this.directory(id), "staging"), { recursive: true, force: true });
-      if (action === "uninstall") await this.uninstall(id);
+      if (action === "detect") await this.detect(id, controller.signal);
+      else if (action === "uninstall") await this.uninstall(id);
       else if (action === "check") await this.resolve(id, controller.signal);
       else await this.install(id, controller.signal);
     }).catch((error) => {
@@ -284,10 +396,11 @@ export class RuntimeManager {
     if (!existsSync(path.join(directory, `${command}${process.platform === "win32" ? ".cmd" : ""}`))) throw new Error("Official package did not install a CLI for this platform");
     return `${command}${process.platform === "win32" ? ".cmd" : ""}`;
   }
-  private async probe(id: AgentId, command: string, directory: string, signal: AbortSignal, expectedVersion: string) {
+  private async probe(id: AgentId, command: string, directory: string, signal: AbortSignal, expectedVersion: string, external = false) {
     if (this.dependencies.probe) return this.dependencies.probe(id, command, directory, signal);
     const probeDirectory = path.join(directory, ".probe"); await mkdir(probeDirectory, { recursive: true });
     const config = structuredClone(this.config); config.dataDirectory = probeDirectory;
+    config.runtimeSources[id] = external ? { mode: "external", command } : { mode: "managed" };
     config[id].command = command;
     if (existsSync(path.join(this.config.dataDirectory, "settings.json"))) await cp(path.join(this.config.dataDirectory, "settings.json"), path.join(probeDirectory, "settings.json"));
     applyAgentConfiguration(config, id);
@@ -305,6 +418,7 @@ export class RuntimeManager {
   private async install(id: AgentId, signal: AbortSignal) {
     const release = await this.resolve(id, signal);
     const manifest = this.manifests.get(id)!;
+    const externalSource = !this.managed(id);
     if (manifest.operation === "update" && manifest.current?.version === release.version && this.installed(id)) return;
     const operation = randomUUID(); const directory = path.join(this.directory(id), "staging", operation);
     await mkdir(directory, { recursive: true });
@@ -318,6 +432,13 @@ export class RuntimeManager {
     this.states.set(id, { ...this.states.get(id), cancelable: false, updateStatus: "switching", progress: 100 });
     const previous = manifest.current;
     const destination = path.join(this.directory(id), "versions", operation);
+    if (externalSource) {
+      await mkdir(path.dirname(destination), { recursive: true }); await rename(directory, destination);
+      manifest.current = { version: release.version, directory: operation, command, size, source: release.source, integrity: release.integrity };
+      this.persist(id);
+      for (const entry of await readdir(path.dirname(destination))) if (entry !== operation) await rm(path.join(path.dirname(destination), entry), { recursive: true, force: true });
+      return;
+    }
     const backup = path.join(this.config.dataDirectory, "backups", id, operation);
     const native = agentDirectory(this.config, id); let snapshot = false;
     try { await this.hooks.switch(id, async () => {

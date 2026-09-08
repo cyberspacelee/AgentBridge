@@ -1,35 +1,27 @@
-export interface NetworkSettings {
-  mode: "environment" | "direct" | "manual"
-  proxyUrl: string
-  proxyUsername: string
-  noProxy: string
-  useSystemCa: boolean
-  caFile: string
-}
-
-export interface NetworkView {
-  settings: NetworkSettings
-  hasPassword: boolean
-  restartRequired: boolean
-}
-
-export type NetworkInput = NetworkSettings & { proxyPassword?: string }
-
 declare global {
   interface Window {
     agentBridge?: {
-      version: string
+      initialize: () => Promise<{
+        version: string
+        preferences: Record<string, string>
+      }>
+      savePreferences: (preferences: Record<string, string>) => Promise<void>
       selectDirectory: () => Promise<string | null>
-      getNetworkSettings: () => Promise<NetworkView>
-      saveNetworkSettings: (input: NetworkInput) => Promise<NetworkView>
-      testNetworkSettings: (
-        input: NetworkInput,
-        url: string
-      ) => Promise<{ status: number; durationMs: number }>
       selectCertificate: () => Promise<string | null>
-      restart: () => Promise<boolean>
     }
   }
 }
-
 export const desktop = window.agentBridge
+export async function initializeDesktop() {
+  if (!desktop?.initialize) return
+  const initial = await desktop.initialize()
+  for (const key of ["theme", "agentbridge:sidebar-collapsed"]) {
+    const value = initial.preferences[key]
+    if (typeof value === "string") localStorage.setItem(key, value)
+  }
+}
+export function saveDesktopPreference(key: string, value: string) {
+  void desktop?.savePreferences?.({ [key]: value }).catch(() => {
+    window.dispatchEvent(new CustomEvent("agentbridge:preference-error"))
+  })
+}

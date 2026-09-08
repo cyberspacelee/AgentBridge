@@ -107,7 +107,7 @@ test("interrupted runtime switch restores the previous binary and native snapsho
     await writeFile(path.join(native, "history"), "migrated state"); await writeFile(path.join(backup, "history"), "old state");
     await writeFile(path.join(runtime, "versions", previousId, "cli"), "old binary");
     const previous = { version: "1.0.0", directory: previousId, command: "cli", size: 10, source: "https://registry.npmjs.org/fixture", integrity: "sha512-Zml4dHVyZQ==" };
-    await writeFile(path.join(runtime, "manifest.json"), JSON.stringify({ current: { ...previous, version: "2.0.0", directory: nextId }, rollback: { previous, directory: nextId, snapshot: true }, operation: "update" }));
+    await writeFile(path.join(runtime, "manifest.json"), JSON.stringify({ schemaVersion: 1, current: { ...previous, version: "2.0.0", directory: nextId }, rollback: { previous, directory: nextId, snapshot: true }, operation: "update" }));
     const manager = new RuntimeManager(config, { runningVersion: () => null, switch: async () => {} });
     assert.equal(manager.view("pi").installedVersion, "1.0.0");
     assert.equal(manager.view("pi").usable, true);

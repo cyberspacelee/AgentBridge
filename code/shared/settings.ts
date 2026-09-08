@@ -10,10 +10,13 @@ export const modelRefSchema = z
     modelID: z.string().min(1).max(300),
   })
   .strict();
+export const runtimeSourceSchema = z.object({ mode: z.enum(["managed", "external"]), command: z.string().min(1).max(4096).optional() }).strict().refine((value) => value.mode !== "external" || !!value.command, "外部 CLI 需要可执行文件路径或命令");
+export type RuntimeSource = z.infer<typeof runtimeSourceSchema>;
 export const agentSchema = z
   .object({
     id: agentIdSchema,
     enabled: z.boolean().default(false),
+    runtime: runtimeSourceSchema,
     models: z.array(modelRefSchema).max(200).default([]),
     defaultModel: modelRefSchema.nullable().default(null),
     skillIds: z.array(z.string()).max(200).default([]),
@@ -116,12 +119,12 @@ export const mcpSchema = z
   .strict();
 export const settingsSchema = z
   .object({
-    schemaVersion: z.literal(2).default(2),
+    schemaVersion: z.literal(3).default(3),
     defaultAgent: agentIdSchema.default("pi"),
     agents: z
       .array(agentSchema)
       .length(4)
-      .default(() => agentIds.map((id) => agentSchema.parse({ id }))),
+      .default(() => agentIds.map((id) => agentSchema.parse({ id, runtime: { mode: "managed" } }))),
     providers: z.array(providerSchema).max(50).default([]),
     skills: z.array(skillSchema).max(200).default([]),
     mcp: z.array(mcpSchema).max(100).default([]),

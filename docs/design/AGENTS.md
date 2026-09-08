@@ -8,7 +8,7 @@
 
 ## 配置与所有权
 
-`AGENT_DATA_DIR/settings.json` 是唯一管理配置源，包含 schemaVersion、defaultAgent、agents、providers、skills、mcp。agents 保存 id、enabled、model references、defaultModel、skillIds、mcpIds、interactionPolicy。模型连接只支持 OpenAI Chat Completions 与 Responses，包括名称、baseUrl、apiKey、模型列表。没有登录、OAuth、订阅或账号发现功能。
+`AGENT_DATA_DIR/settings.json` 是唯一管理配置源，schemaVersion 为 3，包含 defaultAgent、agents、providers、skills、mcp。agents 保存 id、enabled、runtime（managed 或 external 命令）、model references、defaultModel、skillIds、mcpIds、interactionPolicy。模型连接只支持 OpenAI Chat Completions 与 Responses，包括名称、baseUrl、apiKey、模型列表。不提供模型服务登录、OAuth、订阅或账号发现；Web 管理访问使用实例配对。
 
 资源定义共享，启用引用归 Agent；没有 both、全局自动分发、用户原生配置目录编辑入口。保存时校验引用、重复项、默认模型归属与引擎协议支持。删除被引用资源须先解除引用。密钥脱敏返回，保持乐观并发 revision 校验。连接测试进行一次受限的真实模型请求，错误须脱敏。
 

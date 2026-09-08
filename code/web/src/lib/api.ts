@@ -32,6 +32,8 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     signal: init?.signal ?? AbortSignal.timeout(45000),
   })
   if (!response.ok) {
+    if (response.status === 401 && url !== "/api/access")
+      window.dispatchEvent(new Event("agentbridge:unauthorized"))
     const body = await response.json().catch(() => ({}))
     throw new ApiError(
       body.code ?? "HTTP_ERROR",
@@ -78,9 +80,10 @@ export async function submit(
   input:
     | Omit<CreateTaskInput, "submissionId">
     | Omit<SubmitRunInput, "submissionId">,
+  storeId: string,
   sessionId?: string
 ) {
-  const key = `agentbridge:submission:${sessionId ?? "create"}`
+  const key = `agentbridge:submission:${storeId}:${sessionId ?? "create"}`
   const fingerprint = JSON.stringify(input)
   let record: {
     fingerprint: string

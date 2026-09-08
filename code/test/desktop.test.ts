@@ -13,43 +13,27 @@ import { readConfig } from "../src/config.js";
 import { OpenCodeAdapter } from "../src/engines/opencode/adapter.js";
 import { SessionRuntime } from "../src/runtime/sessions.js";
 import { Store } from "../src/storage/sqlite.js";
-import { migrations } from "../src/storage/migrations.js";
+import { databaseSchema, databaseVersion } from "../src/storage/schema.js";
 import { createServer } from "../src/gateway/server.js";
 import { within } from "../src/async.js";
 import { authorizedHeaders, externalUrl, isWorkspaceUrl } from "../desktop/security.mjs";
 
-test("runtimeVersion migration preserves supported SQLite history and persists new run versions", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-runtime-migration-"));
+test("only the current database format opens; historical data is rejected without conversion", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-database-format-"));
   const filename = path.join(directory, "state.sqlite");
   try {
     const old = new DatabaseSync(filename);
-    let oldRun;
-    try {
-      for (const migration of migrations.slice(0, -1)) old.exec(migration);
-      old.exec(`PRAGMA user_version=${migrations.length - 1};`);
-      old.exec(`
-        INSERT INTO sessions VALUES ('session', 'Existing task', '/workspace', 'pi', '{}', 'ready', '2026-09-01', '2026-09-01', 1);
-        INSERT INTO runs (id, sessionId, submissionId, sequence, inputParts, state, acceptedAt, deadlineAt, traceId, configRevision)
-          VALUES ('old-run', 'session', 'submission', 1, '[{"type":"text","text":"original task"}]', 'completed', '2026-09-01', '2026-09-02', 'trace', 'saved-config');
-        INSERT INTO messages VALUES ('message', 'session', 'old-run', 'assistant', '2026-09-01', '2026-09-01', 'stop');
-        INSERT INTO message_parts VALUES ('part', 'message', 0, 'text', '{"id":"part","type":"text","text":"existing history"}');
-      `);
-      oldRun = old.prepare("SELECT * FROM runs WHERE id='old-run'").get();
-    } finally { old.close(); }
-    const upgraded = new Store(filename);
-    try {
-      assert.equal(upgraded.db.prepare("PRAGMA user_version").get()?.user_version, migrations.length);
-      assert.deepEqual({ ...upgraded.db.prepare("SELECT * FROM runs WHERE id='old-run'").get() }, { ...oldRun, runtimeVersion: null });
-      assert.equal(upgraded.get("runs", "old-run")!.runtimeVersion, null);
-      assert.deepEqual(upgraded.messages("session")[0]!.parts, [{ id: "part", type: "text", text: "existing history" }]);
-      upgraded.transaction(() => upgraded.put("runs", { ...upgraded.get("runs", "old-run")!, id: "new-run", sequence: 2, runtimeVersion: "0.85.1" }));
-    } finally { upgraded.close(); }
-    const reopened = new Store(filename);
-    try {
-      assert.equal(reopened.get("runs", "old-run")!.runtimeVersion, null);
-      assert.equal(reopened.get("runs", "new-run")!.runtimeVersion, "0.85.1");
-      assert.equal(reopened.messages("session")[0]!.runId, "old-run");
-    } finally { reopened.close(); }
+    old.exec(databaseSchema);
+    old.exec("PRAGMA user_version=2; INSERT INTO meta VALUES ('keep','original');"); old.close();
+    assert.throws(() => new Store(filename), /Unsupported legacy database/);
+    const unchanged = new DatabaseSync(filename);
+    assert.equal(unchanged.prepare("PRAGMA user_version").get()?.user_version, 2);
+    assert.equal(unchanged.prepare("SELECT value FROM meta WHERE key='keep'").get()?.value, "original"); unchanged.close();
+    const currentFile = path.join(directory, "current.sqlite");
+    const current = new Store(currentFile);
+    const id = current.storeId;
+    assert.equal(current.db.prepare("PRAGMA user_version").get()?.user_version, databaseVersion); current.close();
+    const reopened = new Store(currentFile); assert.equal(reopened.storeId, id); reopened.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -223,6 +207,8 @@ test("managed gateway starts without Agent CLIs and releases its database after 
           AGENT_HOST: "127.0.0.1",
           AGENT_PORT: "0",
           AGENT_DESKTOP_TOKEN: token,
+          AGENT_ACCESS_TOKEN: token,
+          AGENT_SUPERVISED: "true",
           AGENT_MANAGED_RUNTIMES: "true",
         },
         stdio: ["ignore", "pipe", "pipe", "ipc"],

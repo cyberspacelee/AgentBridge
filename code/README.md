@@ -2,7 +2,7 @@
 
 本目录是 pnpm workspace 安装和命令入口。项目介绍、OpenAI 兼容模型配置、局域网访问及常见问题见[根目录 README](../README.md)，完整配置和 API 调用见[安装与验收](../INSTRUCTION.md)。
 
-源码开发需要 Node.js >= 22.21.0、pnpm 10.33.2。在本目录安装依赖后，可选择 Electron 桌面端或原有 Web 网关：
+源码开发需要 Node.js >= 22.21.0、pnpm 10.33.2。在本目录安装依赖后，可选择 Electron 桌面端或 Web 网关：
 
 ```sh
 pnpm install --frozen-lockfile
@@ -21,7 +21,7 @@ pnpm desktop:dev
 
 桌面基础包不包含 Pi、OpenCode、Codex、Grok CLI。在 Agent 的“安装与版本”页签按需安装官方最新版、检查更新或卸载；安装不启用，卸载保留模型配置、原生会话、任务历史和产物。最终桌面包自带 Node/npm，用户无需全局安装它们。托盘可用时关闭窗口继续后台运行；显式退出时可等待任务结束或停止任务。数据位于 Electron 用户数据目录的 `data/` 下，可通过 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
 
-原有源码 Web 模式：
+源码 Web 模式：
 
 ```sh
 pnpm install --frozen-lockfile
@@ -36,7 +36,7 @@ pnpm start
 
 分层：`shared` 为应用契约，`src/domain` 为状态规则，`src/runtime` 为会话/执行/交互用例，`src/storage` 为 SQLite 和事务事件，`src/engines` 为适配器与进程，`src/gateway` 为 HTTP/SSE/评测映射，`src/observability` 为指标，`web` 为前端，`tools` 为 Pi 交互扩展和打包脚本。办公能力通过 skill/MCP 接入。测试引擎仅位于 `test/`，不注册进生产入口。
 
-`desktop/` 为 Electron 壳。源码 Web 模式继续使用开发依赖中的 Pi/OpenCode 与主机上的 Codex/Grok；不会通过安装页面改动这些主机 CLI。桌面分发只携带网关生产依赖，四个 CLI 在独立的受管目录中安装。
+`host/` 为两种入口共用的 Node 启动与网络管理，`desktop/` 只提供 Electron 系统集成。新实例均默认受管 CLI；每个 Agent 可检测并绑定外部命令。浏览器输入终端配对码后使用相同管理页面。详见[统一运行方案](../docs/design/WEB_DESKTOP.md)。历史配置与数据库不兼容，不提供迁移。
 
 四个内置 Agent 通过 /agents 独立管理，配置与个人 CLI 目录隔离。新增引擎实现 `EngineAdapter`，在 `src/main.ts` 注册，同步更新配置与共享契约中的引擎枚举以及前端选项。引擎原生事件在适配器边界转换为共享 Message/Interaction，再由网关 serializer 输出评测协议。
 

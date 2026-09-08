@@ -688,6 +688,7 @@ function FollowUp({
   run?: Run
   onAccepted: (runId: string) => void
 }) {
+  const { runtime } = useGateway()
   const [text, setText] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error>()
@@ -700,7 +701,7 @@ function FollowUp({
       const input = promptSchema.parse({
         parts: [{ type: "text", text }],
       })
-      const result = await submit(input, sessionId)
+      const result = await submit(input, runtime!.storeId, sessionId)
       setText("")
       onAccepted(result.runId)
     } catch (e) {

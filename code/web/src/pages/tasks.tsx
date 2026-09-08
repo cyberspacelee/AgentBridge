@@ -442,7 +442,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
     try {
       const { submissionId: _id, ...input } = result.data
       void _id
-      const accepted = await submit(input)
+      const accepted = await submit(input, runtime!.storeId)
       onAccepted(accepted.taskId)
     } catch (e) {
       setError(e as Error)

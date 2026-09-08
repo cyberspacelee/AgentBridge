@@ -111,7 +111,17 @@ try {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
   }, data);
   assert.equal(await page.evaluate(() => window.agentBridge.selectDirectory()), data);
-  const initialNetwork = await page.evaluate(() => window.agentBridge.getNetworkSettings());
+  const beforeRestart = await page.evaluate(async () => (await fetch("/api/runtime")).json());
+  assert.equal(await page.evaluate(async () => (await fetch("/api/system/lifecycle", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "restart", mode: "wait" }) })).status), 202);
+  await expect.poll(async () => page.evaluate(async (previous) => {
+    try { return (await (await fetch("/api/runtime")).json()).instanceId; } catch { return previous; }
+  }, beforeRestart.instanceId), { timeout: 15000 }).not.toBe(beforeRestart.instanceId);
+  await expect.poll(async () => page.evaluate(async () => {
+    try { return (await (await fetch("/api/runtime")).json()).storeId; } catch { return null; }
+  }), { timeout: 15000 }).toBe(storeId);
+  assert.equal(new URL(page.url()).origin, origin, "Backend restart must preserve the renderer origin");
+  await expect(page.getByLabel("网关事件连接：live", { exact: true })).toBeVisible({ timeout: 15000 });
+  const initialNetwork = await page.evaluate(async () => (await fetch("/api/system/network")).json());
   const proxyRequests = [];
   const proxyPassword = "desktop-smoke-secret:@/";
   const proxyAuthorization = `Basic ${Buffer.from(`smoke-user:${proxyPassword}`).toString("base64")}`;
@@ -155,22 +165,30 @@ try {
     noProxy: "",
     caFile,
   };
-  const savedNetwork = await page.evaluate((input) => window.agentBridge.saveNetworkSettings(input), manualNetwork);
+  const savedNetwork = await page.evaluate(async (input) => {
+    const current = await (await fetch("/api/system/network")).json();
+    const response = await fetch("/api/system/network", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings: input, revision: current.revision }) });
+    return response.json();
+  }, manualNetwork);
   assert.equal(savedNetwork.hasPassword, true);
   assert.equal(savedNetwork.restartRequired, true);
   assert.equal(Object.hasOwn(savedNetwork.settings, "proxyPassword"), false);
   assert.ok(!JSON.stringify(savedNetwork).includes(proxyPassword));
-  const preservedNetwork = await page.evaluate((input) => window.agentBridge.saveNetworkSettings(input), savedNetwork.settings);
+  const preservedNetwork = await page.evaluate(async (input) => {
+    const current = await (await fetch("/api/system/network")).json();
+    const response = await fetch("/api/system/network", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings: input, revision: current.revision }) });
+    return response.json();
+  }, savedNetwork.settings);
   assert.equal(preservedNetwork.hasPassword, true);
-  const proxyResult = await page.evaluate(([input, url]) => window.agentBridge.testNetworkSettings(input, url), [savedNetwork.settings, "http://proxy-fixture.invalid/check"]);
+  const proxyResult = await page.evaluate(async ([settings, url]) => (await fetch("/api/system/network/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings, url }) })).json(), [savedNetwork.settings, "http://proxy-fixture.invalid/check"]);
   assert.equal(proxyResult.status, 207);
   assert.ok(Number.isFinite(proxyResult.durationMs) && proxyResult.durationMs >= 0);
   assert.ok(proxyRequests.some((request) => request.target.includes("proxy-fixture.invalid") && request.authorization === proxyAuthorization));
   const proxiedCount = proxyRequests.length;
-  const directResult = await page.evaluate(([input, url]) => window.agentBridge.testNetworkSettings(input, url), [savedNetwork.settings, `http://127.0.0.1:${direct.address().port}/check`]);
+  const directResult = await page.evaluate(async ([settings, url]) => (await fetch("/api/system/network/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings, url }) })).json(), [savedNetwork.settings, `http://127.0.0.1:${direct.address().port}/check`]);
   assert.equal(directResult.status, 204);
   assert.equal(proxyRequests.length, proxiedCount, "Loopback requests must bypass the configured proxy");
-  await page.evaluate(() => localStorage.setItem("theme", "dark"));
+  await page.evaluate(async () => { localStorage.setItem("theme", "dark"); await window.agentBridge.savePreferences({ theme: "dark" }); });
   await expect.poll(async () => JSON.parse(await readFile(path.join(data, "desktop.json"), "utf8").catch(() => "{}")).theme).toBe("dark");
   await page.getByRole("link", { name: "Pi", exact: true }).click();
   await page.getByRole("tab", { name: "安装与版本", exact: true }).click();
@@ -196,12 +214,12 @@ try {
   await reopened.waitForURL(/\/agents$/);
   assert.equal(await reopened.evaluate(() => localStorage.getItem("theme")), "dark");
   assert.equal((await reopened.evaluate(async () => (await fetch("/api/runtime")).json())).storeId, storeId);
-  const restoredNetwork = await reopened.evaluate(() => window.agentBridge.getNetworkSettings());
+  const restoredNetwork = await reopened.evaluate(async () => (await fetch("/api/system/network")).json());
   assert.deepEqual(restoredNetwork.settings, savedNetwork.settings);
   assert.equal(restoredNetwork.hasPassword, true);
   assert.equal(restoredNetwork.restartRequired, false);
   assert.ok(!JSON.stringify(restoredNetwork).includes(proxyPassword));
-  const restoredResult = await reopened.evaluate(([input, url]) => window.agentBridge.testNetworkSettings(input, url), [restoredNetwork.settings, "http://proxy-fixture.invalid/after-restart"]);
+  const restoredResult = await reopened.evaluate(async ([settings, url]) => (await fetch("/api/system/network/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings, url }) })).json(), [restoredNetwork.settings, "http://proxy-fixture.invalid/after-restart"]);
   assert.equal(restoredResult.status, 207, "Saved proxy credentials must still authenticate after restart");
   const updaterNetwork = await application.evaluate(async ({ app }) => {
     const createRequire = process.getBuiltinModule("node:module").createRequire;
@@ -224,7 +242,11 @@ try {
   const updaterRequests = proxyRequests.filter((request) => request.target.includes("/updater-check"));
   assert.ok(updaterRequests.some((request) => !request.authorization), "Updater must receive the proxy authentication challenge");
   assert.ok(updaterRequests.some((request) => request.authorization === proxyAuthorization), "Updater must answer the proxy challenge with saved credentials");
-  const clearedNetwork = await reopened.evaluate((input) => window.agentBridge.saveNetworkSettings(input), { ...initialNetwork.settings, proxyPassword: "" });
+  const clearedNetwork = await reopened.evaluate(async (input) => {
+    const current = await (await fetch("/api/system/network")).json();
+    const response = await fetch("/api/system/network", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings: input, revision: current.revision }) });
+    return response.json();
+  }, { ...initialNetwork.settings, proxyPassword: "" });
   assert.equal(clearedNetwork.hasPassword, false);
   assert.equal(clearedNetwork.restartRequired, true);
   await application.close();

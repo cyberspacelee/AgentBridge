@@ -8,7 +8,6 @@ import { GrokAdapter } from "./engines/grok/adapter.js";
 import { createServer } from "./gateway/server.js";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { GatewayError } from "./errors.js";
 export async function startGateway(config = readConfig()) {
   const adapters = [
     new OpenCodeAdapter(config),
@@ -24,23 +23,9 @@ export async function startGateway(config = readConfig()) {
     adapters.filter((adapter) => adapter.id !== config.engine),
   );
   const server = createServer(runtime);
-  let draining = false;
-  server.addHook("onRequest", async (request) => {
-    if (
-      draining &&
-      request.method === "POST" &&
-      /^(?:\/api\/tasks(?:\/[^/]+\/runs)?|\/session(?:\/[^/]+\/prompt_async)?)$/.test(
-        request.url.split("?")[0]!,
-      )
-    )
-      throw new GatewayError(
-        "SERVICE_UNAVAILABLE",
-        "Gateway is waiting for tasks before exit",
-        503,
-      );
-  });
   try {
     await runtime.start();
+    for (const agent of runtime.runtimes.views()) if (!agent.managed) runtime.runtimes.action(agent.id, "detect");
     await server.listen({ host: config.host, port: config.port });
   } catch (error) {
     await server.close();
@@ -50,7 +35,7 @@ export async function startGateway(config = readConfig()) {
     server,
     runtime,
     drain: () => {
-      draining = true;
+      runtime.lifecycle = "draining";
     },
   };
 }
@@ -59,11 +44,24 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
+  if (!process.connected || process.env.AGENT_SUPERVISED !== "true") throw new Error("请通过 pnpm start 或 pnpm dev 启动受保护的网关");
+  let interrupted = false;
+  const interruptStartup = () => { interrupted = true; };
+  const startupMessage = (message: unknown) => {
+    if (message && typeof message === "object" && "type" in message && ["shutdown", "drain"].includes(String(message.type))) interruptStartup();
+  };
+  process.once("disconnect", interruptStartup);
+  process.on("message", startupMessage);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, interruptStartup);
   const { server, runtime, drain } = await startGateway();
+  process.removeListener("disconnect", interruptStartup);
+  process.removeListener("message", startupMessage);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.removeListener(signal, interruptStartup);
   let closing: Promise<void> | undefined;
   let draining = false;
-  const close = () =>
-    (closing ??= server
+  const close = () => {
+    runtime.lifecycle = "stopping";
+    return (closing ??= server
       .close()
       .catch((error: unknown) => {
         process.exitCode = 1;
@@ -74,6 +72,7 @@ if (
       .finally(() => {
         if (process.connected) process.disconnect();
       }));
+  };
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.on(signal, () => {
       void close();
@@ -92,9 +91,9 @@ if (
         const timer = setInterval(() => {
           if (
             closing ||
-            runtime
+            (runtime.runtimes.views().every((item) => !item.operation) && runtime
               .agentViews()
-              .every((agent) => !agent.activeRuns && !agent.queuedRuns)
+              .every((agent) => !agent.activeRuns && !agent.queuedRuns))
           ) {
             clearInterval(timer);
             void close();
@@ -103,7 +102,8 @@ if (
       }
     });
     const address = server.server.address();
-    if (address && typeof address !== "string")
+    if (interrupted || !process.connected) void close();
+    else if (address && typeof address !== "string")
       process.send({ type: "ready", url: `http://127.0.0.1:${address.port}` });
   }
 }

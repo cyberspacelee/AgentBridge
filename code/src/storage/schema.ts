@@ -1,5 +1,5 @@
-export const migrations = [
-  String.raw`
+export const databaseVersion = 3;
+export const databaseSchema = String.raw`
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 CREATE TABLE sessions (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, directory TEXT NOT NULL, engineId TEXT NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE runs (
  sequence INTEGER NOT NULL, inputParts TEXT NOT NULL CHECK(json_valid(inputParts)), model TEXT,
  state TEXT NOT NULL CHECK(state IN ('queued','running','stopping','completed','failed','timed_out','cancelled')),
  acceptedAt TEXT NOT NULL, deadlineAt TEXT NOT NULL, startedAt TEXT, finishedAt TEXT, stopReason TEXT,
- error TEXT, usage TEXT, traceId TEXT NOT NULL, configRevision TEXT, UNIQUE(sessionId,sequence)
+ error TEXT, usage TEXT, traceId TEXT NOT NULL, configRevision TEXT, runtimeVersion TEXT, UNIQUE(sessionId,sequence)
 ) STRICT;
 CREATE UNIQUE INDEX one_active_run ON runs(sessionId) WHERE state IN ('running','stopping');
 CREATE INDEX run_queue ON runs(state,acceptedAt);
@@ -55,6 +55,4 @@ CREATE TABLE runtime_logs (
  id INTEGER PRIMARY KEY AUTOINCREMENT, occurredAt TEXT NOT NULL, level TEXT NOT NULL,
  stage TEXT NOT NULL, code TEXT, message TEXT NOT NULL, sessionId TEXT, runId TEXT, traceId TEXT
 ) STRICT;
-`,
-  "ALTER TABLE runs ADD COLUMN runtimeVersion TEXT;",
-];
+`;

@@ -46,6 +46,7 @@ import {
 } from "../settings.js";
 import {
   agentIdSchema,
+  settingsSchema,
   type AgentId,
   type AgentView,
 } from "../../shared/settings.js";
@@ -70,6 +71,7 @@ interface Execution {
 export class SessionRuntime {
   readonly settings: SettingsManager;
   readonly runtimes: RuntimeManager;
+  lifecycle: "ready" | "draining" | "stopping" = "ready";
   private agentOperations = new Map<
     string,
     { action: AgentView["operation"]; promise: Promise<void> }
@@ -110,6 +112,11 @@ export class SessionRuntime {
     this.settings = new SettingsManager(config);
     this.runtimes = new RuntimeManager(config, {
       runningVersion: (id) => this.adapters.find((a) => a.id === id)?.health().status === "ready" && this.agentEnabled(id) ? this.engine(id).health().version : null,
+      saveSource: (id, source) => {
+        const view = this.settings.view();
+        view.settings.agents.find((agent) => agent.id === id)!.runtime = source;
+        this.settings.save({ settings: view.settings, revision: view.revision });
+      },
       snapshotBindings: (id) => this.store.db.prepare("SELECT sessionId,nativeSessionId,processGeneration,instanceId FROM engine_bindings WHERE engineId=?").all(id).map((binding) => ({ sessionId: String(binding.sessionId), nativeSessionId: String(binding.nativeSessionId), processGeneration: Number(binding.processGeneration), instanceId: String(binding.instanceId) })),
       restoreBindings: (id, bindings) => this.store.transaction(() => { for (const binding of bindings) this.store.db.prepare("UPDATE engine_bindings SET nativeSessionId=?,processGeneration=?,instanceId=? WHERE sessionId=? AND engineId=?").run(binding.nativeSessionId, binding.processGeneration, binding.instanceId, binding.sessionId, id); }),
       switch: (id, activate, rollback, uninstall) => this.switchRuntime(id, activate, rollback, uninstall),
@@ -188,6 +195,11 @@ export class SessionRuntime {
         409,
       );
     const before = readSettings(this.config);
+    if (input && typeof input === "object" && "settings" in input) {
+      const next = settingsSchema.parse(input.settings);
+      if (next.agents.some((agent) => JSON.stringify(agent.runtime) !== JSON.stringify(before.agents.find((item) => item.id === agent.id)?.runtime)))
+        throw new GatewayError("CONFLICT", "请在安装与版本页面切换 CLI 来源", 409);
+    }
     const view = this.settings.save(input);
     for (const agent of view.settings.agents)
       if (
@@ -210,6 +222,7 @@ export class SessionRuntime {
         503,
       );
     const adapter = this.engine(id);
+    if ((action === "enable" || action === "apply") && !this.runtimes.managed(id) && adapter.health().status !== "ready" && !this.runtimes.busy(id)) await this.runtimes.detect(id);
     if (action === "stop" && this.agentOperations.has(id) && this.runtimes.busy(id)) {
       const view = this.settings.view(); view.settings.agents.find((a) => a.id === id)!.enabled = false;
       this.settings.save({ settings: view.settings, revision: view.revision });
