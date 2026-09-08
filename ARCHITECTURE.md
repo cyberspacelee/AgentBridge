@@ -16,7 +16,7 @@
 
 ### 桌面部署
 
-Electron 主进程管理窗口、托盘和受管 Node 子进程；现有 Fastify/SQLite/SessionRuntime 在该子进程运行，React 继续使用同源 HTTP/SSE。桌面仅监听随机 loopback 端口，窗口请求使用每次启动独立的访问凭据，renderer 不获得 Node 或任意 IPC 权限。关闭窗口继续后台运行，显式退出复用任务等待/取消和引擎清理。
+Electron 主进程管理窗口、托盘和受管 Node 子进程；现有 Fastify/SQLite/SessionRuntime 在该子进程运行，React 继续使用同源 HTTP/SSE。Web/Desktop 通过共用 Supervisor 持久管理监听 IP 与端口，默认 127.0.0.1:3000，可开放局域网；HTTP/SSE 和 Web 无需配对或鉴权。renderer 不获得 Node 或任意 IPC 权限。关闭窗口继续后台运行，显式退出复用任务等待/取消和引擎清理。
 
 默认桌面包含 Node/npm 和网关，不含四个 Agent CLI；管理页按需安装官方最新版、更新和卸载，程序与用户状态分目录保存。安装切换在 Agent 生命周期入口串行执行，停止原生进程并备份原生目录/会话绑定后切换，失败恢复旧版，卸载保留历史与配置。应用构建依赖固定，CLI 版本独立更新。Web 和 Desktop 共用 `host/Supervisor`、网络策略和逐 Agent CLI 来源。Desktop 仅负责窗口、托盘、系统对话框、偏好和应用更新；业务页面通过同一 HTTP/SSE API。详见 [统一运行](docs/design/WEB_DESKTOP.md)。
 

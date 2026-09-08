@@ -1,3 +1,4 @@
+import { gatewaySchema } from "../host/gateway.mjs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -43,10 +44,6 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     engine,
     host: values.host ?? env.AGENT_HOST ?? "127.0.0.1",
     webOrigin: z.url().parse(env.AGENT_WEB_ORIGIN ?? "http://127.0.0.1:5173"),
-    desktopToken: env.AGENT_DESKTOP_TOKEN
-      ? z.string().min(32).max(256).parse(env.AGENT_DESKTOP_TOKEN)
-      : null,
-    accessToken: env.AGENT_ACCESS_TOKEN ? z.string().min(32).max(256).parse(env.AGENT_ACCESS_TOKEN) : null,
     supervised: env.AGENT_SUPERVISED === "true",
     runtimeSources: {} as Record<string, { mode: "managed" | "external"; command?: string }>,
     managedRuntimes: env.AGENT_MANAGED_RUNTIMES === "true",
@@ -112,11 +109,7 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
   };
   if (config.allowedDirectories.some((p) => !path.isAbsolute(p)))
     throw new Error("AGENT_ALLOWED_DIRECTORIES must contain absolute paths");
-  if (
-    config.desktopToken &&
-    !["127.0.0.1", "::1", "localhost"].includes(config.host)
-  )
-    throw new Error("Desktop gateway must bind to loopback");
+  gatewaySchema.parse({ host: config.host, port: config.port });
   return config;
 }
 export type Config = ReturnType<typeof readConfig>;

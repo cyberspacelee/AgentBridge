@@ -1,3 +1,4 @@
+import { gatewayUrl } from "../host/gateway.mjs";
 import { readConfig } from "./config.js";
 import { Store } from "./storage/sqlite.js";
 import { SessionRuntime } from "./runtime/sessions.js";
@@ -44,7 +45,7 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
-  if (!process.connected || process.env.AGENT_SUPERVISED !== "true") throw new Error("请通过 pnpm start 或 pnpm dev 启动受保护的网关");
+  if (!process.connected || process.env.AGENT_SUPERVISED !== "true") throw new Error("请通过 pnpm start 或 pnpm dev 启动网关");
   let interrupted = false;
   const interruptStartup = () => { interrupted = true; };
   const startupMessage = (message: unknown) => {
@@ -104,6 +105,6 @@ if (
     const address = server.server.address();
     if (interrupted || !process.connected) void close();
     else if (address && typeof address !== "string")
-      process.send({ type: "ready", url: `http://127.0.0.1:${address.port}` });
+      process.send({ type: "ready", url: gatewayUrl(runtime.config.host, address.port) });
   }
 }

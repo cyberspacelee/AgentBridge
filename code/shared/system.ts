@@ -27,7 +27,7 @@ export interface SystemView {
   nodeVersion: string;
   nodePath: string;
   npmPath: string | null;
-  capabilities: { network: boolean; restart: boolean; directories: boolean; certificates: boolean };
+  capabilities: { gateway: boolean; network: boolean; restart: boolean; directories: boolean; certificates: boolean };
   maintenance: "ready" | "draining" | "stopping";
 }
 export interface DirectoryView {
@@ -37,3 +37,15 @@ export interface DirectoryView {
   truncated: boolean;
 }
 export const lifecycleSchema = z.object({ action: z.enum(["restart", "shutdown"]), mode: z.enum(["wait", "stop"]) }).strict();
+
+export interface GatewaySettings { host: string; port: number }
+export interface GatewayView {
+  settings: GatewaySettings;
+  appliedSettings: GatewaySettings;
+  revision: string;
+  appliedRevision: string;
+  restartRequired: boolean;
+  url: string | null;
+  urls: string[];
+  error: string | null;
+}

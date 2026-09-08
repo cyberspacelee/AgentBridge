@@ -215,6 +215,6 @@ runtime.capabilities 描述模型列表、工具、费用、进程采样等实�
 
 受管安装契约定义在 `code/shared/runtimes.ts`，语义以 [运行时安装](RUNTIME_INSTALL.md) 为准。`GET /api/runtimes` 返回四个运行包视图；`POST /api/runtimes/:id/actions` 接受严格的 `{ action }`，动作有 `check`、`detect`、`install`、`update`、`uninstall`、`cancel`，返回 202 后轮询视图。逐 Agent 选择受管或外部来源；两种入口均拒绝覆盖修改外部 CLI；同一 Agent 的操作互斥，切换/卸载遵守现有生命周期准入。
 
-Run 新增可空 `runtimeVersion`，保存实际运行 CLI 版本，当前数据库直接定义此列，不提供历史迁移。桌面模式所有 HTTP 路由（包括静态资源、SSE、产物、观测）要求该次启动的 Bearer token，仅桌面主进程给受管窗口注入；该 token 不属于用户模型凭据，Web 通过配对建立 HttpOnly 管理 Cookie，或提供 Bearer token；API、SSE、文件和指标均鉴权。
+Run 新增可空 `runtimeVersion`，保存实际运行 CLI 版本，当前数据库直接定义此列，不提供历史迁移。Web/Desktop 所有 HTTP、SSE、产物与指标接口无需配对码、Cookie 或 Bearer token。网关监听与重启、自动化评测接口见 [网关 API](../../code/docs/GATEWAY_API.md)。
 
 系统与来源管理接口以 [Web/Desktop 统一运行](WEB_DESKTOP.md) 和 `code/shared/system.ts` 为准。

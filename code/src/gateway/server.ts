@@ -1,11 +1,11 @@
-import { accessControl } from "./access.js";
+import { codeRoot } from "../engines/tool-instructions.js";
 import { systemRoutes } from "./system.js";
 import Fastify from "fastify";
 import staticFiles from "@fastify/static";
 import { randomUUID, createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { open, stat } from "node:fs/promises";
+import { open, stat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { z, ZodError } from "zod";
 import pino from "pino";
@@ -120,7 +120,6 @@ export function createServer(runtime: SessionRuntime) {
     bodyLimit: 1024 * 1024,
     requestTimeout: 0,
   });
-  accessControl(server, config);
   systemRoutes(server, runtime);
   const telemetry = new Telemetry(runtime);
   let connections = 0;
@@ -128,7 +127,11 @@ export function createServer(runtime: SessionRuntime) {
   const closeStreams = new Set<() => void>();
   server.addHook("onRequest", async (request, reply) => {
     reply.header("X-Request-ID", request.id);
-    if (runtime.lifecycle !== "ready" && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !/^\/(?:api\/access|api\/system\/lifecycle|api\/interactions\/|permission\/|question\/|session\/[^/]+\/abort)/.test(request.url))
+    reply.header("Cache-Control", "no-store");
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("Referrer-Policy", "no-referrer");
+    reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    if (runtime.lifecycle !== "ready" && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !/^\/(?:api\/system\/lifecycle|api\/interactions\/|permission\/|question\/|session\/[^/]+\/abort)/.test(request.url))
       throw new GatewayError("SERVICE_UNAVAILABLE", "网关正在维护，仍可处理已有审批", 503);
     if (["127.0.0.1", "localhost", "::1"].includes(config.host)) {
       let hostname: string;
@@ -147,9 +150,9 @@ export function createServer(runtime: SessionRuntime) {
     const origin = request.headers.origin;
     if (
       origin &&
-      (config.desktopToken || !["GET", "HEAD", "OPTIONS"].includes(request.method)) &&
+      !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
       origin !== `${request.protocol}://${request.headers.host}` &&
-      (config.desktopToken || origin !== config.webOrigin)
+      origin !== config.webOrigin
     )
       throw new GatewayError("FORBIDDEN", "Request origin is not allowed", 403);
   });
@@ -197,6 +200,8 @@ export function createServer(runtime: SessionRuntime) {
       .code(failure.statusCode)
       .send({ code: failure.code, message: failure.message });
   });
+  server.get("/api/docs", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(await readFile(path.join(codeRoot, "docs/GATEWAY_API.md"), "utf8")));
+  server.get("/api/examples/evaluate.mjs", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(await readFile(path.join(codeRoot, "tools/evaluate.mjs"), "utf8")));
   server.get("/health/live", async () => ({
     ok: true,
     instanceId: store.instanceId,

@@ -36,6 +36,8 @@ if (executable) {
 const artifactDirectory = path.join(code, "artifacts/desktop");
 const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined));
 env.AGENT_DESKTOP_DATA_DIR = data;
+env.AGENT_HOST = "127.0.0.1";
+env.AGENT_PORT = "0";
 if (!executable) {
   env.AGENT_RUNTIME_NODE = process.execPath;
   env.AGENT_RUNTIME_NPM ??= path.resolve(path.dirname(process.execPath), process.platform === "win32" ? "node_modules/npm/bin/npm-cli.js" : "../lib/node_modules/npm/bin/npm-cli.js");
@@ -62,14 +64,18 @@ const launch = () => _electron.launch({
 try {
   application = await launch();
   const page = await application.firstWindow();
+  page.setDefaultTimeout(15000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForURL(/\/agents$/);
   await expect(page.getByRole("heading", { name: "Agent 管理", exact: true })).toBeVisible();
-  const origin = new URL(page.url()).origin;
+  let origin = new URL(page.url()).origin;
   const { storeId } = await page.evaluate(async () => (await fetch("/api/runtime")).json());
-  assert.equal((await fetch(`${origin}/api/settings`)).status, 403);
-  assert.equal((await fetch(`${origin}/api/events`)).status, 403);
+  assert.equal((await fetch(`${origin}/api/settings`)).status, 200);
+  const stream = await fetch(`${origin}/api/events`);
+  assert.equal(stream.status, 200);
+  await stream.body.cancel();
+  assert.match(await (await fetch(`${origin}/api/docs`)).text(), /prompt_async/);
   const runtime = await page.evaluate(async () => (await fetch("/api/runtimes")).json());
   assert.equal(runtime.runtimes.length, 4);
   assert.ok(runtime.runtimes.every((item) => item.managed && item.installedVersion === null));
@@ -121,6 +127,27 @@ try {
   }), { timeout: 15000 }).toBe(storeId);
   assert.equal(new URL(page.url()).origin, origin, "Backend restart must preserve the renderer origin");
   await expect(page.getByLabel("网关事件连接：live", { exact: true })).toBeVisible({ timeout: 15000 });
+  const listener = createServer();
+  await new Promise((resolve) => listener.listen(0, "0.0.0.0", resolve));
+  const gatewayPort = listener.address().port;
+  await new Promise((resolve) => listener.close(resolve));
+  await page.getByRole("link", { name: "系统信息", exact: true }).click();
+  const gatewayPanel = page.getByRole("region", { name: "网关服务", exact: true });
+  await gatewayPanel.getByLabel("监听地址", { exact: true }).fill("0.0.0.0");
+  await gatewayPanel.getByLabel("网关端口", { exact: true }).fill(String(gatewayPort));
+  await gatewayPanel.getByRole("button", { name: "保存网关设置", exact: true }).click();
+  await expect(gatewayPanel.getByText(/网关设置已保存/)).toBeVisible();
+  await gatewayPanel.getByRole("button", { name: "重启网关", exact: true }).click();
+  await page.getByRole("button", { name: "等待任务完成后重启", exact: true }).click();
+  origin = `http://127.0.0.1:${gatewayPort}`;
+  await page.waitForURL(`${origin}/settings`);
+  await expect(page.getByRole("heading", { name: "系统信息", exact: true })).toBeVisible();
+  assert.equal((await (await fetch(`${origin}/api/runtime`)).json()).storeId, storeId);
+  const gateway = await (await fetch(`${origin}/api/system/gateway`)).json();
+  assert.deepEqual(gateway.appliedSettings, { host: "0.0.0.0", port: gatewayPort });
+  for (const address of Object.values(os.networkInterfaces()).flat()) {
+    if (address?.family === "IPv4" && !address.internal) assert.equal((await fetch(`http://${address.address}:${gatewayPort}/api/settings`)).status, 200);
+  }
   const initialNetwork = await page.evaluate(async () => (await fetch("/api/system/network")).json());
   const proxyRequests = [];
   const proxyPassword = "desktop-smoke-secret:@/";
@@ -190,6 +217,7 @@ try {
   assert.equal(proxyRequests.length, proxiedCount, "Loopback requests must bypass the configured proxy");
   await page.evaluate(async () => { localStorage.setItem("theme", "dark"); await window.agentBridge.savePreferences({ theme: "dark" }); });
   await expect.poll(async () => JSON.parse(await readFile(path.join(data, "desktop.json"), "utf8").catch(() => "{}")).theme).toBe("dark");
+  await page.getByRole("link", { name: "Agent 管理", exact: true }).click();
   await page.getByRole("link", { name: "Pi", exact: true }).click();
   await page.getByRole("tab", { name: "安装与版本", exact: true }).click();
   await expect(page.getByRole("button", { name: "安装最新版", exact: true })).toBeVisible();
@@ -209,9 +237,12 @@ try {
   await application.close();
   application = undefined;
   await assert.rejects(fetch(`${origin}/health/live`));
+  delete env.AGENT_HOST;
+  delete env.AGENT_PORT;
   application = await launch();
   const reopened = await application.firstWindow();
   await reopened.waitForURL(/\/agents$/);
+  assert.equal(new URL(reopened.url()).origin, origin, "Saved gateway port must survive a full desktop restart");
   assert.equal(await reopened.evaluate(() => localStorage.getItem("theme")), "dark");
   assert.equal((await reopened.evaluate(async () => (await fetch("/api/runtime")).json())).storeId, storeId);
   const restoredNetwork = await reopened.evaluate(async () => (await fetch("/api/system/network")).json());

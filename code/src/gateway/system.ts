@@ -1,3 +1,4 @@
+import { gatewaySchema } from "../../host/gateway.mjs";
 import { createRequire } from "node:module";
 import { codeRoot } from "../engines/tool-instructions.js";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
@@ -41,9 +42,11 @@ export function systemRoutes(server: FastifyInstance<Server, IncomingMessage, Se
   const { config, store } = runtime;
   server.get("/api/system", async (): Promise<SystemView> => ({
     storeId: store.storeId, version, nodeVersion: process.version, nodePath: process.execPath, npmPath: config.runtimeNpm || null,
-    capabilities: { network: config.supervised, restart: config.supervised, directories: true, certificates: true },
+    capabilities: { gateway: config.supervised, network: config.supervised, restart: config.supervised, directories: true, certificates: true },
     maintenance: runtime.lifecycle,
   }));
+  server.get("/api/system/gateway", async () => hostRequest("gateway.get"));
+  server.put("/api/system/gateway", async (request) => hostRequest("gateway.save", z.object({ settings: gatewaySchema, revision: z.string().length(64) }).strict().parse(request.body)));
   server.get("/api/system/network", async () => hostRequest("network.get"));
   server.put("/api/system/network", async (request) => hostRequest("network.save", z.object({ settings: networkInputSchema, revision: z.string().length(64) }).strict().parse(request.body)));
   server.post("/api/system/network/test", async (request) => hostRequest("network.test", z.object({ settings: networkInputSchema, url: z.string().url().max(4096) }).strict().parse(request.body)));

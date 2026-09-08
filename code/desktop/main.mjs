@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { isWorkspaceUrl, externalUrl, authorizedHeaders } from "./security.mjs";
+import { isWorkspaceUrl, externalUrl } from "./security.mjs";
 import updater from "electron-updater";
 
 app.setName("AgentBridge");
@@ -34,7 +34,6 @@ try {
 } catch {
   /* First launch or invalid non-critical preferences. */
 }
-const token = randomBytes(32).toString("hex");
 let origin;
 let supervisor;
 let window;
@@ -119,7 +118,7 @@ function savePreferences(value) {
 
 async function openExternal(value) {
   const url = externalUrl(value);
-  if (url && new URL(url).origin !== origin) await shell.openExternal(url);
+  if (url && (new URL(url).origin !== origin || new URL(url).pathname === "/api/docs")) await shell.openExternal(url);
 }
 
 function showWindow() {
@@ -137,7 +136,6 @@ async function requestQuit() {
     let busy = false;
     if (origin) {
       const response = await fetch(`${origin}/api/agents`, {
-        headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(3000),
       });
       if (response.ok)
@@ -270,24 +268,6 @@ async function createWindow() {
       spellcheck: false,
     },
   });
-  isolated.webRequest.onBeforeSendHeaders((details, callback) => {
-    const owned =
-      !window.isDestroyed() &&
-      !window.webContents.isDestroyed() &&
-      details.webContentsId === window.webContents.id &&
-      (details.resourceType === "mainFrame"
-        ? isWorkspaceUrl(details.url, origin)
-        : isWorkspaceUrl(window.webContents.getURL(), origin));
-    callback({
-      requestHeaders: authorizedHeaders(
-        details.requestHeaders,
-        details.url,
-        origin,
-        token,
-        owned,
-      ),
-    });
-  });
   isolated.webRequest.onBeforeRequest((details, callback) => {
     const url = new URL(details.url);
     callback({
@@ -355,12 +335,16 @@ async function createWindow() {
 async function launchBackend() {
   const secure = await safeStorage.isAsyncEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
   supervisor = new Supervisor({
-    node, args: [backend], directory: path.join(dataDirectory, "data"), token,
+    node, args: [backend], directory: path.join(dataDirectory, "data"),
     protection: secure ? "os" : "file",
     encrypt: secure ? (value) => safeStorage.encryptStringAsync(value) : undefined,
     decrypt: async (value) => (await safeStorage.decryptStringAsync(value)).result,
-    env: { AGENT_HOST: "127.0.0.1", AGENT_PORT: "0", AGENT_DESKTOP_TOKEN: token, AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm },
-    onReady: (url) => { origin = url; },
+    env: { AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm },
+    onReady: (url) => {
+      const changed = origin && origin !== url;
+      origin = url;
+      if (changed && window && !window.isDestroyed()) void window.loadURL(`${origin}/settings`);
+    },
     onNetwork: async (settings) => { appliedNetwork = settings; await configureUpdateProxy(); },
     onExit: (code, closing) => {
       if (!closing) dialog.showErrorBox("AgentBridge 后台已停止", `退出状态：${code}`);

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -16,7 +15,7 @@ import { Store } from "../src/storage/sqlite.js";
 import { databaseSchema, databaseVersion } from "../src/storage/schema.js";
 import { createServer } from "../src/gateway/server.js";
 import { within } from "../src/async.js";
-import { authorizedHeaders, externalUrl, isWorkspaceUrl } from "../desktop/security.mjs";
+import { externalUrl, isWorkspaceUrl } from "../desktop/security.mjs";
 
 test("only the current database format opens; historical data is rejected without conversion", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-database-format-"));
@@ -44,11 +43,6 @@ test("desktop privileges stay with the owned workspace and exact backend origin"
   }
   for (const url of [`${origin}/api/artifacts/id/content`, `${origin}/agents/../api/settings`, `${origin}/agents-other`, "data:text/html,test", "file:///etc/passwd", "http://127.0.0.1:43211/agents", "http://user@127.0.0.1:43210/agents"]) {
     assert.equal(isWorkspaceUrl(url, origin), false, url);
-  }
-  const headers = { authorization: "old", AUTHORIZATION: "other", Accept: "application/json" };
-  assert.deepEqual(authorizedHeaders(headers, `${origin}/api/settings`, origin, "secret", true), { Accept: "application/json", Authorization: "Bearer secret" });
-  for (const [url, trusted] of [[`${origin}/api/settings`, false], ["https://external.invalid/", true], ["http://127.0.0.1:43211/", true], ["http://127.0.0.1.external.invalid:43210/", true], ["http://user:password@127.0.0.1:43210/api/settings", true], ["not a URL", true]]) {
-    assert.deepEqual(authorizedHeaders(headers, url, origin, "secret", trusted), { Accept: "application/json" });
   }
   for (const url of ["javascript:alert(1)", "file:///tmp/report", "data:text/html,test", "https://user:secret@example.com", "mailto:test@example.com"]) assert.equal(externalUrl(url), null);
   assert.equal(externalUrl("https://example.com/docs"), "https://example.com/docs");
@@ -95,108 +89,38 @@ process.on('message', () => agent.kill('SIGKILL'));
   }
 });
 
-test("desktop credentials protect every route while ordinary web access remains available", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-desktop-"));
-  const token = randomBytes(32).toString("hex");
-  const headers = { host: "127.0.0.1", authorization: `Bearer ${token}` };
+test("local and LAN gateways expose HTTP and SSE without credentials", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-gateway-access-"));
   try {
-    assert.throws(() => readConfig([], { AGENT_DESKTOP_TOKEN: "short" }));
-    assert.throws(() =>
-      readConfig([], { AGENT_DESKTOP_TOKEN: token, AGENT_HOST: "0.0.0.0" }),
-    );
-    for (const desktop of [true, false]) {
-      const config = readConfig([], {
-        AGENT_DATA_DIR: directory,
-        AGENT_PORT: "0",
-        ...(desktop ? { AGENT_DESKTOP_TOKEN: token } : {}),
-      });
-      const runtime = new SessionRuntime(
-        new Store(":memory:"),
-        new OpenCodeAdapter(config),
-        config,
-      );
+    for (const host of ["127.0.0.1", "0.0.0.0"]) {
+      const config = readConfig([], { AGENT_DATA_DIR: directory, AGENT_HOST: host, AGENT_PORT: "0" });
+      const runtime = new SessionRuntime(new Store(":memory:"), new OpenCodeAdapter(config), config);
       const server = createServer(runtime);
       try {
-        const url = await server.listen({ host: config.host, port: config.port });
-        assert.notEqual(new URL(url).port, "0");
-        assert.equal(
-          (await server.inject({ url: "/health/live", headers })).statusCode,
-          200,
-        );
-        assert.equal(
-          (await server.inject({ url: "/api/settings", headers: { host: headers.host } })).statusCode,
-          desktop ? 403 : 200,
-        );
-        if (!desktop) {
-          assert.equal(
-            (await server.inject({ method: "POST", url: "/session/missing/abort", headers: { host: headers.host, origin: config.webOrigin } })).statusCode,
-            404,
-          );
-          continue;
+        await server.listen({ host, port: 0 });
+        const url = `http://127.0.0.1:${(server.server.address() as { port: number }).port}`;
+        for (const route of ["/health/live", "/metrics", "/api/settings", "/api/runtime", "/api/runtimes", "/api/docs", "/api/examples/evaluate.mjs"]) {
+          assert.equal((await fetch(url + route)).status, 200, route);
         }
-        for (const route of [
-          "/", "/agents", "/health/live", "/health/ready", "/metrics",
-          "/api/settings", "/api/runtime", "/api/runtimes", "/session",
-          "/api/events", "/event", "/api/artifacts/missing/content", "/not-found",
-        ]) {
-          for (const authorization of [undefined, "Bearer wrong", `Basic ${token}`]) {
-            const response = await server.inject({
-              url: route,
-              headers: { host: headers.host, ...(authorization ? { authorization } : {}) },
-            });
-            assert.equal(response.statusCode, 403, route);
-            assert.ok(!response.body.includes(token));
-          }
-        }
-        assert.equal(
-          (await server.inject({ url: `/api/settings?token=${token}`, headers: { host: headers.host } })).statusCode,
-          403,
-        );
-        for (const origin of ["https://untrusted.invalid", "null", config.webOrigin]) {
-          for (const method of ["GET", "POST"] as const) {
-            const response = await server.inject({ method, url: "/health/live", headers: { ...headers, origin } });
-            assert.equal(response.statusCode, 403, `${method} ${origin}`);
-          }
-        }
-        assert.equal(
-          (await server.inject({ url: "/health/live", headers: { ...headers, host: "untrusted.invalid" } })).statusCode,
-          403,
-        );
-        assert.equal(
-          (await server.inject({ url: "/api/settings", headers: { ...headers, origin: "http://127.0.0.1" } })).statusCode,
-          200,
-        );
-        assert.equal(
-          (await server.inject({ url: "/api/artifacts/missing/content", headers })).statusCode,
-          404,
-        );
+        assert.equal((await server.inject({ method: "POST", url: "/session/missing/abort" })).statusCode, 404);
+        assert.equal((await server.inject({ method: "POST", url: "/session/missing/abort", headers: { origin: config.webOrigin } })).statusCode, 404);
+        assert.equal((await server.inject({ method: "POST", url: "/session/missing/abort", headers: { origin: "https://untrusted.invalid" } })).statusCode, 403);
         for (const route of ["/api/events", "/event"]) {
           const controller = new AbortController();
           try {
-            const response = await fetch(`${url}${route}`, {
-              headers: { authorization: headers.authorization, origin: url },
-              signal: controller.signal,
-            });
+            const response = await fetch(url + route, { signal: controller.signal });
             assert.equal(response.status, 200);
-            assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
-            const first = await response.body!.getReader().read();
-            assert.match(new TextDecoder().decode(first.value), /server.connected/);
-          } finally {
-            controller.abort();
-          }
+            assert.match(response.headers.get("content-type")!, /text\/event-stream/);
+            assert.match(new TextDecoder().decode((await response.body!.getReader().read()).value), /server.connected/);
+          } finally { controller.abort(); }
         }
-      } finally {
-        await within(server.close(), 5000);
-      }
+      } finally { await within(server.close(), 5000); }
     }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test("managed gateway starts without Agent CLIs and releases its database after shutdown, drain and parent disconnect", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-desktop-ipc-"));
-  const token = randomBytes(32).toString("hex");
   try {
     for (const action of ["shutdown", "drain", "disconnect"]) {
       const child = fork(fileURLToPath(new URL("../src/main.ts", import.meta.url)), [], {
@@ -206,8 +130,6 @@ test("managed gateway starts without Agent CLIs and releases its database after 
           AGENT_DATA_DIR: directory,
           AGENT_HOST: "127.0.0.1",
           AGENT_PORT: "0",
-          AGENT_DESKTOP_TOKEN: token,
-          AGENT_ACCESS_TOKEN: token,
           AGENT_SUPERVISED: "true",
           AGENT_MANAGED_RUNTIMES: "true",
         },
@@ -221,10 +143,9 @@ test("managed gateway starts without Agent CLIs and releases its database after 
         const [ready] = await within(once(child, "message"), 10000);
         assert.equal(ready.type, "ready", diagnostics);
         assert.match(ready.url, /^http:\/\/127\.0\.0\.1:\d+$/);
-        const headers = { authorization: `Bearer ${token}` };
-        assert.equal((await fetch(`${ready.url}/health/live`, { headers })).status, 200);
-        assert.equal((await fetch(`${ready.url}/api/settings`)).status, 403);
-        const response = await fetch(`${ready.url}/api/runtimes`, { headers });
+        assert.equal((await fetch(`${ready.url}/health/live`)).status, 200);
+        assert.equal((await fetch(`${ready.url}/api/settings`)).status, 200);
+        const response = await fetch(`${ready.url}/api/runtimes`);
         assert.equal(response.status, 200);
         const { runtimes } = await response.json() as { runtimes: { installedVersion: string | null; managed: boolean }[] };
         assert.equal(runtimes.length, 4);
@@ -234,7 +155,6 @@ test("managed gateway starts without Agent CLIs and releases its database after 
         const [code, signal] = await within(exited, 10000);
         assert.equal(code, 0, diagnostics);
         assert.equal(signal, null);
-        assert.ok(!diagnostics.includes(token));
       } finally {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill("SIGKILL");

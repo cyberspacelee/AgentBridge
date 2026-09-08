@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { rootCertificates } from "node:tls";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -11,30 +11,83 @@ import type { NetworkView } from "../shared/system.js";
 import { RuntimeManager } from "../src/runtime/runtimes.js";
 import { readSettings, SettingsManager } from "../src/settings.js";
 import { readConfig } from "../src/config.js";
+import { createServer } from "node:net";
+import { gatewaySchema, gatewayUrl } from "../host/gateway.mjs";
+import type { GatewayView } from "../shared/system.js";
 
 async function eventually(check: () => Promise<boolean>) {
   for (let i = 0; i < 100; i++) { if (await check().catch(() => false)) return; await delay(100); }
   assert.fail("Condition did not become true within 10 seconds");
 }
 
-test("shared host authenticates Web, confines paths, imports CA, preserves drafts and restarts with the same store", async () => {
+test("gateway settings persist, change listener and roll back an occupied port", async () => {
+  assert.equal(gatewayUrl("::", 3000), "http://[::1]:3000");
+  assert.equal(gatewayUrl("0.0.0.0", 80), "http://127.0.0.1");
+  for (const settings of [{ host: "https://example.com", port: 3000 }, { host: "127.0.0.1", port: 65536 }, { host: "0.0.0.0", port: -1 }, { host: "localhost", port: 1.5 }]) assert.equal(gatewaySchema.safeParse(settings).success, false);
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-gateway-settings-"));
+  const options = { directory, args: ["--import", import.meta.resolve("tsx"), path.resolve("src/main.ts")], cwd: process.cwd() };
+  const host = new Supervisor({ ...options, args: [...options.args, "--host=127.0.0.1", "--port", "0"], env: { AGENT_PORT: "1" } });
+  const occupied = createServer();
+  const available = createServer();
+  let restored: Supervisor | undefined;
+  try {
+    await host.initialize();
+    const oldUrl = await host.start();
+    const first = await (await fetch(oldUrl + "/api/runtime")).json();
+    const headers = { "content-type": "application/json" };
+    const view = await (await fetch(oldUrl + "/api/system/gateway")).json() as GatewayView;
+    assert.equal(view.settings.port, 0);
+    assert.equal(view.url, oldUrl);
+    const save = (settings: unknown, revision = host.gatewayView().revision) => fetch(host.url + "/api/system/gateway", { method: "PUT", headers, body: JSON.stringify({ settings, revision }) });
+    assert.equal((await save({ host: "0.0.0.0", port: 99999 })).status, 400);
+    await new Promise<void>((resolve) => available.listen(0, "0.0.0.0", resolve));
+    const port = (available.address() as { port: number }).port;
+    await new Promise<void>((resolve) => available.close(() => resolve()));
+    const saved = await (await save({ host: "0.0.0.0", port })).json() as GatewayView;
+    assert.equal(saved.restartRequired, true);
+    assert.equal((await save(view.settings, view.revision)).status, 409);
+    await host.stop("wait", true);
+    const url = host.url!;
+    assert.equal(url, `http://127.0.0.1:${port}`);
+    assert.equal(host.gatewayView().restartRequired, false);
+    assert.equal((await (await fetch(url + "/api/runtime")).json()).storeId, first.storeId);
+    for (const address of Object.values(os.networkInterfaces()).flat()) {
+      if (address?.family === "IPv4" && !address.internal) assert.equal((await fetch(`http://${address.address}:${port}/api/settings`)).status, 200);
+    }
+    await new Promise<void>((resolve) => occupied.listen(0, "0.0.0.0", resolve));
+    const busyPort = (occupied.address() as { port: number }).port;
+    assert.equal((await save({ host: "0.0.0.0", port: busyPort })).status, 200);
+    await host.stop("stop", true);
+    assert.equal(host.url, url);
+    assert.equal((await fetch(url + "/health/live")).status, 200);
+    assert.equal(host.gatewayView().restartRequired, true);
+    assert.match(host.gatewayView().error!, /已恢复/);
+    // A successful retry clears the failure and survives a full launcher restart.
+    assert.equal((await save({ host: "0.0.0.0", port })).status, 200);
+    await host.stop("stop", true);
+    assert.equal(host.gatewayView().error, null);
+    await host.stop();
+    restored = new Supervisor(options);
+    await restored.initialize();
+    assert.deepEqual(restored.gatewayView().settings, { host: "0.0.0.0", port });
+    assert.equal(await restored.start(), url);
+  } finally {
+    await host.stop(); await restored?.stop();
+    occupied.close(); available.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("shared host serves Web without credentials, confines paths, imports CA, preserves drafts and restarts with the same store", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-system-"));
   const allowed = path.join(directory, "workspace"); await mkdir(allowed);
   const outside = path.join(directory, "outside"); await mkdir(outside);
   await symlink(outside, path.join(allowed, "escape"), process.platform === "win32" ? "junction" : "dir");
-  const token = randomBytes(32).toString("hex");
-  const host = new Supervisor({ directory, token, args: ["--import", import.meta.resolve("tsx"), path.resolve("src/main.ts")], cwd: process.cwd(), env: { AGENT_PORT: "0", AGENT_ALLOWED_DIRECTORIES: JSON.stringify([allowed]), AGENT_MANAGED_RUNTIMES: "true" } });
+  const host = new Supervisor({ directory, args: ["--import", import.meta.resolve("tsx"), path.resolve("src/main.ts")], cwd: process.cwd(), env: { AGENT_PORT: "0", AGENT_ALLOWED_DIRECTORIES: JSON.stringify([allowed]), AGENT_MANAGED_RUNTIMES: "true" } });
   try {
     await host.initialize(); const origin = await host.start();
-    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-    for (const url of ["/api/system", "/api/settings", "/api/events", "/api/system/directories", "/metrics"]) assert.equal((await fetch(origin + url)).status, 401);
-    assert.equal((await fetch(origin + "/api/access", { method: "POST", headers: { "content-type": "application/json", origin: "https://untrusted.invalid" }, body: JSON.stringify({ code: token }) })).status, 403);
-    const paired = await fetch(origin + "/api/access", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ code: token }) });
-    assert.equal(paired.status, 200);
-    const cookie = paired.headers.get("set-cookie")!.split(";")[0]!;
-    assert.match(paired.headers.get("set-cookie")!, /HttpOnly; SameSite=Strict/);
-    assert.equal((await fetch(origin + "/api/system", { headers: { cookie } })).status, 200);
-    assert.equal((await fetch(origin + "/api/system/lifecycle", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "restart", mode: "stop" }) })).status, 403);
+    const headers = { "content-type": "application/json" };
+    for (const url of ["/api/system", "/api/settings", "/api/system/directories", "/metrics"]) assert.equal((await fetch(origin + url)).status, 200);
     const first = await (await fetch(origin + "/api/runtime", { headers })).json();
     const listing = await (await fetch(origin + `/api/system/directories?directory=${encodeURIComponent(allowed)}`, { headers })).json();
     assert.deepEqual(listing.entries, []);
@@ -49,7 +102,7 @@ test("shared host authenticates Web, confines paths, imports CA, preserves draft
     assert.equal((await fetch(origin + "/api/system/network", { method: "PUT", headers, body: JSON.stringify({ revision: network.revision, settings: network.settings }) })).status, 409);
     const pid = host.child!.pid;
     assert.equal((await fetch(origin + "/api/system/lifecycle", { method: "POST", headers, body: JSON.stringify({ action: "restart", mode: "wait" }) })).status, 202);
-    await eventually(async () => host.child?.pid !== pid && (await fetch(origin + "/api/system", { headers: { cookie } })).ok);
+    await eventually(async () => host.child?.pid !== pid && (await fetch(origin + "/api/system")).ok);
     const second = await (await fetch(origin + "/api/runtime", { headers })).json();
     assert.equal(second.storeId, first.storeId); assert.notEqual(second.instanceId, first.instanceId);
     await eventually(async () => !(await (await fetch(origin + "/api/system/network", { headers })).json()).restartRequired);

@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, symlink, rm } from "node:fs/promises";
 import pino from "pino";
@@ -196,6 +198,32 @@ const input = (directory: string, id = randomUUID()) =>
     directory,
     parts: [{ type: "text", text: "work" }],
   });
+
+test("bundled evaluation script collects successful results and fails cancelled runs without credentials", async () => {
+  const engine = new ControlledEngine(); engine.id = "pi";
+  const f = await fixture(10000, [engine]);
+  const server = createServer(f.runtime);
+  try {
+    const url = await server.listen({ host: "127.0.0.1", port: 0 });
+    for (const cancelled of [false, true]) {
+      const result = promisify(execFile)(process.execPath, [path.resolve("tools/evaluate.mjs"), "--url", url, "--directory", f.directory, "--engine", "pi", "--timeout", "10000"], { timeout: 15000 }).then(
+        (value) => ({ ...value, code: 0 }),
+        (error) => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }),
+      );
+      await until(() => engine.executions.size === 1);
+      const sessionId = [...engine.executions.keys()][0]!;
+      if (cancelled) await f.runtime.cancel(sessionId);
+      else engine.complete(sessionId);
+      const output = await result;
+      assert.equal(output.code, cancelled ? 1 : 0, output.stderr);
+      const data = JSON.parse(output.stdout);
+      assert.equal(data.run.state, cancelled ? "cancelled" : "completed");
+      assert.equal(data.sessionId, sessionId);
+      assert.ok(Array.isArray(data.artifacts));
+      if (!cancelled) assert.ok(data.messages.some((message: Message) => message.role === "assistant"));
+    }
+  } finally { await server.close(); await rm(f.directory, { recursive: true, force: true }); }
+});
 
 test("gateway shutdown flushes final logs even when the transport ready flag is stale", async () => {
   const f = await fixture();

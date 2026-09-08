@@ -201,7 +201,7 @@ async function main() {
     cancellation.signal.throwIfAborted();
     const request = async (route, body, method = body ? "POST" : "GET") => {
       const response = await fetch(`${origin}${route}`, {
-        method, headers: { Authorization: `Bearer ${supervisor.token}`, "Content-Type": "application/json" },
+        method, headers: { "Content-Type": "application/json" },
         ...(body ? { body: JSON.stringify(body) } : {}), redirect: "error", signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(60000)]),
       });
       if (!response.ok) throw new Error(`${method} ${route}: HTTP ${response.status}; inspect the application logs`);

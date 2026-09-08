@@ -10,6 +10,5 @@ const supervisor = new Supervisor({
   onError: (error) => { console.error(error.message); process.exitCode = error.exitCode ?? 1; },
 });
 try { await supervisor.initialize(); } catch (error) { await supervisor.release(); throw error; }
-console.error(`AgentBridge 管理配对码（仅本次启动有效）：${supervisor.token}`);
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { void supervisor.stop(); });
 try { await supervisor.start(); } catch (error) { console.error(error.message); await supervisor.kill(); await supervisor.release(); process.exitCode = error.exitCode ?? 1; }

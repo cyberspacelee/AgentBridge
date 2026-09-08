@@ -1,10 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
-import type { NetworkInput, NetworkView } from "../shared/system.js";
+import type { GatewayView, NetworkInput, NetworkView } from "../shared/system.js";
 
 async function networkFixture(page: Page, native = true) {
   const calls = { tests: [] as { input: NetworkInput; url: string }[], saves: [] as NetworkInput[], restarts: 0 };
   let view: NetworkView = { settings: { npmRegistry: "https://registry.npmjs.org/", mode: "manual", proxyUrl: "http://proxy.example.com:8080", proxyUsername: "employee", noProxy: "", useSystemCa: false, caFile: "" }, hasPassword: true, restartRequired: false, revision: "a".repeat(64), appliedRevision: "a".repeat(64), protection: "file", error: null };
-  await page.route("**/api/system", (route) => route.fulfill({ json: { capabilities: { network: true, restart: true }, maintenance: "ready", version: "fixture", nodeVersion: "fixture", nodePath: "/runtime/node", npmPath: "/runtime/npm/bin/npm-cli.js" } }));
+  await page.route("**/api/system", (route) => route.fulfill({ json: { capabilities: { gateway: true, network: true, restart: true }, maintenance: "ready", version: "fixture", nodeVersion: "fixture", nodePath: "/runtime/node", npmPath: "/runtime/npm/bin/npm-cli.js" } }));
+  let gateway: GatewayView = { settings: { host: "127.0.0.1", port: 3010 }, appliedSettings: { host: "127.0.0.1", port: 3010 }, revision: "a".repeat(64), appliedRevision: "a".repeat(64), restartRequired: false, url: "http://127.0.0.1:3010", urls: ["http://127.0.0.1:3010"], error: null };
+  await page.route("**/api/system/gateway", async (route) => {
+    if (route.request().method() === "PUT") gateway = { ...gateway, settings: route.request().postDataJSON().settings, revision: "b".repeat(64), restartRequired: true };
+    await route.fulfill({ json: gateway });
+  });
   await page.route("**/api/system/network", async (route) => {
     if (route.request().method() === "PUT") {
       const input = route.request().postDataJSON().settings as NetworkInput;
@@ -106,33 +111,14 @@ test("web settings expose the same network management without Electron", async (
   await expect(pane.getByLabel("上传 CA 证书", { exact: true })).toHaveAttribute("type", "file");
 });
 
-test("Web pairs before loading management data and disconnects without persisting the pairing code", async ({ page }) => {
+test("Web opens management directly without pairing or disconnect controls", async ({ page }) => {
   await networkFixture(page, false);
-  let paired = false;
-  const code = "browser-test-pairing-code-32-characters";
-  await page.route("**/api/access", async (route) => {
-    if (route.request().method() === "POST") {
-      if (route.request().postDataJSON().code !== code) return route.fulfill({ status: 401, json: { message: "配对码无效" } });
-      paired = true;
-    }
-    if (route.request().method() === "DELETE") paired = false;
-    return route.fulfill({ json: { authenticated: paired, required: true } });
-  });
+  await page.route("**/api/access", () => { throw new Error("Removed access API must not be called"); });
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "连接 AgentBridge" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "网络与代理" })).toHaveCount(0);
-  await page.getByLabel("实例配对码", { exact: true }).fill("incorrect-pairing-code-of-32-characters");
-  await page.getByRole("button", { name: "连接实例", exact: true }).click();
-  await expect(page.getByText("配对码无效", { exact: true })).toBeVisible();
-  await page.getByLabel("实例配对码", { exact: true }).fill(code);
-  await page.getByRole("button", { name: "连接实例", exact: true }).click();
   await expect(page.getByRole("heading", { name: "系统信息", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]))).not.toContain(code);
-  await page.getByRole("button", { name: "断开浏览器连接", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "连接 AgentBridge" })).toBeVisible();
-  await expect(page.getByLabel("实例配对码", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("实例配对码", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "断开浏览器连接", exact: true })).toHaveCount(0);
 });
-
 
 test("npm registry presets and custom sources are saved and used as connection test targets", async ({ page }, info) => {
   const calls = await networkFixture(page, false);
@@ -194,4 +180,24 @@ test("system settings group fields in cards and retain drafts when optional sect
     await page.locator("#main-content").evaluate((element) => element.scrollTo(0, 0));
     await page.screenshot({ path: info.outputPath(`settings-groups-${width}.png`), fullPage: true });
   }
+});
+
+test("gateway settings show public API docs, retain the port and guide Web reconnect", async ({ page }, info) => {
+  const calls = await networkFixture(page, false);
+  await page.goto("/settings");
+  const pane = page.getByRole("region", { name: "网关服务", exact: true });
+  await expect(pane.getByLabel("网关端口", { exact: true })).toHaveValue("3010");
+  await expect(pane.getByRole("link", { name: "网关接口文档与评测示例" })).toHaveAttribute("href", "/api/docs");
+  await pane.getByLabel("监听地址", { exact: true }).fill("0.0.0.0");
+  await pane.getByLabel("网关端口", { exact: true }).fill("3100");
+  await pane.getByRole("button", { name: "保存网关设置", exact: true }).click();
+  await expect(pane.getByText(/网关设置已保存/)).toBeVisible();
+  await page.reload();
+  await expect(pane.getByLabel("网关端口", { exact: true })).toHaveValue("3100");
+  await pane.getByRole("button", { name: "重启网关", exact: true }).click();
+  await page.getByRole("button", { name: "等待任务完成后重启", exact: true }).click();
+  await expect.poll(() => calls.restarts).toBe(1);
+  await expect(pane.getByRole("link", { name: "使用新地址打开工作台" })).toHaveAttribute("href", "http://127.0.0.1:3100/settings");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await pane.screenshot({ path: info.outputPath("gateway-settings.png") });
 });

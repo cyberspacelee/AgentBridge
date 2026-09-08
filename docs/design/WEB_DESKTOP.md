@@ -11,11 +11,11 @@
 | 版本管理 | 实际检测文件与版本，检查最新版本，受管安装/更新/卸载，来源切换与回滚 | 外部程序始终不被覆盖或删除 |
 | 网络配置 | `host/network.mjs` 规范化代理、认证、绕过地址和 CA；`system.json` 保存修订与生效状态 | Electron 更新器使用自己的 Session 网络栈，并应用同一代理策略 |
 | 重启/退出 | `host/supervisor.mjs` 管理同一个 Node 后端，支持等待或停止任务 | Desktop 另有窗口、托盘和应用更新；Web 的退出结束启动器 |
-| 管理访问 | 网关统一鉴权、错误、CSP、Origin 校验；覆盖 API、SSE、文件与指标 | Web 配对 Cookie；Desktop 由主进程为精确 origin 注入 token |
+| 管理访问 | Web、API、SSE、文件与指标无需配对或鉴权；保留输入、路径、Origin 校验与 CSP | Desktop 保留沙箱及受限 IPC |
 | 工作目录、Skill 路径 | 后端目录边界校验 | Desktop 原生选择器；Web 浏览服务器目录，上传 PEM 到服务器 |
 | 偏好和草稿 | 业务草稿与待确认提交按 storeId 隔离 | 浏览器偏好本地保存；Desktop 通过窄 IPC 持久化主题和侧栏 |
 
-`pnpm dev` 使用已安装的 tsx 在启动器外层监听源码变化，保持 Supervisor 与后端直接通信；自动重载会重建启动器。开发时可显式设置 AGENT_ACCESS_TOKEN，避免每次重载重新配对。
+`pnpm dev` 使用已安装的 tsx 在启动器外层监听源码变化，保持 Supervisor 与后端直接通信；自动重载会重建启动器。Web 页面直接连接，无需配对。
 
 Web 的目录是服务器文件系统，不是远程浏览器所在电脑。不能通过浏览器文件选择推断服务器绝对路径。两种入口默认各自的数据位置，格式一致；同一目录只允许一个实例运行，不自动寻找、合并或迁移另一入口的数据。
 
@@ -39,7 +39,8 @@ flowchart LR
 
 | 接口 | 语义 |
 | --- | --- |
-| `GET/POST/DELETE /api/access` | 查询认证、用配对码建立会话、断开浏览器连接 |
+| `GET/PUT /api/system/gateway` | 查询或保存监听 host/port，revision 校验，重启生效 |
+| `GET /api/docs`、`GET /api/examples/evaluate.mjs` | 随安装包提供的接口文档和自动评测脚本 |
 | `GET /api/system` | 应用版本、storeId、实际 Node/npm、能力、维护状态 |
 | `GET/PUT /api/system/network` | 脱敏网络设置；PUT 为 `{settings, revision}`，冲突返回 409 |
 | `POST /api/system/network/test` | `{settings, url}`，独立 Node 测试草稿，返回 HTTP 状态与耗时 |
@@ -58,9 +59,9 @@ Pi 的 MCP 扩展从实际 CLI 安装位置解析，两种来源使用相同逻�
 
 测试结果仅证明网关 Node 对目标 URL 的访问情况。每个 Agent 的模型链路仍在模型页面单独测试；不能从网关测试推断所有原生 CLI 的代理和 CA 支持。系统 CA、`NODE_EXTRA_CA_CERTS` 作用于支持它们的进程；Electron 更新器信任操作系统证书，不把 PEM 文件当作更新器根证书。继承环境模式不读取操作系统代理或 PAC。
 
-Desktop 使用异步 safeStorage；不可用时明确显示文件权限保护，不声称拥有系统密钥保护。Web 的网络凭据以仅当前用户可读写的文件保存。API 不回显密码；省略密码保留，显式空字符串清除。代理凭据不放入 URL 输入框、不传给 renderer 初始化数据。管理 token 不传给 Agent 进程。
+Desktop 使用异步 safeStorage；不可用时明确显示文件权限保护，不声称拥有系统密钥保护。Web 的网络凭据以仅当前用户可读写的文件保存。API 不回显密码；省略密码保留，显式空字符串清除。代理凭据不放入 URL 输入框、不传给 renderer 初始化数据。
 
-Web 默认每次启动器启动生成随机管理配对码，终端显示。浏览器凭据为 HttpOnly、SameSite=Strict Cookie，有效 12 小时；修改请求还需要可信 Origin。`AGENT_ACCESS_TOKEN` 可设置固定 token。服务内重启保持 token 和端口，重启整个启动器会更换默认 token。实例管理员可以管理所有任务与主机路径，这不是多用户授权系统；跨主机部署需要 HTTPS。
+Web/Desktop 本机与局域网接口不要求配对码、Cookie 或 Bearer token。网关监听设置存入 system.json 的 gateway/appliedGateway，默认 127.0.0.1:3000。保存后用现有生命周期流程重启；失败恢复之前的监听与网络配置。Desktop 在地址改变后重新加载工作台，Web 使用新地址访问。启动时 Web CLI > 环境变量 > 已保存配置；运行期间 API 可更新设置。完整字段和评测示例见[网关 API](../../code/docs/GATEWAY_API.md)。
 
 ## Electron 官方实践与项目选择
 
@@ -72,7 +73,7 @@ Node 后端继续作为独立 Node 进程运行：这样 Web 无需 Electron，�
 
 构建时先清空后端输出，删除的旧模块不会进入分发包。Linux 的构建、开发态及搬到仓库外的包体冒烟测试验证共享 host 模块、内置 Node/npm、代理认证、循环连接、偏好、访问隔离与退出。Windows/macOS 的实机、密钥存储与签名更新仍需目标平台验收；不将 Linux 结果写成三平台实测。
 
-## 本轮验证
+## 统一运行基线验证（鉴权清理前的历史记录）
 
 - 后端：62 项，56 通过、6 项按环境条件跳过；另单独运行 Pi/OpenCode 真实进程生命周期测试，两项均通过；Pi 真实 CLI 配合本地模型 fixture 的工具/MCP 链路也通过。
 - 浏览器：68 项，64 通过、4 项跳过，覆盖桌面/手机视口、访问配对、共享网络和 CLI 管理。
@@ -81,3 +82,12 @@ Node 后端继续作为独立 Node 进程运行：这样 Web 无需 Electron，�
 - 回归包含网络启动失败回滚、网络应用中断恢复、来源切换失败与日志恢复、历史格式拒绝和开发监听重载。证据对应测试源码，不把模拟模型结果视为真实模型业务验收。
 
 已删除 Desktop 网络 IPC 和重复网络模块、重复鉴权/维护守卫、历史数据库升级代码及迁移工具。旧构建输出在每次构建前清空，普通浏览器回归产生的无关截图改动已撤回。前次 AppImage/CLI 下载记录仍作为历史验收证据保留，并已标明其范围。
+
+## 网关开放与监听配置验证（2026-09-08）
+
+本次移除 Web/Desktop 配对与网关鉴权，新增共享监听配置、桌面改址重连、离线 API 文档和 Node 自动评测脚本。
+
+- 前后端类型检查、Web lint 和生产构建通过；后端 63 项通过、6 项按环境条件跳过；浏览器 72 项通过、4 项跳过。
+- 回归覆盖无凭据 HTTP/SSE、局域网监听、配置修订冲突、改端口、端口占用回滚、完整启动器重启后的持久化，以及评测脚本成功/取消退出码。
+- Linux x64 目录包构建、Electron 开发态和移至仓库外的包体冒烟通过；包体测试清除主机 Node 搜索路径，验证内置 Node/server、文档、配置页面、自动重连、代理、偏好和退出。
+- 图形测试使用 Xvfb，并通过测试环境变量关闭 Chromium 启动沙箱；生产代码仍启用 sandbox/contextIsolation。Windows/macOS 安装包和真实供应商模型未在本次测试。

@@ -1,10 +1,9 @@
-import { desktop } from "@/lib/desktop"
 import type { SystemView } from "../../../shared/system"
-import { useContext, useState } from "react"
+import { useContext } from "react"
 import { Link } from "react-router-dom"
 import { ChevronDown, RefreshCw, Bot } from "lucide-react"
 import type { SettingsView } from "../../../shared/settings"
-import { api, useQuery } from "@/lib/api"
+import { useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
 import { Failure, IconButton, duration, bytes } from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
@@ -22,10 +21,10 @@ import {
   CollapsibleContent,
 } from "@/components/ui/collapsible"
 import { Skeleton } from "@/components/ui/skeleton"
+import { GatewaySettingsPanel } from "./gateway-settings"
 import { NetworkSettingsPanel } from "./network-settings"
 
 export function Settings() {
-  const [accessError, setAccessError] = useState<Error>()
   const { runtime, revision } = useContext(GatewayContext)
   const system = useQuery<SystemView>("/api/system", revision)
   const settings = useQuery<SettingsView>("/api/settings")
@@ -48,8 +47,9 @@ export function Settings() {
           <RefreshCw />
         </IconButton>
       </div>
+      <GatewaySettingsPanel system={system.data} />
       <NetworkSettingsPanel />
-      <Failure error={accessError ?? settings.error ?? system.error} />
+      <Failure error={settings.error ?? system.error} />
       {system.data?.maintenance !== "ready" && system.data && (
         <p role="status">
           服务正在
@@ -130,23 +130,7 @@ export function Settings() {
                 <Bot data-icon="inline-start" />
                 管理 Agents
               </Button>
-              {!desktop && system.data?.capabilities.restart && (
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      await api("/api/access", { method: "DELETE" })
-                      window.dispatchEvent(
-                        new CustomEvent("agentbridge:unauthorized")
-                      )
-                    } catch (error) {
-                      setAccessError(error as Error)
-                    }
-                  }}
-                >
-                  断开浏览器连接
-                </Button>
-              )}
+
             </CardFooter>
           </Card>
           <Card>

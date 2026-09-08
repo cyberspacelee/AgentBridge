@@ -1,4 +1,3 @@
-import { AccessGate } from "@/components/access-gate"
 import { saveDesktopPreference } from "@/lib/desktop"
 import { lazy, Suspense, useState, useEffect } from "react"
 import {
@@ -73,11 +72,7 @@ export default function App() {
     return () =>
       window.removeEventListener("agentbridge:preference-error", failed)
   }, [])
-  return (
-    <AccessGate>
-      <WorkspaceApp />
-    </AccessGate>
-  )
+  return <WorkspaceApp />
 }
 
 function WorkspaceApp() {

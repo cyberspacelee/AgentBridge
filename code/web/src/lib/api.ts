@@ -32,8 +32,6 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     signal: init?.signal ?? AbortSignal.timeout(45000),
   })
   if (!response.ok) {
-    if (response.status === 401 && url !== "/api/access")
-      window.dispatchEvent(new Event("agentbridge:unauthorized"))
     const body = await response.json().catch(() => ({}))
     throw new ApiError(
       body.code ?? "HTTP_ERROR",

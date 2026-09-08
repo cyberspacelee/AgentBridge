@@ -24,24 +24,3 @@ export function externalUrl(value) {
     return null;
   }
 }
-
-export function authorizedHeaders(headers, url, origin, token, trusted) {
-  const result = Object.fromEntries(
-    Object.entries(headers).filter(
-      ([key]) => key.toLowerCase() !== "authorization",
-    ),
-  );
-  try {
-    const target = new URL(url);
-    if (
-      trusted &&
-      target.origin === origin &&
-      !target.username &&
-      !target.password
-    )
-      result.Authorization = `Bearer ${token}`;
-  } catch {
-    // Malformed URLs must never receive the backend credential.
-  }
-  return result;
-}

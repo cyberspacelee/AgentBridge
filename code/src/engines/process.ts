@@ -28,7 +28,7 @@ export function startProcess(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): ChildProcessWithoutNullStreams {
-  const { AGENT_DESKTOP_TOKEN: _desktopToken, AGENT_ACCESS_TOKEN: _accessToken, ...childEnvironment } = env;
+  const childEnvironment = { ...env };
   if (env.AGENT_RUNTIME_NODE) {
     const searchPath = env.PATH ?? env[Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH"] ?? "";
     for (const key of Object.keys(childEnvironment)) if (key.toLowerCase() === "path") delete childEnvironment[key];

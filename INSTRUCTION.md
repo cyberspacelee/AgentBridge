@@ -107,7 +107,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 
 设置 `AGENT_DESKTOP_DATA_DIR` 为绝对路径可覆盖根目录，例如指定 `/home/me/AgentBridge` 后，配置位于 `/home/me/AgentBridge/data/settings.json`。应用菜单的“打开日志目录”可直接定位日志。
 
-Web 默认 `.agentbridge`，Desktop 默认用户数据目录下的 `data/`；两者使用同一当前数据格式。不同实例使用不同目录。不兼容历史数据，不提供迁移。备份完整的业务数据目录应先显式退出应用；同一数据目录只允许一个网关写入。桌面内置网关仅监听本机随机端口，供桌面窗口访问；局域网使用下方的源码 Web 模式。
+Web 默认 `.agentbridge`，Desktop 默认用户数据目录下的 `data/`；两者使用同一当前数据格式。不同实例使用不同目录。不兼容历史数据，不提供迁移。备份完整的业务数据目录应先显式退出应用；同一数据目录只允许一个网关写入。桌面内置网关默认 `127.0.0.1:3000`，在“系统信息 → 网关服务”配置监听地址、端口，保存并重启后可供本机或局域网调用；无需额外安装 server。完整接口与自动化评测示例见[网关 API](code/docs/GATEWAY_API.md)，运行中可访问 `/api/docs`。
 
 ### 源码 Web 模式
 
@@ -122,7 +122,7 @@ pnpm web:build
 pnpm start
 ```
 
-浏览器访问 `http://127.0.0.1:3000/agents`，输入终端显示的配对码。新 Web/Desktop 实例均默认受管来源；在“安装与版本”按需安装，或输入主机已有 CLI 命令并验证切换。Pi/OpenCode 开发依赖用于开发验证，不决定业务实例的来源。详情见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
+浏览器访问 `http://127.0.0.1:3000/agents`，无需配对码。新 Web/Desktop 实例均默认受管来源；在“安装与版本”按需安装，或输入主机已有 CLI 命令并验证切换。Pi/OpenCode 开发依赖用于开发验证，不决定业务实例的来源。详情见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
 
 首次无配置启动时四个 Agent 均停用。前端与管理 API 仍可访问；就绪状态不代表模型连接、额度或凭据验证通过。
 
@@ -176,7 +176,7 @@ Codex/Grok 每个会话有独立的托管 HOME，加载前检查原生 Skill 发
 
 ## 启动参数与环境
 
-源码 Web 启动器只读取启动工作目录的 `.env`，已有进程环境变量优先。CLI 的 host/port/engine 参数覆盖对应环境变量。业务配置保存后，以 settings.json 为准。桌面模式自行设置本机监听地址、随机端口和业务数据路径，不使用此启动器加载 `.env`；更改桌面数据位置使用 `AGENT_DESKTOP_DATA_DIR`。
+源码 Web 启动器只读取启动工作目录的 `.env`，已有进程环境变量优先。CLI 的 host/port/engine 参数覆盖对应环境变量。业务配置保存后，以 settings.json 为准。两种入口均按 Web CLI host/port > AGENT_HOST/AGENT_PORT > system.json 的 gateway > 默认 127.0.0.1:3000 初始化监听设置。Desktop 不加载 `.env`；更改桌面数据位置使用 `AGENT_DESKTOP_DATA_DIR`。
 
 | 配置 | 范围 |
 | --- | --- |
@@ -184,7 +184,6 @@ Codex/Grok 每个会话有独立的托管 HOME，加载前检查原生 Skill 发
 | `AGENT_DATA_DIR` | 源码模式默认当前目录下 .agentbridge，多个实例必须分开 |
 | `AGENT_DESKTOP_DATA_DIR` | 桌面用户数据根目录，业务数据位于其 data/ 子目录 |
 | `AGENT_MANAGED_RUNTIMES=false` | 仅首次初始化为外部来源，默认受管；之后逐 Agent 管理 |
-| `AGENT_ACCESS_TOKEN` | 可选固定管理凭据，默认每次启动随机生成 |
 | `AGENT_ENGINE` / `--engine` | 无 settings.json 时的默认 Agent，支持四个 ID |
 | `ENGINE_A_COMMAND` / `ENGINE_B_COMMAND` | OpenCode / Pi 命令，仅初始化外部来源时读取 |
 | `ENGINE_A_PORT` | OpenCode 内部端口，默认 0 自动分配 |
@@ -206,15 +205,15 @@ AGENT_OPENAI_API_KEY=replace-with-your-key
 
 不要把真实密钥提交到 Git。当前 settings 和数据库版本均为 3；历史格式一律拒绝，不提供兼容或迁移，不覆盖原文件。使用新的 AGENT_DATA_DIR，按新设计重新配置。
 
-局域网可运行 `pnpm start --host 0.0.0.0 --port 3000`。浏览器使用配对码建立 12 小时管理会话，API 使用 Authorization: Bearer <配对码>；环境变量 AGENT_ACCESS_TOKEN 可提供固定的 32–256 字符凭据。默认配对码随启动器重启变化，服务内重启保持会话。配对拥有整个实例权限，不提供多租户隔离，跨主机连接使用 HTTPS。
+局域网可运行 `pnpm start --host 0.0.0.0 --port 3000`，Desktop 也可在网关服务页面保存相同监听设置。Web、HTTP/SSE、产物与指标均无需网关鉴权；外部脚本直接调用桌面监听地址。修改地址/端口重启后 desktop 自动重连，Web 使用新地址打开。
 
-系统网络、配对、重启和证书接口及平台边界见[Web/Desktop 统一运行](docs/design/WEB_DESKTOP.md)。
+系统网络、网关配置、重启和证书接口及平台边界见[Web/Desktop 统一运行](docs/design/WEB_DESKTOP.md)。
 
 ## API 与验证
 
 管理 API：`GET/PUT /api/settings`、`GET /api/agents`、`POST /api/agents/:id/actions`、`POST /api/providers/:id/test`、`POST /api/agents/:id/import`。动作请求为 `{"action":"enable|disable|stop|apply"}`，HTTP 202 表示已接收，通过 Agent 状态或 `agents.updated` 事件追踪结果。完整任务、交互和事件契约见 [接口设计](docs/design/CONTRACTS.md)。
 
-运行时管理 API：`GET /api/runtimes` 返回四个运行时状态；`POST /api/runtimes/:id/actions` 接受 `{"action":"check|detect|install|update|uninstall|cancel"}`，通过轮询状态跟踪后台操作。`PUT /api/runtimes/:id/source` 接受 `{mode:"managed"}` 或 `{mode:"external",command:"绝对路径或命令"}`。外部来源可检测版本、查询最新版本及准备受管安装；切换需显式提交，不能覆盖更新或卸载外部程序。桌面网关请求凭据由桌面壳注入，外部浏览器或脚本不能直接复用其随机端口调用管理接口。
+运行时管理 API：`GET /api/runtimes` 返回四个运行时状态；`POST /api/runtimes/:id/actions` 接受 `{"action":"check|detect|install|update|uninstall|cancel"}`，通过轮询状态跟踪后台操作。`PUT /api/runtimes/:id/source` 接受 `{mode:"managed"}` 或 `{mode:"external",command:"绝对路径或命令"}`。外部来源可检测版本、查询最新版本及准备受管安装；切换需显式提交，不能覆盖更新或卸载外部程序。桌面网关和 Web server 提供相同的无鉴权接口，评测脚本可直接调用。
 
 ```sh
 pnpm typecheck

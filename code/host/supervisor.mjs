@@ -4,6 +4,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { access, mkdir, readFile, writeFile, rename, realpath, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import { networkInterfaces } from "node:os";
+import { gatewaySchema, gatewayUrl } from "./gateway.mjs";
 import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment } from "./network.mjs";
 
 const revision = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -76,7 +78,19 @@ export class Supervisor {
     this.filename = path.join(this.directory, "system.json");
     this.baseEnv = { ...process.env, ...options.env };
     if (this.baseEnv.NODE_EXTRA_CA_CERTS) this.baseEnv.NODE_EXTRA_CA_CERTS = path.resolve(options.cwd ?? process.cwd(), this.baseEnv.NODE_EXTRA_CA_CERTS);
-    this.token = options.token ?? this.baseEnv.AGENT_ACCESS_TOKEN ?? randomBytes(32).toString("hex");
+    this.gatewayOverrides = {};
+    if (this.baseEnv.AGENT_HOST !== undefined) this.gatewayOverrides.host = this.baseEnv.AGENT_HOST;
+    if (this.baseEnv.AGENT_PORT !== undefined) this.gatewayOverrides.port = Number(this.baseEnv.AGENT_PORT);
+    this.args = [];
+    for (let i = 0; i < options.args.length; i++) {
+      const argument = options.args[i];
+      const match = /^--(host|port)(?:=(.*))?$/.exec(argument);
+      if (!match) { this.args.push(argument); continue; }
+      const value = match[2] ?? options.args[++i];
+      this.gatewayOverrides[match[1]] = match[1] === "port" ? Number(value) : value;
+    }
+    this.gateway = gatewaySchema.parse({ host: "127.0.0.1", port: 3000, ...this.gatewayOverrides });
+    this.appliedGateway = this.gateway;
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -85,13 +99,14 @@ export class Supervisor {
     const [major, minor] = nodeVersion.trim().split(".").map(Number);
     if (!(major === 22 && minor >= 21 || major >= 24)) throw new Error("需要 Node.js >= 22.21（推荐项目打包使用的 Node.js 24）");
     this.baseEnv.AGENT_MANAGED_RUNTIMES ??= "true";
-    if (this.token.length < 32 || this.token.length > 256) throw new Error("AGENT_ACCESS_TOKEN 必须为 32–256 个字符");
     this.npm = await findNpm(this.node, this.baseEnv.AGENT_RUNTIME_NPM);
     let stored;
     try { stored = JSON.parse(await readFile(this.filename, "utf8")); }
     catch (error) { if (error.code !== "ENOENT") throw new Error("系统配置损坏，原文件已保留，请从备份恢复。"); }
     if (stored !== undefined) {
       if (!stored || stored.schemaVersion !== 1 || !stored.network || !stored.appliedNetwork || typeof stored.applying !== "boolean" || !(stored.error === null || typeof stored.error === "string")) throw new Error("系统配置版本不受支持，原文件已保留。");
+      this.gateway = gatewaySchema.parse({ ...this.gateway, ...stored.gateway, ...this.gatewayOverrides });
+      this.appliedGateway = stored.applying ? gatewaySchema.parse({ ...this.gateway, ...stored.appliedGateway, ...this.gatewayOverrides }) : this.gateway;
       this.settings = await this.decode(stored.network);
       this.applied = await this.decode(stored.appliedNetwork);
       if (!stored.applying) {
@@ -100,7 +115,7 @@ export class Supervisor {
       }
       this.error ??= stored.error ?? null;
       // Recover an interrupted application attempt before starting any Agent.
-      if (stored.applying) this.error = "上次网络应用被中断，已恢复之前生效的配置；保存的设置仍可重试。";
+      if (stored.applying) this.error = "上次系统配置应用被中断，已恢复之前生效的配置；保存的设置仍可重试。";
     } else {
       this.applied = this.settings;
     }
@@ -122,13 +137,33 @@ export class Supervisor {
     return { ...plain, encryptedPassword: encrypted.toString("base64") };
   }
   async persist(applying) {
-    await atomicJson(this.filename, { schemaVersion: 1, network: await this.encode(this.settings), appliedNetwork: await this.encode(this.applied), applying, error: this.error });
+    await atomicJson(this.filename, { schemaVersion: 1, gateway: this.gateway, appliedGateway: this.appliedGateway, network: await this.encode(this.settings), appliedNetwork: await this.encode(this.applied), applying, error: this.error });
   }
   view() {
     const { proxyPassword, ...settings } = this.settings;
     return { settings, hasPassword: !!proxyPassword, revision: revision(this.settings), appliedRevision: revision(this.applied), restartRequired: revision(this.settings) !== revision(this.applied), protection: this.options.protection ?? "file", error: this.error };
   }
+  gatewayView() {
+    const hosts = this.appliedGateway.host === "0.0.0.0" || this.appliedGateway.host === "::"
+      ? Object.values(networkInterfaces()).flat().filter((entry) => entry && !entry.internal && !entry.address.includes("%") && (this.appliedGateway.host === "::" || entry.family === "IPv4")).map((entry) => entry.address)
+      : [];
+    const port = this.url ? Number(new URL(this.url).port || 80) : this.appliedGateway.port;
+    return { settings: this.gateway, appliedSettings: this.appliedGateway, revision: revision(this.gateway), appliedRevision: revision(this.appliedGateway), restartRequired: revision(this.gateway) !== revision(this.appliedGateway), url: this.url ?? null, urls: [...new Set([gatewayUrl(this.appliedGateway.host, port), ...hosts.map((host) => gatewayUrl(host, port))])], error: this.error };
+  }
   async request(method, payload) {
+    if (method === "gateway.get") return this.gatewayView();
+    if (method === "gateway.save") {
+      if (this.saving || this.operation) throw new Error("已有系统配置操作正在进行");
+      if (payload.revision !== revision(this.gateway)) throw new Error("网关设置已被修改，请刷新后重试");
+      this.saving = true;
+      const previous = this.gateway;
+      try {
+        this.gateway = gatewaySchema.parse(payload.settings);
+        await this.persist(false);
+        return this.gatewayView();
+      } catch (error) { this.gateway = previous; throw error; }
+      finally { this.saving = false; }
+    }
     if (method === "network.get") return this.view();
     if (method === "network.save") {
       if (this.saving || this.operation) throw new Error("已有系统配置操作正在进行");
@@ -150,7 +185,7 @@ export class Supervisor {
       this.testing = true;
       try {
         const env = networkEnvironment(settings, this.baseEnv);
-        for (const key of ["AGENT_ACCESS_TOKEN", "AGENT_DESKTOP_TOKEN", "NODE_OPTIONS", "ELECTRON_RUN_AS_NODE"]) delete env[key];
+        for (const key of ["NODE_OPTIONS", "ELECTRON_RUN_AS_NODE"]) delete env[key];
         const script = `const start=Date.now();try{const r=await fetch(process.argv[1],{signal:AbortSignal.timeout(10000)});await r.body?.cancel();console.log(JSON.stringify({status:r.status,durationMs:Date.now()-start,scope:"gateway"}));}catch(e){console.log(JSON.stringify({error:e.cause?.code||e.code||e.name}));}`;
         const { stdout } = await promisify(execFile)(this.node, ["--input-type=module", "-e", script, url.href], { env, cwd: this.directory, timeout: 15000, maxBuffer: 16384, windowsHide: true });
         const result = JSON.parse(stdout);
@@ -176,16 +211,15 @@ export class Supervisor {
     const env = {
       ...networkEnvironment(this.applied, this.baseEnv),
       AGENT_DATA_DIR: this.directory, AGENT_RUNTIME_NODE: this.node, AGENT_RUNTIME_NPM: this.npm,
-      AGENT_SUPERVISED: "true", AGENT_ACCESS_TOKEN: this.token,
+      AGENT_SUPERVISED: "true", AGENT_HOST: this.appliedGateway.host, AGENT_PORT: String(this.appliedGateway.port),
     };
-    if (this.url) env.AGENT_PORT = new URL(this.url).port;
+    if (this.url && this.appliedGateway.port === 0) env.AGENT_PORT = new URL(this.url).port || "80";
     delete env.NODE_OPTIONS; delete env.ELECTRON_RUN_AS_NODE;
-    const args = this.url ? this.options.args.map((argument, index, all) => all[index - 1] === "--port" ? env.AGENT_PORT : argument.startsWith("--port=") ? `--port=${env.AGENT_PORT}` : argument) : this.options.args;
-    const child = spawn(this.node, args, { env, cwd: this.options.cwd ?? this.directory, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    const child = spawn(this.node, this.args, { env, cwd: this.options.cwd ?? this.directory, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] });
     this.child = child;
     let diagnostics = "";
     for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
-      let value = String(chunk).replaceAll(this.token, "[redacted]");
+      let value = String(chunk);
       if (this.applied.proxyPassword) value = value.replaceAll(this.applied.proxyPassword, "[redacted]");
       diagnostics = (diagnostics + value).slice(-8192);
       this.options.onOutput?.(value, stream === child.stdout ? "stdout" : "stderr");
@@ -214,7 +248,7 @@ export class Supervisor {
         if (input?.type !== "ready") return;
         let url;
         try { url = new URL(input.url); } catch { return; }
-        if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port) return;
+        if (url.origin !== gatewayUrl(this.appliedGateway.host, Number(url.port || 80))) return;
         ready = true; clearTimeout(timer); resolve(url.origin);
       });
     });
@@ -248,6 +282,10 @@ export class Supervisor {
     await this.cleanup();
     if (!restart) { await this.release(); return; }
     const previous = this.applied;
+    const previousGateway = this.appliedGateway;
+    const previousUrl = this.url;
+    if (revision(this.gateway) !== revision(this.appliedGateway)) this.url = undefined;
+    this.appliedGateway = this.gateway;
     this.applied = this.settings;
     try {
       await this.options.onNetwork?.(this.applied);
@@ -257,8 +295,10 @@ export class Supervisor {
       const failedChild = this.child;
       await this.kill();
       if (failedChild?.pid && failedChild.exitCode === null && failedChild.signalCode === null) await new Promise((resolve) => failedChild.once("exit", resolve));
-      this.error = "新网络配置启动失败，已恢复之前生效的配置。";
+      this.error = "新系统配置启动失败，已恢复之前生效的配置。请检查监听地址、端口占用和网络配置。";
       this.applied = previous;
+      this.appliedGateway = previousGateway;
+      this.url = previousUrl;
       try {
         await this.options.onNetwork?.(this.applied);
         await this.start();

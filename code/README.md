@@ -36,7 +36,7 @@ pnpm start
 
 分层：`shared` 为应用契约，`src/domain` 为状态规则，`src/runtime` 为会话/执行/交互用例，`src/storage` 为 SQLite 和事务事件，`src/engines` 为适配器与进程，`src/gateway` 为 HTTP/SSE/评测映射，`src/observability` 为指标，`web` 为前端，`tools` 为 Pi 交互扩展和打包脚本。办公能力通过 skill/MCP 接入。测试引擎仅位于 `test/`，不注册进生产入口。
 
-`host/` 为两种入口共用的 Node 启动与网络管理，`desktop/` 只提供 Electron 系统集成。新实例均默认受管 CLI；每个 Agent 可检测并绑定外部命令。浏览器输入终端配对码后使用相同管理页面。详见[统一运行方案](../docs/design/WEB_DESKTOP.md)。历史配置与数据库不兼容，不提供迁移。
+`host/` 为两种入口共用的 Node 启动与网络管理，`desktop/` 只提供 Electron 系统集成。新实例均默认受管 CLI；每个 Agent 可检测并绑定外部命令。浏览器直接使用相同管理页面，无需配对。Web/Desktop 均可在“系统信息 → 网关服务”配置监听地址和端口。接口文档与自动评测脚本见 [网关 API](docs/GATEWAY_API.md)，运行后可通过 `/api/docs` 阅读。详见[统一运行方案](../docs/design/WEB_DESKTOP.md)。历史配置与数据库不兼容，不提供迁移。
 
 四个内置 Agent 通过 /agents 独立管理，配置与个人 CLI 目录隔离。新增引擎实现 `EngineAdapter`，在 `src/main.ts` 注册，同步更新配置与共享契约中的引擎枚举以及前端选项。引擎原生事件在适配器边界转换为共享 Message/Interaction，再由网关 serializer 输出评测协议。
 
