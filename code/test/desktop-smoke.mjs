@@ -1,3 +1,4 @@
+import { navigate } from "./navigation.mjs";
 import assert from "node:assert/strict";
 import { cp, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -131,7 +132,9 @@ try {
   await new Promise((resolve) => listener.listen(0, "0.0.0.0", resolve));
   const gatewayPort = listener.address().port;
   await new Promise((resolve) => listener.close(resolve));
-  await page.getByRole("link", { name: "系统信息", exact: true }).click();
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(900, 800));
+  await expect(page.getByRole("button", { name: "打开导航", exact: true })).toBeVisible();
+  await navigate(page, "系统信息");
   const gatewayPanel = page.getByRole("region", { name: "网关服务", exact: true });
   await gatewayPanel.getByLabel("监听地址", { exact: true }).fill("0.0.0.0");
   await gatewayPanel.getByLabel("网关端口", { exact: true }).fill(String(gatewayPort));
@@ -217,7 +220,7 @@ try {
   assert.equal(proxyRequests.length, proxiedCount, "Loopback requests must bypass the configured proxy");
   await page.evaluate(async () => { localStorage.setItem("theme", "dark"); await window.agentBridge.savePreferences({ theme: "dark" }); });
   await expect.poll(async () => JSON.parse(await readFile(path.join(data, "desktop.json"), "utf8").catch(() => "{}")).theme).toBe("dark");
-  await page.getByRole("link", { name: "Agent 管理", exact: true }).click();
+  await navigate(page, "Agent 管理");
   await page.getByRole("link", { name: "Pi", exact: true }).click();
   await page.getByRole("tab", { name: "安装与版本", exact: true }).click();
   await expect(page.getByRole("button", { name: "安装最新版", exact: true })).toBeVisible();

@@ -1,3 +1,4 @@
+import { navigate } from "./navigation.mjs";
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { settingsSchema } from "../shared/settings.js";
@@ -194,11 +195,6 @@ async function mockTask(page: Page, detail: ReturnType<typeof designFixture>) {
   ).toBeVisible();
 }
 
-async function navigate(page: Page, name: string) {
-  if (await page.getByRole("button", { name: "打开导航" }).isVisible())
-    await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("link", { name, exact: true }).click();
-}
 async function observationTab(page: Page, name: string) {
   const select = page.getByRole("combobox", { name: "观测视图" });
   if (await select.isVisible()) {
