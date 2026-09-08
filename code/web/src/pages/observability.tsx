@@ -653,7 +653,7 @@ export function Observability() {
                       <TableCell data-label="执行">
                         {log.sessionId ? (
                           <Link
-                            to={`/tasks/${log.sessionId}?tab=diagnostics${log.runId ? `&run=${log.runId}` : ""}&return=${encodeURIComponent(`/observability?${params}`)}`}
+                            to={`/conversations/${log.sessionId}?tab=diagnostics${log.runId ? `&run=${log.runId}` : ""}&return=${encodeURIComponent(`/observability?${params}`)}`}
                             className="inline-flex items-center gap-1 text-info underline"
                           >
                             查看

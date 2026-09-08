@@ -40,7 +40,11 @@ import {
 } from "@/components/ui/tooltip"
 import { useEvents, useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
-import { ConversationHistory, Conversations, Tasks } from "@/pages/tasks"
+import {
+  ConversationHistory,
+  Conversations,
+  NewConversation,
+} from "@/pages/conversations"
 import { useTheme } from "@/components/theme-provider"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -51,7 +55,8 @@ import {
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu"
 const navigationItems = [
-  { to: "/tasks", label: "会话", icon: MessagesSquare },
+  { to: "/conversations", label: "新会话", icon: MessagesSquare },
+  { to: "/conversations/history", label: "历史会话", icon: History },
   { to: "/agents", label: "Agent 管理", icon: Bot },
   { to: "/agents/resources", label: "共享资源", icon: Plug },
   { to: "/observability", label: "运行观测", icon: Activity },
@@ -62,8 +67,10 @@ const Observability = lazy(() =>
     default: module.Observability,
   }))
 )
-const Task = lazy(() =>
-  import("@/pages/task").then((module) => ({ default: module.Task }))
+const Conversation = lazy(() =>
+  import("@/pages/conversation").then((module) => ({
+    default: module.Conversation,
+  }))
 )
 const Settings = lazy(() =>
   import("@/pages/settings").then((module) => ({ default: module.Settings }))
@@ -100,20 +107,12 @@ function WorkspaceApp() {
       return false
     }
   })
-  const [wide, setWide] = useState(
-    () => window.matchMedia("(min-width: 1024px)").matches
-  )
   useEffect(() => {
     const media = window.matchMedia("(min-width: 1024px)")
-    const update = () => {
-      setWide(media.matches)
-      setMenuOpen(false)
-    }
+    const update = () => setMenuOpen(false)
     media.addEventListener("change", update)
     return () => media.removeEventListener("change", update)
   }, [])
-  const isConversation = pathname === "/tasks" || pathname.startsWith("/tasks/")
-  const inlineHistory = wide && !sidebarCollapsed
   const closeMenu = () => setMenuOpen(false)
   const navigation = <WorkspaceNavigation close={closeMenu} />
   const connection = (
@@ -139,18 +138,18 @@ function WorkspaceApp() {
             data-desktop={Boolean(desktop)}
           >
             <aside id="desktop-navigation" className="app-sidebar">
-              <NavLink to="/tasks" className="brand" aria-label="AgentBridge">
-                <Network aria-hidden="true" />
-                <span>AgentBridge</span>
-              </NavLink>
-              {navigation}
-              {isConversation && inlineHistory && <ConversationHistory />}
-              <div className="sidebar-footer">
-                {auxiliary}
+              <div className="sidebar-brand-row">
+                <NavLink
+                  to="/conversations"
+                  className="brand"
+                  aria-label="AgentBridge"
+                >
+                  <Network aria-hidden="true" />
+                  <span>AgentBridge</span>
+                </NavLink>
                 <IconButton
                   label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-                  className="sidebar-toggle gap-3 text-muted-foreground"
-                  size={sidebarCollapsed ? "icon" : "row"}
+                  className="sidebar-toggle"
                   aria-expanded={!sidebarCollapsed}
                   aria-controls="desktop-navigation"
                   onClick={() => {
@@ -171,9 +170,10 @@ function WorkspaceApp() {
                   }}
                 >
                   {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-                  {!sidebarCollapsed && <span>收起侧边栏</span>}
                 </IconButton>
               </div>
+              {navigation}
+              <div className="sidebar-footer">{auxiliary}</div>
             </aside>
             <header className="app-header">
               <SheetTrigger
@@ -181,22 +181,18 @@ function WorkspaceApp() {
               >
                 <Menu />
               </SheetTrigger>
-              {isConversation && !inlineHistory && (
-                <SheetTrigger render={<IconButton label="历史会话" />}>
-                  <History />
-                </SheetTrigger>
-              )}
               <span className="header-brand">AgentBridge</span>
               <div className="header-context">
-                <span>工作空间</span>
-                <span aria-hidden="true">/</span>
                 <span>
-                  {[...navigationItems]
-                    .reverse()
-                    .find(
-                      ({ to }) =>
-                        pathname === to || pathname.startsWith(`${to}/`)
-                    )?.label ?? "AgentBridge"}
+                  {pathname.startsWith("/conversations/") &&
+                  pathname !== "/conversations/history"
+                    ? "会话"
+                    : ([...navigationItems]
+                        .reverse()
+                        .find(
+                          ({ to }) =>
+                            pathname === to || pathname.startsWith(`${to}/`)
+                        )?.label ?? "AgentBridge")}
                 </span>
               </div>
               {!desktop && connection}
@@ -246,21 +242,29 @@ function WorkspaceApp() {
                 }
               >
                 <Routes>
-                  <Route path="/tasks" element={<Conversations />}>
-                    <Route index element={<Tasks />} />
-                    <Route path=":id" element={<Task />} />
+                  <Route path="/conversations" element={<Conversations />}>
+                    <Route index element={<NewConversation />} />
+                    <Route path="history" element={<ConversationHistory />} />
+                    <Route path=":id" element={<Conversation />} />
                   </Route>
+                  <Route
+                    path="/tasks/*"
+                    element={<LegacyConversationRedirect />}
+                  />
                   <Route path="/observability" element={<Observability />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/agents" element={<Agents />} />
                   <Route path="/agents/:id" element={<Agents />} />
-                  <Route path="/" element={<Navigate to="/tasks" replace />} />
+                  <Route
+                    path="/"
+                    element={<Navigate to="/conversations" replace />}
+                  />
                   <Route
                     path="*"
                     element={
                       <div className="page">
                         <h1>页面不存在</h1>
-                        <NavLink to="/tasks">返回会话</NavLink>
+                        <NavLink to="/conversations">返回会话</NavLink>
                       </div>
                     }
                   />
@@ -279,20 +283,11 @@ function WorkspaceApp() {
           <SheetContent
             side="left"
             className="navigation-dialog gap-3 bg-sidebar p-3 data-[side=left]:w-[min(320px,calc(100vw-24px))]"
-            initialFocus={
-              isConversation
-                ? () =>
-                    document.querySelector<HTMLInputElement>(
-                      '.navigation-dialog input[aria-label="搜索会话"]'
-                    )
-                : undefined
-            }
           >
             <SheetHeader className="px-3 pt-1 pr-10 pb-2">
               <SheetTitle>AgentBridge</SheetTitle>
             </SheetHeader>
             {navigation}
-            {isConversation && <ConversationHistory close={closeMenu} />}
             <div className="sidebar-footer">{auxiliary}</div>
           </SheetContent>
         </Sheet>
@@ -323,12 +318,14 @@ function WorkspaceNavigation({
               render={
                 <NavLink
                   to={to}
+                  end={to === "/conversations"}
                   className={({ isActive }) =>
                     isActive &&
                     !(to === "/agents" && pathname === "/agents/resources")
                       ? "active"
                       : ""
                   }
+                  data-section-start={to === "/agents" || undefined}
                   aria-label={label}
                   onClick={close}
                 />
@@ -342,4 +339,13 @@ function WorkspaceNavigation({
         ))}
     </nav>
   )
+}
+
+function LegacyConversationRedirect() {
+  const { pathname, search, hash } = useLocation()
+  const destination =
+    /^\/tasks\/?$/.test(pathname) && /[?&](q|status|cursor)=/.test(search)
+      ? "/conversations/history"
+      : pathname.replace(/^\/tasks(?=\/|$)/, "/conversations")
+  return <Navigate to={{ pathname: destination, search, hash }} replace />
 }

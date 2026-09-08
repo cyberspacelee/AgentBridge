@@ -6,7 +6,13 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react"
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
+import {
+  Link,
+  useNavigate,
+  useLocation,
+  useParams,
+  useSearchParams,
+} from "react-router-dom"
 import { toast } from "sonner"
 import {
   ArrowLeft,
@@ -105,7 +111,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-export function Task() {
+export function Conversation() {
   const { id = "" } = useParams()
   const requestSignal = useRequestSignal()
   const { revision, runtime } = useGateway()
@@ -132,6 +138,14 @@ export function Task() {
     () => new Map<string, { top: number; follow: boolean }>()
   )
   const navigate = useNavigate()
+  const location = useLocation()
+  const returnPath = params.get("return")
+  const backTo =
+    returnPath === "/conversations/history" ||
+    returnPath?.startsWith("/conversations/history?") ||
+    returnPath?.startsWith("/observability?")
+      ? returnPath
+      : "/conversations/history"
   const detail = query.data?.detail
   const selected =
     detail?.runs.find((r) => r.id === params.get("run")) ?? detail?.runs.at(-1)
@@ -170,7 +184,7 @@ export function Task() {
       signal.throwIfAborted()
       setAction(null)
       toast.success(action === "delete" ? "任务已删除" : "停止请求已提交")
-      if (action === "delete") navigate("/tasks")
+      if (action === "delete") navigate(backTo, { state: location.state })
       else query.reload()
     } catch (e) {
       if (!signal.aborted) setError(e as Error)
@@ -184,18 +198,11 @@ export function Task() {
       data-focused={focused && tab === "execution"}
     >
       <div className="task-heading">
-        <Link
-          to={
-            params.get("return")?.startsWith("/observability?")
-              ? params.get("return")!
-              : "/tasks"
-          }
-          className="back-link"
-        >
+        <Link to={backTo} state={location.state} className="back-link">
           <ArrowLeft className="size-3.5" />
           {params.get("return")?.startsWith("/observability?")
             ? "返回网关观测"
-            : "会话"}
+            : "历史会话"}
         </Link>
         {detail && (
           <div className="page-heading">

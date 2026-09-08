@@ -189,7 +189,7 @@ async function mockTask(page: Page, detail: ReturnType<typeof designFixture>) {
   await page.route("**/api/tasks/design-fixture", (route) =>
     route.fulfill({ json: { detail } }),
   );
-  await page.goto("/tasks/design-fixture");
+  await page.goto("/conversations/design-fixture");
   await expect(
     page.getByRole("heading", { name: detail.task.title }),
   ).toBeVisible();
@@ -268,8 +268,8 @@ async function captureQa(page: Page, name: string) {
 test("sidebar toggles, persists, centers icons and supports mobile navigation", async ({
   page,
 }, info) => {
-  await page.goto("/tasks");
-  await expect(page.getByRole("heading", { name: "新会话" })).toBeVisible();
+  await page.goto("/conversations");
+  await expect(page.getByRole("heading", { name: "开始一段新的工作" })).toBeVisible();
   if (info.project.name === "desktop") {
     const shell = page.locator(".app-shell");
     await page.getByRole("button", { name: "收起侧边栏" }).click();
@@ -331,15 +331,15 @@ test("task list search, history, filters, pagination, empty state and create for
           : [
               {
                 ...task,
-                title: params.has("cursor") ? "第二页任务" : task.title,
+                title: params.get("cursor") === "third" ? "第三页任务" : params.has("cursor") ? "第二页任务" : task.title,
               },
             ],
-        nextCursor: empty || params.has("cursor") ? null : "next",
+        nextCursor: empty || params.get("cursor") === "third" ? null : params.has("cursor") ? "third" : "next",
       },
     });
   });
-  await page.goto("/tasks");
-  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
+  await page.goto("/conversations");
+  await navigate(page, "历史会话");
   const search = page.getByRole("textbox", { name: "搜索会话" });
   await search.fill("不存在");
   await search.press("Enter");
@@ -365,11 +365,15 @@ test("task list search, history, filters, pagination, empty state and create for
   await expect(
     page.getByRole("link", { name: "第二页任务", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "返回第一页" }).click();
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page.getByRole("link", { name: "第三页任务", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "上一页" }).click();
+  await expect(page.getByRole("link", { name: "第二页任务", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "上一页" }).click();
   await page.getByRole("combobox", { name: "会话状态" }).click();
   await page.getByRole("option", { name: "失败", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "会话列表", exact: true }).getByText("没有符合条件的会话")).toBeVisible();
-  if (info.project.name === "mobile") await page.keyboard.press("Escape");
+  await navigate(page, "新会话");
   await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
   const dialog = page.getByRole("form", { name: "新会话" });
   await captureQa(page, `create-${info.project.name}`);
@@ -390,45 +394,54 @@ test("task list search, history, filters, pagination, empty state and create for
   await expect(dialog.getByLabel("消息", { exact: true })).toHaveValue("检查");
 });
 
-test("conversation history scrolls independently and composer stays reachable", async ({ page }, info) => {
-  const task = designFixture().task;
+test("history has usable space on short windows and restores scroll after details", async ({ page }, info) => {
+  await page.setViewportSize(info.project.name === "mobile" ? { width: 390, height: 640 } : { width: 1280, height: 560 });
+  const detail = designFixture();
+  await page.route("**/api/tasks/design-fixture", route => route.fulfill({ json: { detail } }));
   await page.route("**/api/tasks?*", route => route.fulfill({ json: {
-    items: Array.from({ length: 50 }, (_, i) => ({ ...task, id: `task-${i}`, title: `会话 ${i}` })), nextCursor: "next",
+    items: Array.from({ length: 20 }, (_, i) => ({ ...detail.task, id: i === 19 ? detail.task.id : `task-${i}`, title: `历史会话 ${i} · 检查网关运行情况和修复长标题布局` })), nextCursor: "next",
   }}));
-  await page.goto("/tasks");
-  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
-  const history = page.locator(".conversation-history:visible");
-  await expect(history.getByRole("link", { name: "会话 49", exact: true })).toBeAttached();
+  await page.goto("/conversations/history?q=网关&status=completed");
+  const history = page.locator(".conversation-history");
   const viewport = history.locator('[data-slot="scroll-area-viewport"]');
+  await expect(history.locator(".conversation-link")).toHaveCount(20);
+  expect((await viewport.boundingBox())!.height).toBeGreaterThanOrEqual(160);
   await viewport.evaluate(element => element.scrollTop = element.scrollHeight);
-  await expect(history.getByRole("button", { name: "下一页", exact: true })).toBeInViewport();
-  if (info.project.name === "mobile") {
-    await page.keyboard.press("Escape");
-    await expect(history).not.toBeVisible();
-  }
-  await expect(page.getByLabel("消息", { exact: true })).toBeInViewport();
+  const top = await viewport.evaluate(element => element.scrollTop);
+  await history.locator(".conversation-link").last().click();
+  await expect(page.getByRole("heading", { name: detail.task.title, exact: true })).toBeVisible();
+  await page.locator(".back-link").click();
+  await expect(page).toHaveURL(/conversations\/history\?q=.*status=completed/);
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(top);
+  await expect(page.getByRole("textbox", { name: "搜索会话" })).toHaveValue("网关");
+  await expect(page.locator(".app-sidebar .conversation-link")).toHaveCount(0);
   await captureQa(page, `conversation-history-${info.project.name}`);
 });
 
-test("history groups local days and preserves filters when opening a conversation", async ({ page }, info) => {
-  const detail = designFixture();
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const earlier = new Date(today);
-  earlier.setDate(today.getDate() - 3);
-  await mockTask(page, detail);
-  await page.route("**/api/tasks?*", route => route.fulfill({ json: {
-    items: [today, yesterday, earlier].map((day, i) => ({ ...detail.task, id: i ? `older-${i}` : detail.task.id, title: `日期分组 ${i}`, updatedAt: day.toISOString() })), nextCursor: null,
-  }}));
-  await page.goto("/tasks?q=日期&status=completed&cursor=next");
-  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
-  const history = page.locator(".conversation-history:visible");
-  await expect(history.locator(".history-day")).toHaveText(["今天", "昨天", "更早"]);
-  await history.getByRole("link", { name: "日期分组 0", exact: true }).click();
-  expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({ q: "日期", status: "completed", cursor: "next" });
-  if (info.project.name === "mobile") await expect(page.getByRole("dialog")).not.toBeVisible();
-  await expect(page.getByRole("heading", { name: detail.task.title, exact: true })).toBeVisible();
+test("legacy task URLs redirect with filters and detail context intact", async ({ page }) => {
+  await page.goto("/tasks?q=日期&status=completed");
+  await expect(page).toHaveURL(/\/conversations\/history\?q=.*status=completed/);
+  await page.route("**/api/tasks/design-fixture", route => route.fulfill({ json: { detail: designFixture() } }));
+  await page.goto("/tasks/design-fixture?tab=diagnostics#detail");
+  await expect(page).toHaveURL(/\/conversations\/design-fixture\?tab=diagnostics#detail$/);
+  await expect(page.getByRole("heading", { name: designFixture().task.title })).toBeVisible();
+});
+
+test("first-run setup has a coherent heading and separate action", async ({ page }, info) => {
+  await page.route("**/api/runtime", async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    for (const engine of data.engines) { engine.enabled = false; engine.health.status = "disabled"; }
+    await route.fulfill({ json: data });
+  });
+  await page.goto("/conversations");
+  await expect(page.getByRole("heading", { name: "连接你的第一个 Agent" })).toBeVisible();
+  const action = page.getByRole("link", { name: "配置 Agent", exact: true });
+  await expect(action).toBeInViewport();
+  await expect(page.getByRole("form", { name: "新会话" })).toHaveCount(0);
+  await captureQa(page, `conversation-onboarding-${info.project.name}`);
+  await action.click();
+  await expect(page).toHaveURL(/\/agents$/);
 });
 
 test("empty task and observation lists fill the remaining workspace", async ({
@@ -494,7 +507,7 @@ test("task creation selects engine, provider and model with loading and failure 
   request,
 }, info) => {
   const { directory } = await (await request.get("/__test/directory")).json();
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
   const dialog = page.getByRole("form", { name: "新会话" });
   const choose = async (label: string, option: string) => {
@@ -547,7 +560,7 @@ test("task creation selects engine, provider and model with loading and failure 
     providerID: "opencode-secondary",
     modelID: "quality",
   });
-  await expect(page).toHaveURL(/\/tasks\/[a-f0-9-]+/);
+  await expect(page).toHaveURL(/\/conversations\/[a-f0-9-]+/);
   const id = new URL(page.url()).pathname.split("/").at(-1)!;
   await expect
     .poll(
@@ -843,7 +856,7 @@ test("every detail and observation subview has responsive screenshot evidence", 
     }),
   );
   await mockTask(page, detail);
-  await page.goto("/tasks/design-fixture?tab=invalid");
+  await page.goto("/conversations/design-fixture?tab=invalid");
   await expect(page.getByRole("tab", { name: "对话" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -857,7 +870,7 @@ test("every detail and observation subview has responsive screenshot evidence", 
         ["interactions", "交互"],
         ["diagnostics", "诊断"],
       ]) {
-        await page.goto("/tasks/design-fixture");
+        await page.goto("/conversations/design-fixture");
         await page.getByRole("tab", { name: tab, exact: true }).click();
         await expect(
           page.getByRole("tab", { name: tab, exact: true }),
@@ -908,7 +921,7 @@ test("every detail and observation subview has responsive screenshot evidence", 
   await expect(page.getByRole("heading", { name: "页面不存在" })).toBeVisible();
   await captureQa(page, "not-found");
   await page.getByRole("link", { name: "返回会话" }).click();
-  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page).toHaveURL(/\/conversations$/);
 });
 
 test("LAN HTTP compatibility supports submission and clipboard fallback", async ({
@@ -922,7 +935,7 @@ test("LAN HTTP compatibility supports submission and clipboard fallback", async 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const { directory } = await (await request.get("/__test/directory")).json();
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
   const dialog = page.getByRole("form", { name: "新会话" });
   await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
@@ -937,7 +950,7 @@ test("LAN HTTP compatibility supports submission and clipboard fallback", async 
   expect((await submitted).postDataJSON().submissionId).toMatch(
     /^[0-9a-f]{32}$/,
   );
-  await expect(page).toHaveURL(/\/tasks\/[\w-]+/);
+  await expect(page).toHaveURL(/\/conversations\/[\w-]+/);
   await expect(
     page.getByText("销售分析已完成，结果已写入 report.md。"),
   ).toBeVisible();
@@ -961,7 +974,7 @@ test("LAN HTTP compatibility supports submission and clipboard fallback", async 
   ).toBeVisible();
   await page.getByRole("button", { name: "删除任务", exact: true }).click();
   await page.getByRole("button", { name: "确认删除", exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page).toHaveURL(/\/conversations\/history$/);
   const api404 = await request.get("/api/not-a-page", {
     headers: { accept: "text/html" },
   });
@@ -978,7 +991,7 @@ test("task assignment, approval, output, observations, cancellation and deletion
   await mkdir("artifacts/ui", { recursive: true });
   page.on("pageerror", (error) => errors.push(error.message));
   const { directory } = await (await request.get("/__test/directory")).json();
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeEnabled();
@@ -993,7 +1006,7 @@ test("task assignment, approval, output, observations, cancellation and deletion
     .fill("汇总销售数据并生成报告");
   await dialog.getByRole("switch", { name: "人工审批权限" }).check();
   await dialog.getByRole("button", { name: "发送消息", exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/[\w-]+/);
+  await expect(page).toHaveURL(/\/conversations\/[\w-]+/);
   await expect(page.getByRole("region", { name: "待处理交互" })).toBeVisible();
   await page.screenshot({
     path: `artifacts/ui/approval-${info.project.name}.png`,
@@ -1045,8 +1058,8 @@ test("task assignment, approval, output, observations, cancellation and deletion
   await observationTab(page, "引擎与资源");
   await expect(page.getByText("网关 RSS", { exact: true })).toBeVisible();
   await observationTab(page, "异常与调用链");
-  await navigate(page, "会话");
-  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
+  await navigate(page, "新会话");
+  await navigate(page, "历史会话");
   await page
     .getByRole("link", { name: `销售分析-${info.project.name}`, exact: true })
     .click();
@@ -1064,7 +1077,7 @@ test("task assignment, approval, output, observations, cancellation and deletion
   await expect(page.getByRole("alertdialog")).not.toBeVisible();
   await page.getByRole("button", { name: "删除任务", exact: true }).click();
   await page.getByRole("button", { name: "确认删除" }).click();
-  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page).toHaveURL(/\/conversations\/history$/);
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > innerWidth,
   );
@@ -1386,8 +1399,8 @@ test("design screenshots across viewports and themes", async ({
     for (const width of [320, 375, 414, 768, 1024, 1440, 1920]) {
       await page.setViewportSize({ width, height: width < 768 ? 844 : 1000 });
       for (const [name, url] of [
-        ["execution", "/tasks/design-fixture"],
-        ["tasks", "/tasks"],
+        ["execution", "/conversations/design-fixture"],
+        ["tasks", "/conversations"],
         ["observability", "/observability"],
       ]) {
         await page.goto(url);
@@ -1526,8 +1539,8 @@ test("task updates keep the focused row in place", async ({ page }, info) => {
   await page.route(/\/api\/tasks(?:\?.*)?$/, (route) =>
     route.fulfill({ json: { items, nextCursor: null } }),
   );
-  await page.goto("/tasks");
-  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
+  await page.goto("/conversations");
+  await navigate(page, "历史会话");
   await page.getByRole("link", { name: first.title, exact: true }).focus();
   first.status = "failed";
   items = [second, first];
@@ -1535,9 +1548,9 @@ test("task updates keep the focused row in place", async ({ page }, info) => {
   await expect(
     page.locator(".conversation-history:visible .conversation-link").first().locator(".status"),
   ).toHaveText("失败");
-  await expect(page.locator(".conversation-history:visible .conversation-link > span:first-child").first()).toHaveText(first.title);
+  await expect(page.locator(".conversation-history:visible .conversation-link .history-title").first()).toHaveText(first.title);
   await page.getByRole("textbox", { name: "搜索会话", exact: true }).focus();
-  await expect(page.locator(".conversation-history:visible .conversation-link > span:first-child").first()).toHaveText(second.title);
+  await expect(page.locator(".conversation-history:visible .conversation-link .history-title").first()).toHaveText(second.title);
 });
 
 test("danger confirmation cancels, locks during submission and preserves failures", async ({
@@ -1591,7 +1604,7 @@ test("danger confirmation cancels, locks during submission and preserves failure
   await confirmation
     .getByRole("button", { name: "确认删除", exact: true })
     .click();
-  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page).toHaveURL(/\/conversations\/history$/);
   expect(requests).toBe(2);
   await expect(page.locator("[data-sonner-toast]")).toContainText("任务已删除");
 });
@@ -1709,7 +1722,7 @@ test("first configuration reaches activation and reports an asynchronous failure
     Object.assign(agents.find((a: { id: string }) => a.id === "pi"), { enabled: true, operation: "enable" });
     return route.fulfill({ status: 202, json: agents[0] });
   });
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   await page.getByRole("link", { name: "配置 Agent", exact: true }).click();
   await page.getByRole("link", { name: "Pi", exact: true }).click();
   await page.getByRole("button", { name: "添加模型连接", exact: true }).click();
@@ -1737,7 +1750,7 @@ test("first configuration reaches activation and reports an asynchronous failure
 test("model search filters, handles no matches and selects with keyboard", async ({
   page,
 }) => {
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
   const provider = page.getByRole("combobox", {
     name: "模型供应商",
@@ -1835,9 +1848,9 @@ test("reasoning folds independently of the answer", async ({ page }) => {
 });
 
 test("shared field focus and heading scale remain consistent after selection", async ({ page }, info) => {
-  await page.goto("/tasks");
-  const heading = page.getByRole("heading", { name: "新会话", exact: true });
-  await expect(heading).toHaveCSS("font-size", info.project.name === "mobile" ? "20px" : "24px");
+  await page.goto("/conversations");
+  const heading = page.getByRole("heading", { name: "开始一段新的工作", exact: true });
+  await expect(heading).toHaveCSS("font-size", info.project.name === "mobile" ? "24px" : "30px");
   const agent = page.getByRole("combobox", { name: "Agent", exact: true });
   const before = await agent.boundingBox();
   const border = await agent.evaluate(el => getComputedStyle(el).borderColor);

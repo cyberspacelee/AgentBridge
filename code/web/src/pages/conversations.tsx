@@ -1,7 +1,6 @@
-import { Fragment, useState, type FormEvent } from "react"
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react"
 import {
   Link,
-  NavLink,
   Outlet,
   useLocation,
   useNavigate,
@@ -10,7 +9,7 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
-  History,
+  Bot,
   Check,
   ChevronDown,
   Plus,
@@ -24,18 +23,15 @@ import { createTaskSchema } from "../../../shared/contracts"
 import { useGateway } from "@/lib/gateway"
 import { agentNames } from "@/lib/agent-draft"
 import { submit, useQuery, useRequestSignal } from "@/lib/api"
-import { cn } from "@/lib/utils"
 import { desktop } from "@/lib/desktop"
 import { DirectoryInput } from "@/components/directory-input"
 import {
   Blank,
   Choice,
   Failure,
-  IconButton,
   labels,
   Status,
   Notice,
-  date,
 } from "@/components/workspace-ui"
 import {
   InputGroup,
@@ -49,11 +45,6 @@ import {
   PaginationContent,
   PaginationItem,
 } from "@/components/ui/pagination"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -69,6 +60,13 @@ import {
   CollapsibleContent,
 } from "@/components/ui/collapsible"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyDescription,
+  EmptyContent,
+} from "@/components/ui/empty"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -80,113 +78,142 @@ export function Conversations() {
   )
 }
 
-function historyDay(value: string) {
-  const day = new Date(value).toDateString()
-  const today = new Date()
-  if (day === today.toDateString()) return "今天"
-  today.setDate(today.getDate() - 1)
-  return day === today.toDateString() ? "昨天" : "更早"
-}
+const historyPositions = new Map<string, number>()
 
-export function ConversationHistory({ close }: { close?: () => void }) {
+export function ConversationHistory() {
   const { revision } = useGateway()
+  const location = useLocation()
   const [params, setParams] = useSearchParams()
-  const { pathname } = useLocation()
+  const viewport = useRef<HTMLDivElement>(null)
   const queryParams = new URLSearchParams()
   for (const key of ["q", "status", "cursor"]) {
     const value = params.get(key)
     if (value) queryParams.set(key, value)
   }
+  const listKey = queryParams.toString()
   const query = useQuery<Page<TaskSummary>>(
     `/api/tasks?${queryParams}`,
     revision
   )
-  const [pinned, setPinned] = useState<{ key: string; items: TaskSummary[] }>()
-  const listKey = queryParams.toString()
+  const [pinned, setPinned] = useState<{ key: string; ids: string[] }>()
+  const current = new Map(query.data?.items.map((item) => [item.id, item]))
   const items =
     pinned?.key === listKey
-      ? pinned.items.map(
-          (item) =>
-            query.data?.items.find((next) => next.id === item.id) ?? item
-        )
+      ? pinned.ids.flatMap((id) => current.get(id) ?? [])
       : query.data?.items
+  const cursors: string[] = location.state?.cursors ?? []
   const searchQuery = params.get("q") ?? ""
   const [draft, setDraft] = useState({ query: searchQuery, text: searchQuery })
   if (draft.query !== searchQuery)
     setDraft({ query: searchQuery, text: searchQuery })
-  const search = draft.query === searchQuery ? draft.text : searchQuery
-  const update = (key: string, value: string) =>
-    setParams((previous) => {
-      const next = new URLSearchParams(previous)
-      next.delete("cursor")
-      if (value) next.set(key, value)
-      else next.delete(key)
-      return next
-    })
+  useLayoutEffect(() => {
+    if (!query.loading && viewport.current)
+      viewport.current.scrollTop = historyPositions.get(listKey) ?? 0
+  }, [listKey, query.loading])
+  const update = (key: string, value: string, previous: string[] = []) => {
+    const next = new URLSearchParams(params)
+    next.delete("cursor")
+    if (value) next.set(key, value)
+    else next.delete(key)
+    historyPositions.delete(next.toString())
+    setParams(next, { state: { cursors: previous } })
+  }
+  const filtered = Boolean(searchQuery || params.get("status"))
   return (
-    <div className="conversation-history">
-      <div className="history-heading">
-        <h2>历史会话</h2>
-        <History aria-hidden="true" />
+    <section
+      className="page conversation-history"
+      aria-labelledby="history-title"
+    >
+      <div className="page-heading">
+        <div>
+          <h1 id="history-title">历史会话</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            查找之前的工作，继续尚未完成的会话。
+          </p>
+        </div>
+        <Button render={<Link to="/conversations" />}>
+          <Plus data-icon="inline-start" />
+          新会话
+        </Button>
       </div>
-      <Button variant="secondary" render={<Link to="/tasks" />} onClick={close}>
-        <Plus data-icon="inline-start" />
-        新会话
-      </Button>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault()
-          update("q", search)
-        }}
-      >
-        <InputGroup>
-          <InputGroupInput
-            aria-label="搜索会话"
-            placeholder="搜索会话"
-            value={search}
-            onChange={(event) =>
-              setDraft({ query: searchQuery, text: event.target.value })
-            }
-          />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton type="submit" size="icon-sm" aria-label="搜索">
-              <Search />
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
-      </form>
-      <Choice
-        label="会话状态"
-        value={params.get("status") ?? ""}
-        options={[
-          { value: "", label: "全部会话" },
-          ...[
-            "waiting_input",
-            "running",
-            "queued",
-            "completed",
-            "failed",
-            "timed_out",
-            "cancelled",
-            "unavailable",
-          ].map((value) => ({ value, label: labels[value] })),
-        ]}
-        onChange={(value) => update("status", value)}
-      />
+      <div className="history-toolbar">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            update("q", draft.text)
+          }}
+        >
+          <InputGroup>
+            <InputGroupInput
+              aria-label="搜索会话"
+              placeholder="搜索会话名称或 ID"
+              value={draft.text}
+              onChange={(event) =>
+                setDraft({ query: searchQuery, text: event.target.value })
+              }
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton type="submit" size="icon-sm" aria-label="搜索">
+                <Search />
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+        </form>
+        <Choice
+          label="会话状态"
+          value={params.get("status") ?? ""}
+          options={[
+            { value: "", label: "全部状态" },
+            ...[
+              "waiting_input",
+              "running",
+              "queued",
+              "completed",
+              "failed",
+              "timed_out",
+              "cancelled",
+              "unavailable",
+            ].map((value) => ({ value, label: labels[value] })),
+          ]}
+          onChange={(value) => update("status", value)}
+        />
+        {filtered && (
+          <Button
+            variant="ghost"
+            onClick={() => setParams({}, { state: { cursors: [] } })}
+          >
+            清除筛选
+          </Button>
+        )}
+      </div>
       <Failure error={query.error} />
       {query.error && (
         <Button variant="outline" onClick={query.reload}>
           重新加载会话
         </Button>
       )}
+      <div className="history-columns" aria-hidden="true">
+        <span>会话 / 工作目录</span>
+        <span>Agent</span>
+        <span>状态</span>
+        <span>更新时间</span>
+      </div>
       <ScrollArea
-        className="min-h-0 flex-1"
-        viewportProps={{ "aria-label": "会话列表" }}
+        className="history-scroll"
+        viewportProps={{
+          ref: viewport,
+          "aria-label": "会话列表",
+          onScroll: (event) =>
+            historyPositions.set(listKey, event.currentTarget.scrollTop),
+        }}
       >
         <nav
-          className="flex flex-col gap-1"
           aria-label="会话列表"
-          onPointerEnter={() => items && setPinned({ key: listKey, items })}
+          aria-busy={query.loading}
+          onPointerEnter={() =>
+            items &&
+            setPinned({ key: listKey, ids: items.map((item) => item.id) })
+          }
           onPointerLeave={(event) => {
             if (!event.currentTarget.contains(document.activeElement))
               setPinned(undefined)
@@ -194,7 +221,9 @@ export function ConversationHistory({ close }: { close?: () => void }) {
           onFocusCapture={() =>
             items &&
             setPinned((previous) =>
-              previous?.key === listKey ? previous : { key: listKey, items }
+              previous?.key === listKey
+                ? previous
+                : { key: listKey, ids: items.map((item) => item.id) }
             )
           }
           onBlur={(event) => {
@@ -208,95 +237,122 @@ export function ConversationHistory({ close }: { close?: () => void }) {
           {query.loading ? (
             <Skeleton className="h-40" />
           ) : (
-            items?.map((task, index) => (
-              <Fragment key={task.id}>
-                {(index === 0 ||
-                  historyDay(items[index - 1].updatedAt) !==
-                    historyDay(task.updatedAt)) && (
-                  <h3 className="history-day">{historyDay(task.updatedAt)}</h3>
-                )}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <NavLink
-                        aria-label={task.title}
-                        to={`/tasks/${task.id}${listKey ? `?${listKey}` : ""}`}
-                        onClick={close}
-                        className={cn(
-                          "conversation-link",
-                          pathname === `/tasks/${task.id}` && "active"
-                        )}
-                      />
-                    }
-                  >
-                    <span className="history-title">{task.title}</span>
-                    <span className="history-meta">
-                      <span className="truncate">
-                        {agentNames[task.engineId] ?? task.engineId}
-                      </span>
-                      <time dateTime={task.updatedAt}>
-                        {new Date(task.updatedAt).toLocaleDateString("zh-CN", {
-                          month: "2-digit",
-                          day: "2-digit",
-                        })}
-                      </time>
-                      {task.status === "completed" ? (
-                        <span className="history-completed">
-                          <Check aria-hidden="true" />
-                          已完成
-                        </span>
-                      ) : (
-                        <Status state={task.status} />
-                      )}
+            items?.map((task) => (
+              <Link
+                key={task.id}
+                aria-label={task.title}
+                className="conversation-link"
+                to={`/conversations/${task.id}?return=${encodeURIComponent(`/conversations/history${listKey ? `?${listKey}` : ""}`)}`}
+                state={{ cursors }}
+              >
+                <span className="history-summary">
+                  <span className="history-title">{task.title}</span>
+                  <span className="history-directory" title={task.directory}>
+                    {task.directory}
+                  </span>
+                </span>
+                <span className="history-agent">
+                  {agentNames[task.engineId] ?? task.engineId}
+                </span>
+                <span className="history-status">
+                  {task.status === "completed" ? (
+                    <span className="history-completed">
+                      <Check aria-hidden="true" />
+                      已完成
                     </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" className="max-w-72 break-words">
-                    {task.title}
-                    <br />
-                    更新于 {date(task.updatedAt)}
-                  </TooltipContent>
-                </Tooltip>
-              </Fragment>
+                  ) : (
+                    <Status state={task.status} />
+                  )}
+                </span>
+                <time className="history-time" dateTime={task.updatedAt}>
+                  {new Date(task.updatedAt).toLocaleString("zh-CN", {
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </time>
+              </Link>
             ))
           )}
           {!query.loading && !query.error && !query.data?.items.length && (
-            <Blank>
-              {params.get("q") || params.get("status")
-                ? "没有符合条件的会话"
-                : "暂无会话"}
+            <Blank
+              action={
+                filtered ? (
+                  <Button variant="outline" onClick={() => setParams({})}>
+                    清除筛选
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    render={<Link to="/conversations" />}
+                  >
+                    开始新会话
+                  </Button>
+                )
+              }
+            >
+              {filtered ? "没有符合条件的会话" : "暂无会话"}
             </Blank>
           )}
         </nav>
       </ScrollArea>
-      {(params.get("cursor") || query.data?.nextCursor) && (
-        <Pagination aria-label="会话分页">
+      <div className="history-pagination">
+        <span className="text-sm text-muted-foreground" role="status">
+          {query.loading
+            ? "正在加载"
+            : `本页 ${query.data?.items.length ?? 0} 条 · 按创建时间排序`}
+        </span>
+        <Pagination aria-label="会话分页" className="mx-0 w-auto">
           <PaginationContent>
+            {params.get("cursor") && !cursors.length ? (
+              <PaginationItem>
+                <Button variant="outline" onClick={() => update("cursor", "")}>
+                  返回第一页
+                </Button>
+              </PaginationItem>
+            ) : (
+              <PaginationItem>
+                <Button
+                  variant="outline"
+                  disabled={!cursors.length || query.loading}
+                  onClick={() =>
+                    update("cursor", cursors.at(-1) ?? "", cursors.slice(0, -1))
+                  }
+                >
+                  <ArrowLeft data-icon="inline-start" />
+                  上一页
+                </Button>
+              </PaginationItem>
+            )}
             <PaginationItem>
-              <IconButton
-                label="返回第一页"
-                disabled={!params.get("cursor")}
-                onClick={() => update("cursor", "")}
+              <Button
+                variant="outline"
+                disabled={
+                  !query.data?.nextCursor ||
+                  query.loading ||
+                  Boolean(query.error)
+                }
+                onClick={() =>
+                  update("cursor", query.data?.nextCursor ?? "", [
+                    ...cursors,
+                    params.get("cursor") ?? "",
+                  ])
+                }
               >
-                <ArrowLeft />
-              </IconButton>
-            </PaginationItem>
-            <PaginationItem>
-              <IconButton
-                label="下一页"
-                disabled={!query.data?.nextCursor}
-                onClick={() => update("cursor", query.data?.nextCursor ?? "")}
-              >
-                <ArrowRight />
-              </IconButton>
+                下一页
+                <ArrowRight data-icon="inline-end" />
+              </Button>
             </PaginationItem>
           </PaginationContent>
         </Pagination>
-      )}
-    </div>
+      </div>
+    </section>
   )
 }
 
-export function Tasks() {
+export function NewConversation() {
   const { runtime } = useGateway()
   const navigate = useNavigate()
   const ready = runtime?.engines.some(
@@ -305,28 +361,56 @@ export function Tasks() {
   return (
     <div className="new-conversation">
       <div className="new-conversation-content">
-        <h1>新会话</h1>
-        <p className="mt-2 mb-6 text-sm text-muted-foreground">
-          描述要完成的工作，让 Agent 从这里开始。
-        </p>
         {!runtime ? (
-          <Skeleton className="h-64" />
+          <>
+            <h1>新会话</h1>
+            <Skeleton className="mt-6 h-64" />
+          </>
         ) : ready ? (
-          <CreateTask onAccepted={(id) => navigate(`/tasks/${id}`)} />
+          <>
+            <header className="conversation-welcome">
+              <h1>开始一段新的工作</h1>
+              <p>描述你的目标，让 Agent 帮你推进。</p>
+            </header>
+            <CreateConversation
+              onAccepted={(id) => navigate(`/conversations/${id}`)}
+            />
+          </>
         ) : (
-          <Blank>
-            暂无可用 Agent
-            <Button className="mt-4" render={<Link to="/agents" />}>
-              配置 Agent
-            </Button>
-          </Blank>
+          <Empty className="conversation-onboarding">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Bot aria-hidden="true" />
+              </EmptyMedia>
+              <h1>连接你的第一个 Agent</h1>
+              <EmptyDescription>
+                配置并启用一个 Agent，即可开始对话、处理工作并查看执行结果。
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button render={<Link to="/agents" />}>
+                配置 Agent
+                <ArrowRight data-icon="inline-end" />
+              </Button>
+              <Button
+                variant="link"
+                render={<Link to="/conversations/history" />}
+              >
+                查看历史会话
+              </Button>
+            </EmptyContent>
+          </Empty>
         )}
       </div>
     </div>
   )
 }
 
-function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
+function CreateConversation({
+  onAccepted,
+}: {
+  onAccepted: (id: string) => void
+}) {
   const requestSignal = useRequestSignal()
   const { runtime } = useGateway()
   const [busy, setBusy] = useState(false)
@@ -416,21 +500,43 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
     }
   }
   return (
-    <form onSubmit={send} className="task-create-form" aria-label="新会话">
+    <form
+      onSubmit={send}
+      className="conversation-create-form"
+      aria-label="新会话"
+    >
       <FieldSet disabled={busy}>
         <FieldGroup>
           <Field data-invalid={!!invalid.parts}>
-            <FieldLabel htmlFor="prompt">消息</FieldLabel>
-            <InputGroup>
+            <FieldLabel htmlFor="prompt" className="sr-only">
+              消息
+            </FieldLabel>
+            <InputGroup className="conversation-composer">
               <InputGroupTextarea
                 id="prompt"
                 aria-invalid={!!invalid.parts}
                 aria-describedby={invalid.parts ? "prompt-error" : undefined}
                 name="prompt"
                 required
+                className="max-h-72 min-h-36 px-5 pt-5"
                 rows={4}
                 placeholder="你想完成什么？"
               />
+              <InputGroupAddon
+                align="block-end"
+                className="flex-wrap justify-between gap-3 px-4 pb-4"
+              >
+                <span
+                  className="min-w-0 flex-1 truncate text-xs"
+                  title={`${provider} / ${model}`}
+                >
+                  {model ? `${provider} / ${model}` : "选择 Agent 后开始"}
+                </span>
+                <Button type="submit" disabled={busy || !canSubmit}>
+                  <Send data-icon="inline-start" />
+                  {busy ? "正在提交" : "发送消息"}
+                </Button>
+              </InputGroupAddon>
             </InputGroup>
             <FieldError id="prompt-error">{invalid.parts}</FieldError>
           </Field>
@@ -613,12 +719,6 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             </Button>
           )}
           <Failure error={error} />
-          <div className="conversation-submit">
-            <Button type="submit" disabled={busy || !canSubmit}>
-              <Send data-icon="inline-start" />
-              {busy ? "正在提交" : "发送消息"}
-            </Button>
-          </div>
         </FieldGroup>
       </FieldSet>
     </form>

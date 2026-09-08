@@ -5,7 +5,7 @@ export function isWorkspaceUrl(value, origin) {
       url.origin === origin &&
       !url.username &&
       !url.password &&
-      /^\/(?:tasks|agents|observability|settings)(?:\/|$)/.test(url.pathname)
+      /^\/(?:conversations|tasks|agents|observability|settings)(?:\/|$)/.test(url.pathname)
     );
   } catch {
     return false;

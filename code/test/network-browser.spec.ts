@@ -178,6 +178,18 @@ test("system settings group fields in cards and retain drafts when optional sect
     await page.setViewportSize({ width, height: 1000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.locator("#main-content").evaluate((element) => element.scrollTo(0, 0));
+    const bar = page.locator(".config-action-bar");
+    const fields = page.getByRole("region", { name: "网络与代理", exact: true }).locator("form > fieldset");
+    expect((await bar.boundingBox())!.y).toBeGreaterThanOrEqual((await fields.boundingBox())!.y + (await fields.boundingBox())!.height);
+    await bar.scrollIntoViewIfNeeded();
+    const frame = (await bar.boundingBox())!;
+    for (const button of await bar.getByRole("button").all()) {
+      const box = (await button.boundingBox())!;
+      expect(box.x).toBeGreaterThan(frame.x + 8);
+      expect(box.x + box.width).toBeLessThan(frame.x + frame.width - 8);
+      await expect(button).toBeInViewport();
+    }
+    await page.screenshot({ path: info.outputPath(`settings-actions-${width}.png`) });
     await page.screenshot({ path: info.outputPath(`settings-groups-${width}.png`), fullPage: true });
   }
 });

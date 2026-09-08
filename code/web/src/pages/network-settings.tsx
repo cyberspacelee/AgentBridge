@@ -594,7 +594,7 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
         </Notice>
       )}
       <div className="config-action-bar">
-        <span role="status" className="text-sm text-muted-foreground">
+        <span role="status" className="config-action-status">
           {dirty
             ? "有未保存的更改"
             : view.restartRequired

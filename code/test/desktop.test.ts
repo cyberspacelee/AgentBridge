@@ -38,10 +38,10 @@ test("only the current database format opens; historical data is rejected withou
 
 test("desktop privileges stay with the owned workspace and exact backend origin", () => {
   const origin = "http://127.0.0.1:43210";
-  for (const route of ["/agents", "/agents/pi?tab=installation", "/tasks/task-id", "/settings", "/observability"]) {
+  for (const route of ["/agents", "/agents/pi?tab=installation", "/tasks/task-id", "/conversations", "/conversations/history", "/conversations/session-id?tab=diagnostics", "/settings", "/observability"]) {
     assert.equal(isWorkspaceUrl(`${origin}${route}`, origin), true);
   }
-  for (const url of [`${origin}/api/artifacts/id/content`, `${origin}/agents/../api/settings`, `${origin}/agents-other`, "data:text/html,test", "file:///etc/passwd", "http://127.0.0.1:43211/agents", "http://user@127.0.0.1:43210/agents"]) {
+  for (const url of [`${origin}/api/artifacts/id/content`, `${origin}/agents/../api/settings`, `${origin}/agents-other`, `${origin}/conversations-other`, `${origin}/conversations/../api/settings`, "data:text/html,test", "file:///etc/passwd", "http://127.0.0.1:43211/agents", "http://user@127.0.0.1:43210/agents"]) {
     assert.equal(isWorkspaceUrl(url, origin), false, url);
   }
   for (const url of ["javascript:alert(1)", "file:///tmp/report", "data:text/html,test", "https://user:secret@example.com", "mailto:test@example.com"]) assert.equal(externalUrl(url), null);

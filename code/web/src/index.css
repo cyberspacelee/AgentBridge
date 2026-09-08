@@ -245,7 +245,7 @@
     }
   }
   .app-shell {
-    @apply grid h-dvh grid-cols-[272px_minmax(0,1fr)] grid-rows-[minmax(56px,auto)_minmax(0,1fr)] overflow-hidden;
+    @apply grid h-dvh grid-cols-[248px_minmax(0,1fr)] grid-rows-[minmax(56px,auto)_minmax(0,1fr)] overflow-hidden;
   }
   .app-shell[data-desktop="true"] {
     grid-template-rows: minmax(56px, auto) minmax(0, 1fr) auto;
@@ -266,13 +266,19 @@
     margin-left: auto;
   }
   .app-sidebar {
-    @apply row-span-2 flex min-h-0 min-w-0 flex-col gap-4 border-r bg-sidebar p-3;
+    @apply row-span-2 flex min-h-0 min-w-0 flex-col gap-6 overflow-y-auto border-r bg-sidebar p-3;
+  }
+  .sidebar-brand-row {
+    @apply flex shrink-0 items-center justify-between gap-1;
+  }
+  .workspace-nav a[data-section-start] {
+    @apply mt-6;
   }
   .brand {
-    @apply flex h-8 shrink-0 items-center gap-3 px-3 text-base font-semibold;
+    @apply flex h-8 shrink-0 items-center gap-2 px-2 text-base font-semibold;
   }
   .brand > svg {
-    @apply size-6 shrink-0 text-primary;
+    @apply size-5 shrink-0 text-primary;
   }
   .workspace-nav {
     @apply flex shrink-0 flex-col gap-1;
@@ -341,7 +347,7 @@
   .list-page > .pagination {
     @apply mt-0 border-t pt-3;
   }
-  .task-create-form [data-slot="select-trigger"] {
+  .conversation-create-form [data-slot="select-trigger"] {
     @apply w-full min-w-0;
   }
   .observation-list-page > .observation-tabs {
@@ -756,7 +762,11 @@
     .app-shell[data-collapsed="true"] .sidebar-footer {
       align-items: center;
     }
+    .app-shell[data-collapsed="true"] .sidebar-brand-row {
+      justify-content: center;
+    }
     .app-shell[data-collapsed="true"] .brand {
+      display: none;
       justify-content: center;
       padding: 0;
     }
@@ -1020,7 +1030,6 @@
     }
   }
 
-  /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
   .agents-page {
     max-width: 1200px;
     min-height: 100%;
@@ -1111,18 +1120,7 @@
     margin-top: 20px;
   }
   .config-action-bar {
-    position: sticky;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 16px 0;
-    margin-top: 20px;
-    background: var(--background);
-    border-top: 1px solid var(--border);
-    z-index: 5;
+    @apply flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4;
   }
   .config-action-status {
     font-size: 13px;
@@ -1203,8 +1201,8 @@
       flex: 1;
     }
     .config-action-bar {
-      padding-block: 10px;
-      gap: 6px;
+      padding: 12px;
+      gap: 12px;
     }
     .config-action-status {
       flex-basis: 100%;
@@ -1272,61 +1270,123 @@
     }
   }
 
-  /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
   .conversation-history {
-    @apply flex min-h-0 flex-1 flex-col gap-3 border-t pt-4;
+    @apply flex h-full min-h-0 max-w-[1200px] flex-col gap-4;
   }
-  .history-heading {
-    @apply flex items-center justify-between px-2 text-muted-foreground;
+  .conversation-history > .page-heading {
+    @apply mb-2 shrink-0;
   }
-  .history-heading h2 {
-    @apply text-sm font-medium;
+  .history-toolbar {
+    @apply flex shrink-0 flex-wrap items-center gap-3;
   }
-  .history-heading svg {
-    @apply size-4;
+  .history-toolbar form {
+    @apply w-full max-w-md;
   }
-  .history-day {
-    @apply px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground;
+  .history-columns,
+  .conversation-link {
+    @apply grid min-w-0 grid-cols-[minmax(0,1fr)_108px_112px_156px] items-center gap-4 px-4;
+  }
+  .history-columns {
+    @apply shrink-0 border-b pb-3 text-xs text-muted-foreground;
+  }
+  .history-scroll {
+    @apply min-h-40 flex-1;
+  }
+  .history-scroll nav {
+    @apply flex min-h-full flex-col;
   }
   .conversation-link {
-    @apply flex min-w-0 flex-col gap-2 rounded-md p-3 text-sm hover:bg-accent;
+    @apply min-h-18 border-b py-3 text-sm hover:bg-muted;
   }
-  .conversation-link.active {
-    @apply bg-accent text-accent-foreground;
+  .history-summary {
+    @apply flex min-w-0 flex-col gap-1;
   }
   .history-title {
     @apply line-clamp-2 font-medium;
     overflow-wrap: anywhere;
   }
-  .history-meta {
-    @apply flex min-w-0 items-center gap-2 text-xs text-muted-foreground;
+  .history-directory {
+    @apply truncate text-xs text-muted-foreground;
   }
-  .history-meta time {
-    @apply ml-auto shrink-0 tabular-nums;
+  .history-agent,
+  .history-time {
+    @apply text-xs text-muted-foreground;
+  }
+  .history-time {
+    @apply tabular-nums;
+  }
+  .history-status {
+    @apply min-w-0;
   }
   .history-completed {
-    @apply inline-flex shrink-0 items-center gap-1;
+    @apply inline-flex items-center gap-1 text-xs text-muted-foreground;
   }
   .history-completed svg {
     @apply size-3;
   }
-  .conversation-history > [data-slot="select-trigger"] {
-    @apply w-full;
-  }
-  .conversation-history .workspace-empty {
-    @apply min-h-28 px-2 py-6;
+  .history-pagination {
+    @apply flex shrink-0 flex-wrap items-center justify-between gap-3 border-t pt-4;
   }
   .conversation-main {
     @apply flex h-full min-h-0 min-w-0 flex-col;
   }
   .new-conversation {
-    @apply flex min-h-0 flex-1 overflow-y-auto px-6 py-8;
+    @apply flex min-h-0 flex-1 overflow-y-auto px-6 py-12;
   }
   .new-conversation-content {
     @apply m-auto w-full max-w-[720px];
   }
-  .conversation-submit {
-    @apply flex justify-end border-t pt-4;
+  .conversation-welcome {
+    @apply mb-8 text-center;
+  }
+  .conversation-welcome h1 {
+    @apply text-3xl leading-10 font-semibold;
+  }
+  .conversation-welcome p {
+    @apply mt-3 text-sm text-muted-foreground;
+  }
+  .conversation-onboarding [data-slot="empty-header"] {
+    @apply max-w-md gap-4;
+  }
+  .conversation-onboarding [data-slot="empty-icon"] {
+    @apply mb-2 size-12;
+  }
+  .conversation-onboarding h1 {
+    @apply text-2xl leading-8;
+  }
+  .conversation-create-form > fieldset > [data-slot="field-group"] {
+    @apply gap-5;
+  }
+  @media (max-width: 900px) {
+    .history-columns {
+      display: none;
+    }
+    .conversation-link {
+      @apply grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 px-1;
+    }
+    .history-summary {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .history-status {
+      grid-column: 2;
+      grid-row: 1;
+      align-self: start;
+    }
+    .history-agent {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .history-time {
+      grid-column: 2;
+      grid-row: 2;
+    }
+    .history-toolbar form {
+      max-width: none;
+    }
+    .conversation-welcome h1 {
+      @apply text-2xl leading-8;
+    }
   }
   .conversation-main .task-page {
     @apply min-h-0 flex-1;

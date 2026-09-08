@@ -7,7 +7,7 @@ test("SSE recovers from a terminal HTTP failure", async ({ page }) => {
     if (++attempts === 1) return route.fulfill({ status: 503, body: "temporarily full" });
     return route.continue();
   });
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   await expect.poll(() => attempts).toBeGreaterThan(1);
   await expect(page.getByLabel("网关事件连接：live")).toBeVisible();
 });
@@ -34,16 +34,16 @@ test("leaving a pending submission prevents late navigation and retains its idem
     await form.getByRole("button", { name: "发送消息", exact: true }).click();
   };
   try {
-    await page.goto("/tasks");
+    await page.goto("/conversations");
     await send();
     await expect.poll(() => bodies.length).toBe(1);
     await navigate(page, "运行观测");
     await expect(page).toHaveURL(/\/observability/);
     release();
     await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith("agentbridge:submission:")).length)).toBe(1);
-    await navigate(page, "会话");
+    await navigate(page, "新会话");
     await send();
-    await expect(page).toHaveURL(/\/tasks\/recovered-session$/);
+    await expect(page).toHaveURL(/\/conversations\/recovered-session$/);
     expect(bodies).toHaveLength(2);
     expect(bodies[1]!.submissionId).toBe(bodies[0]!.submissionId);
     expect(reconciliations).toBe(0);

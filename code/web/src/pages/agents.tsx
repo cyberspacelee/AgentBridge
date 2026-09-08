@@ -1353,10 +1353,7 @@ function AgentEditor({
         <TabsContent value="skills">{refs("skills")}</TabsContent>
         <TabsContent value="mcp">{refs("mcp")}</TabsContent>
       </Tabs>
-      <div
-        className="config-action-bar"
-        style={tab === "installation" ? { position: "static" } : undefined}
-      >
+      <div className="config-action-bar">
         <span role="status" className="config-action-status">
           {configurationStatus}
         </span>

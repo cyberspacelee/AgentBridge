@@ -154,7 +154,7 @@ test("desktop directory chooser fills paths and preserves them when cancelled", 
     let selections = 0;
     Object.assign(window, { agentBridge: { version: "test", selectDirectory: async () => selections++ % 2 ? null : "/workspace/项目" } });
   });
-  await page.goto("/tasks");
+  await page.goto("/conversations");
   const composer = page.getByRole("form", { name: "新会话" });
   await composer.getByRole("button", { name: "选择目录", exact: true }).click();
   await expect(composer.getByLabel("工作目录", { exact: true })).toHaveValue("/workspace/项目");
