@@ -339,7 +339,7 @@ async function launchBackend() {
     protection: secure ? "os" : "file",
     encrypt: secure ? (value) => safeStorage.encryptStringAsync(value) : undefined,
     decrypt: async (value) => (await safeStorage.decryptStringAsync(value)).result,
-    env: { AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm },
+    env: { AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm, AGENT_ENGINE: undefined },
     onReady: (url) => {
       const changed = origin && origin !== url;
       origin = url;

@@ -16,6 +16,7 @@ for (const id of ["codex", "grok"] as const)
     const session: Session = {
       id: randomUUID(),
       title: "Protocol",
+        titleSource: "user",
       directory: process.cwd(),
       engineId: id,
       interactionPolicy: { permission: "manual", question: "manual" },
@@ -155,7 +156,7 @@ for (const id of ["codex", "grok"] as const)
     assert.equal(permission.type, "interaction");
     if (permission.type !== "interaction")
       throw new Error("Expected permission");
-    await adapter.reply(permission.interaction.id, { decision: "reject" });
+    await adapter.reply(permission.interaction.id, { reply: "reject" });
     assert.deepEqual(replies.at(-1), {
       id: "approval",
       result:
@@ -173,7 +174,7 @@ for (const id of ["codex", "grok"] as const)
             question: "Choose format",
             isOther: true,
             multi_select: false,
-            options: [{ label: "Markdown" }],
+            options: [{ label: "Markdown", description: "Portable text" }],
           },
         ],
       },
@@ -183,6 +184,8 @@ for (const id of ["codex", "grok"] as const)
     assert.equal(question.type, "interaction");
     if (question.type !== "interaction") throw new Error("Expected question");
     assert.equal(question.interaction.questions[0]?.allowCustom, true);
+    assert.equal(question.interaction.sessionID, session.id);
+    assert.deepEqual(question.interaction.questions[0]?.options, [{ label: "Markdown", description: "Portable text" }]);
     await adapter.reply(question.interaction.id, { answers: [["Plain text"]] });
     assert.deepEqual(replies.at(-1), {
       id: "question",
@@ -236,18 +239,18 @@ for (const id of ["codex", "grok"] as const)
     const message = updates.at(-1)!;
     assert.equal(message.type, "message");
     if (message.type !== "message") throw new Error("Expected message");
-    assert.equal(message.message.finishReason, "stop");
+    assert.equal(message.message.info.finish, "stop");
     assert.ok(
       message.message.parts.some(
         (part) =>
           part.type === "tool" &&
-          part.state === "completed" &&
+          part.state.status === "completed" &&
           part.output === "result",
       ),
     );
     assert.ok(
       message.message.parts.some(
-        (part) => part.type === "text" && part.text === "Done",
+        (part) => part.type === "text" && part.content === "Done",
       ),
     );
     const cancelled = adapter.run(

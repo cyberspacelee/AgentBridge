@@ -72,14 +72,14 @@ Run 是 Session 的子实体，也是观测统计与取消追踪单位。队列�
 
 ### Message、MessagePart 与 ToolCall
 
-Message 字段：`id, sessionId, runId, role, createdAt, completedAt, finishReason`。role 在统一模型中为 user 或 assistant；原生工具结果归入 ToolCall 和对应 tool part。
+Message 字段：`id, sessionId, runId, role, created_at, completedAt, info.finish`。role 在统一模型中为 user 或 assistant；原生工具结果归入 ToolCall 和对应 tool part。
 
 MessagePart 是判别联合：
 
 | type | 内容 |
 | --- | --- |
-| text | 完整 text，稳定 partId，是否已完成 |
-| tool | toolCallId 与规范化工具状态、输入、输出和错误 |
+| text | 完整 content、稳定 id |
+| tool | tool、toolCallId、state.status/title、input/output、startedAt/finishedAt |
 | step-finish | 当前模型步骤结束原因与实际可得用量；不自动终止 Run |
 
 ToolCall 字段：`id, runId, messageId, nativeCallId, name, input, output, state, startedAt, finishedAt, error`。原生动态名称归一化后才用于指标标签，原名可保留在受控执行记录中。
@@ -90,12 +90,12 @@ ToolCall 字段：`id, runId, messageId, nativeCallId, name, input, output, stat
 
 ### Interaction
 
-必要字段：`id, sessionId, runId, kind, payload, state, policy, claimedBy, claimedAt, resolvedAt, reply, error, expiresAt`。
+必要字段：`id, sessionID, runId, kind, title, permission, patterns, questions, state, policy, created_at, resolvedAt, reply, error`。
 
-- kind 为 permission 或 question，payload 使用不同 schema。
+- kind 为 permission 或 question；问题包含 question、options（label/description）、multiple、allowCustom；权限包含 permission 与 patterns。
 - 权限决策为 once、always、reject；always 的作用范围遵循原生会话或引擎配置，不推导为网关永久授权。
 - 问题支持多个问题、选项、是否多选和自由文本约束；答案按问题顺序对应，不能把整组问题拼成一句回答。
-- claimedBy 为自动策略或当前人工回复操作。pending 到 replying 必须原子认领，重复请求不能双发到引擎。
+- policy 标识自动或人工策略。pending 到 replying 必须原子认领，重复请求不能双发到引擎。
 - 原生请求已过期或 Run 已终止后标记 expired，返回明确冲突，不继续回复。
 - 回复传输失败且无法确认是否生效时，保留 replying 与错误并进行有界核对；不能盲目退回 pending 后再次自动发送。明确未提交的失败才可以退回 pending。
 

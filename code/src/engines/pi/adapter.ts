@@ -415,9 +415,9 @@ export class PiAdapter implements EngineAdapter {
         sessionId: rpc.session.id,
         runId: a.run.id,
         role: "assistant",
-        createdAt: at,
+        created_at: at,
         completedAt: null,
-        finishReason: null,
+        info: { finish: null },
         parts: [],
       };
       a.messages.push(a.message);
@@ -430,10 +430,10 @@ export class PiAdapter implements EngineAdapter {
       if (delta.type === "text_delta") {
         let part = a.message.parts.find((p) => p.id === id);
         if (!part) {
-          part = { id, type: "text", text: "" };
+          part = { id, type: "text", content: "" };
           a.message.parts.push(part);
         }
-        if (part.type === "text") part.text += z.string().parse(delta.delta);
+        if (part.type === "text") part.content += z.string().parse(delta.delta);
       }
       this.publish(rpc);
     } else if (event.type === "message_end") {
@@ -446,12 +446,12 @@ export class PiAdapter implements EngineAdapter {
         const id = `${a.message!.id}:part:${index}`;
         if (part.type === "text") {
           const found = a.message!.parts.find((p) => p.id === id);
-          if (found?.type === "text") found.text = z.string().parse(part.text);
+          if (found?.type === "text") found.content = z.string().parse(part.text);
           else
             a.message!.parts.push({
               id,
               type: "text",
-              text: z.string().parse(part.text),
+              content: z.string().parse(part.text),
             });
         } else if (
           part.type === "toolCall" &&
@@ -463,15 +463,15 @@ export class PiAdapter implements EngineAdapter {
             id,
             type: "tool",
             toolCallId: z.string().parse(part.id),
-            name: z.string().parse(part.name),
+            tool: z.string().parse(part.name),
             input: part.arguments,
             output: "",
-            state: "pending",
+            state: { status: "pending", title: z.string().parse(part.name) },
             startedAt: null,
             finishedAt: null,
           });
       });
-      a.message.finishReason = text(native.stopReason);
+      a.message.info.finish = text(native.stopReason);
       a.error =
         native.stopReason === "error"
           ? engineError(
@@ -501,14 +501,14 @@ export class PiAdapter implements EngineAdapter {
       if (!message || !part)
         throw engineError("Pi tool result has no matching call");
       if (event.type === "tool_execution_start") {
-        part.state = "running";
+        part.state.status = "running";
         part.startedAt = at;
       }
       if (event.type === "tool_execution_update")
         part.output = contentText(object(event.partialResult).content);
       if (event.type === "tool_execution_end") {
         part.output = contentText(object(event.result).content);
-        part.state = event.isError === true ? "failed" : "completed";
+        part.state.status = event.isError === true ? "failed" : "completed";
         part.finishedAt = at;
       }
       a.emit({ type: "message", message: structuredClone(message) });
@@ -524,20 +524,29 @@ export class PiAdapter implements EngineAdapter {
           text(event.title).startsWith("AgentBridge permission: "))
           ? "permission"
           : "question";
+      const title = text(event.title);
+      let patterns: string[] = [];
+      if (kind === "permission" && title.startsWith("AgentBridge permission: ")) {
+        // The bundled extension sends the native tool input on the second line.
+        const input = object(JSON.parse(title.slice(title.indexOf("\n") + 1)));
+        patterns = [input.path, input.file, input.filePath, input.command].filter((value): value is string => typeof value === "string");
+      }
       const interaction: Interaction = {
         id,
-        sessionId: rpc.session.id,
+        sessionID: rpc.session.id,
         runId: a.run.id,
         kind,
         title: text(event.title),
+        permission: kind === "permission" ? text(event.title).replace(/^AgentBridge permission: /, "").split("\n")[0]! : "",
+        patterns,
         questions:
           kind === "permission"
             ? []
             : [
                 {
-                  text: text(event.title),
+                  question: text(event.title),
                   options: Array.isArray(event.options)
-                    ? z.array(z.string()).parse(event.options)
+                    ? z.array(z.string()).parse(event.options).map((label) => ({ label, description: "" }))
                     : [],
                   multiple: false,
                   allowCustom: method !== "select",
@@ -545,7 +554,7 @@ export class PiAdapter implements EngineAdapter {
               ],
         state: "pending",
         policy: rpc.session.interactionPolicy[kind],
-        createdAt: at,
+        created_at: at,
         resolvedAt: null,
         reply: null,
         error: null,
@@ -560,19 +569,19 @@ export class PiAdapter implements EngineAdapter {
           : null;
       rpc.active = undefined;
       a.resolve({
-        ...(last?.finishReason !== "stop" && last?.finishReason !== "aborted"
+        ...(last?.info.finish !== "stop" && last?.info.finish !== "aborted"
           ? {
               error:
                 a.error ??
                 engineError(
-                  `Pi ended without completion (stopReason=${last?.finishReason || "missing"})`,
+                  `Pi ended without completion (stopReason=${last?.info.finish || "missing"})`,
                 ),
             }
           : {}),
         outcome:
-          last?.finishReason === "stop"
+          last?.info.finish === "stop"
             ? "completed"
-            : last?.finishReason === "aborted"
+            : last?.info.finish === "aborted"
               ? "aborted"
               : "failed",
         usage: usage.length
@@ -606,10 +615,10 @@ export class PiAdapter implements EngineAdapter {
     const native = rpc?.interactions.get(id);
     if (!rpc || !native) throw engineError("Pi interaction is unavailable");
     const response =
-      "decision" in reply
+      "reply" in reply
         ? native.method === "select"
-          ? { value: reply.decision }
-          : { confirmed: reply.decision !== "reject" }
+          ? { value: reply.reply }
+          : { confirmed: reply.reply !== "reject" }
         : { value: reply.answers[0]?.[0] ?? "" };
     await new Promise<void>((resolve, reject) =>
       rpc.child.stdin.write(

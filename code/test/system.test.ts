@@ -12,7 +12,7 @@ import { RuntimeManager } from "../src/runtime/runtimes.js";
 import { readSettings, SettingsManager } from "../src/settings.js";
 import { readConfig } from "../src/config.js";
 import { createServer } from "node:net";
-import { gatewaySchema, gatewayUrl } from "../host/gateway.mjs";
+import { gatewaySchema, gatewayUrl, defaultGateway } from "../host/gateway.mjs";
 import type { GatewayView } from "../shared/system.js";
 
 async function eventually(check: () => Promise<boolean>) {
@@ -22,6 +22,8 @@ async function eventually(check: () => Promise<boolean>) {
 
 test("gateway settings persist, change listener and roll back an occupied port", async () => {
   assert.equal(gatewayUrl("::", 3000), "http://[::1]:3000");
+  assert.deepEqual(defaultGateway, { host: "127.0.0.1", port: 6217 });
+  assert.equal(readSettings(readConfig([], {})).schemaVersion, 1);
   assert.equal(gatewayUrl("0.0.0.0", 80), "http://127.0.0.1");
   for (const settings of [{ host: "https://example.com", port: 3000 }, { host: "127.0.0.1", port: 65536 }, { host: "0.0.0.0", port: -1 }, { host: "localhost", port: 1.5 }]) assert.equal(gatewaySchema.safeParse(settings).success, false);
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-gateway-settings-"));

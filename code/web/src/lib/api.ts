@@ -134,7 +134,7 @@ export function useEvents() {
     "connecting"
   )
   useEffect(() => {
-    const source = new EventSource("/api/events")
+    const source = new EventSource("/event")
     let timer: ReturnType<typeof setTimeout> | undefined
     const invalidate = () => {
       if (!timer)
@@ -148,21 +148,7 @@ export function useEvents() {
       invalidate()
     }
     source.onerror = () => setState("reconnecting")
-    for (const event of [
-      "server.resync_required",
-      "session.created",
-      "session.updated",
-      "session.deleted",
-      "run.updated",
-      "run.finished",
-      "message.part.updated",
-      "permission.asked",
-      "question.asked",
-      "interaction.updated",
-      "artifact.updated",
-      "agents.updated",
-    ])
-      source.addEventListener(event, invalidate)
+    source.onmessage = invalidate
     const polling = setInterval(invalidate, 5000)
     return () => {
       source.close()

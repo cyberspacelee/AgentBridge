@@ -1,8 +1,8 @@
-export const databaseVersion = 3;
+export const databaseVersion = 1;
 export const databaseSchema = String.raw`
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 CREATE TABLE sessions (
- id TEXT PRIMARY KEY, title TEXT NOT NULL, directory TEXT NOT NULL, engineId TEXT NOT NULL,
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, titleSource TEXT NOT NULL DEFAULT 'user' CHECK(titleSource IN ('user','generated')), directory TEXT NOT NULL, engineId TEXT NOT NULL,
  interactionPolicy TEXT NOT NULL CHECK(json_valid(interactionPolicy)), availability TEXT NOT NULL CHECK(availability IN ('ready','unavailable','deleting')),
  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, version INTEGER NOT NULL
 ) STRICT;
@@ -18,19 +18,19 @@ CREATE INDEX run_queue ON runs(state,acceptedAt);
 CREATE TABLE messages (
  id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
  runId TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','assistant')),
- createdAt TEXT NOT NULL, completedAt TEXT, finishReason TEXT
+ created_at TEXT NOT NULL, completedAt TEXT, info TEXT NOT NULL CHECK(json_valid(info))
 ) STRICT;
-CREATE INDEX message_order ON messages(sessionId,createdAt,id);
+CREATE INDEX message_order ON messages(sessionId,created_at,id);
 CREATE TABLE message_parts (
  id TEXT PRIMARY KEY, messageId TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
  position INTEGER NOT NULL, type TEXT NOT NULL CHECK(type IN ('text','tool','step-finish')), content TEXT NOT NULL CHECK(json_valid(content))
 ) STRICT;
 CREATE VIEW tool_calls AS SELECT id, messageId, content FROM message_parts WHERE type='tool';
 CREATE TABLE interactions (
- id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+ id TEXT PRIMARY KEY, sessionID TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
  runId TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK(kind IN ('permission','question')),
- title TEXT NOT NULL, questions TEXT NOT NULL CHECK(json_valid(questions)), state TEXT NOT NULL CHECK(state IN ('pending','replying','resolved','expired')),
- policy TEXT NOT NULL, createdAt TEXT NOT NULL, resolvedAt TEXT, reply TEXT, error TEXT
+ title TEXT NOT NULL, permission TEXT NOT NULL, patterns TEXT NOT NULL CHECK(json_valid(patterns)), questions TEXT NOT NULL CHECK(json_valid(questions)), state TEXT NOT NULL CHECK(state IN ('pending','replying','resolved','expired')),
+ policy TEXT NOT NULL, created_at TEXT NOT NULL, resolvedAt TEXT, reply TEXT, error TEXT
 ) STRICT;
 CREATE TABLE artifacts (
  id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -48,7 +48,7 @@ CREATE TABLE engine_bindings (
 ) STRICT;
 CREATE TABLE events (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, revision INTEGER NOT NULL, instanceId TEXT NOT NULL,
- occurredAt TEXT NOT NULL, type TEXT NOT NULL, sessionId TEXT, runId TEXT, data TEXT NOT NULL CHECK(json_valid(data))
+ occurredAt TEXT NOT NULL, type TEXT NOT NULL, sessionId TEXT, runId TEXT, properties TEXT NOT NULL CHECK(json_valid(properties))
 ) STRICT;
 CREATE INDEX events_session ON events(sessionId,seq);
 CREATE TABLE runtime_logs (

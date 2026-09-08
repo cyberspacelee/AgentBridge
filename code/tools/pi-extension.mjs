@@ -5,7 +5,7 @@ export default function bridgeInteractions(pi) {
   let always = process.env.AGENT_BRIDGE_PERMISSION_POLICY !== "manual";
   pi.on("tool_call", async (event, context) => {
     if (always || ["read", "grep", "find", "ls", "bridge_question"].includes(event.toolName)) return;
-    const decision = await context.ui.select(`AgentBridge permission: ${event.toolName}\n${JSON.stringify(event.input).slice(0, 6000)}`, ["once", "always", "reject"], { signal: context.signal });
+    const decision = await context.ui.select(`AgentBridge permission: ${event.toolName}\n${JSON.stringify(event.input)}`, ["once", "always", "reject"], { signal: context.signal });
     if (decision === "always") always = true;
     if (decision !== "once" && decision !== "always") return { block: true, reason: "The gateway declined this tool call." };
   });

@@ -61,7 +61,7 @@ Pi 的 MCP 扩展从实际 CLI 安装位置解析，两种来源使用相同逻�
 
 Desktop 使用异步 safeStorage；不可用时明确显示文件权限保护，不声称拥有系统密钥保护。Web 的网络凭据以仅当前用户可读写的文件保存。API 不回显密码；省略密码保留，显式空字符串清除。代理凭据不放入 URL 输入框、不传给 renderer 初始化数据。
 
-Web/Desktop 本机与局域网接口不要求配对码、Cookie 或 Bearer token。网关监听设置存入 system.json 的 gateway/appliedGateway，默认 127.0.0.1:3000。保存后用现有生命周期流程重启；失败恢复之前的监听与网络配置。Desktop 在地址改变后重新加载工作台，Web 使用新地址访问。启动时 Web CLI > 环境变量 > 已保存配置；运行期间 API 可更新设置。完整字段和评测示例见[网关 API](../../code/docs/GATEWAY_API.md)。
+Web/Desktop 本机与局域网接口不要求配对码、Cookie 或 Bearer token。网关监听设置存入 system.json 的 gateway/appliedGateway，默认 127.0.0.1:6217。保存后用现有生命周期流程重启；失败恢复之前的监听与网络配置。Desktop 在地址改变后重新加载工作台，Web 使用新地址访问。启动时 Web CLI > 环境变量 > 已保存配置；运行期间 API 可更新设置。完整字段和评测示例见[网关 API](../../code/docs/GATEWAY_API.md)。
 
 ## Electron 官方实践与项目选择
 

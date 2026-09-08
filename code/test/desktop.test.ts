@@ -105,7 +105,7 @@ test("local and LAN gateways expose HTTP and SSE without credentials", async () 
         assert.equal((await server.inject({ method: "POST", url: "/session/missing/abort" })).statusCode, 404);
         assert.equal((await server.inject({ method: "POST", url: "/session/missing/abort", headers: { origin: config.webOrigin } })).statusCode, 404);
         assert.equal((await server.inject({ method: "POST", url: "/session/missing/abort", headers: { origin: "https://untrusted.invalid" } })).statusCode, 403);
-        for (const route of ["/api/events", "/event"]) {
+        for (const route of ["/event"]) {
           const controller = new AbortController();
           try {
             const response = await fetch(url + route, { signal: controller.signal });

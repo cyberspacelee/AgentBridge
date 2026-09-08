@@ -6,7 +6,7 @@ import {
   collectDefaultMetrics,
 } from "prom-client";
 import { performance } from "node:perf_hooks";
-import type { Run } from "../../shared/contracts.js";
+import type { Run, ToolPart } from "../../shared/contracts.js";
 import { isTerminal } from "../domain/transitions.js";
 import type { SessionRuntime } from "../runtime/sessions.js";
 
@@ -244,12 +244,7 @@ export class Telemetry {
       .all(from, to, engine, engine)
       .map(
         (r) =>
-          JSON.parse(String(r.content)) as {
-            name: string;
-            state: string;
-            startedAt: string | null;
-            finishedAt: string | null;
-          },
+          JSON.parse(String(r.content)) as ToolPart,
       );
     const usage = runs.map((r) => r.usage).filter((u) => u !== null);
     const [http, connections, sent, drops] = await Promise.all([
@@ -297,11 +292,11 @@ export class Telemetry {
         childProcessMemoryBytes: null,
       },
       toolCalls: tools.length,
-      toolErrors: tools.filter((t) => t.state === "failed").length,
-      tools: [...new Set(tools.map((t) => t.name))].map((name) => ({
+      toolErrors: tools.filter((t) => t.state.status === "failed").length,
+      tools: [...new Set(tools.map((t) => t.tool))].map((name) => ({
         name,
-        calls: tools.filter((t) => t.name === name).length,
-        failed: tools.filter((t) => t.name === name && t.state === "failed")
+        calls: tools.filter((t) => t.tool === name).length,
+        failed: tools.filter((t) => t.tool === name && t.state.status === "failed")
           .length,
       })),
       usage: {
@@ -324,7 +319,7 @@ export class Telemetry {
         .list("interactions")
         .filter(
           (i) =>
-            sessionIds.has(i.sessionId) &&
+            sessionIds.has(i.sessionID) &&
             (i.state === "pending" || i.state === "replying"),
         ).length,
       http: {

@@ -54,7 +54,7 @@ export function AgentMessage({ message }: { message: Message }) {
   const assistant = message.role === "assistant"
   const text = message.parts
     .filter((p) => p.type === "text")
-    .map((p) => p.text)
+    .map((p) => p.content)
     .join("\n")
   return (
     <article
@@ -63,7 +63,7 @@ export function AgentMessage({ message }: { message: Message }) {
     >
       <header>
         <span>{assistant ? "Agent" : "用户"}</span>
-        <time dateTime={message.createdAt}>{date(message.createdAt)}</time>
+        <time dateTime={message.created_at}>{date(message.created_at)}</time>
         <CopyText text={text} />
       </header>
       {message.parts.map((part) => {
@@ -85,11 +85,11 @@ export function AgentMessage({ message }: { message: Message }) {
         if (!assistant || !message.completedAt)
           return (
             <div key={part.id} className="message-text">
-              {part.text}
+              {part.content}
             </div>
           )
         return (
-          <TextFallback key={part.id} text={part.text}>
+          <TextFallback key={part.id} text={part.content}>
             <div className="markdown">
               <Markdown
                 skipHtml
@@ -131,7 +131,7 @@ export function AgentMessage({ message }: { message: Message }) {
                   ),
                 }}
               >
-                {part.text}
+                {part.content}
               </Markdown>
             </div>
           </TextFallback>

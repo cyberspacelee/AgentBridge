@@ -1,10 +1,10 @@
-import { gatewaySchema } from "../host/gateway.mjs";
+import { gatewaySchema, defaultGateway } from "../host/gateway.mjs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { modelSchema } from "../shared/contracts.js";
 import { providerSchema } from "../shared/settings.js";
-import { agentIdSchema } from "../shared/settings.js";
+import { agentIdSchema, defaultAgent } from "../shared/settings.js";
 import { defaultNetworkSettings, normalizeNpmRegistry } from "../host/network.mjs";
 
 export const limitsSchema = z
@@ -38,11 +38,12 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     },
   });
   const engine = agentIdSchema.parse(
-    values.engine ?? env.AGENT_ENGINE ?? "opencode",
+    values.engine ?? env.AGENT_ENGINE ?? defaultAgent,
   );
   const config = {
     engine,
-    host: values.host ?? env.AGENT_HOST ?? "127.0.0.1",
+    engineOverride: values.engine ?? env.AGENT_ENGINE,
+    host: values.host ?? env.AGENT_HOST ?? defaultGateway.host,
     webOrigin: z.url().parse(env.AGENT_WEB_ORIGIN ?? "http://127.0.0.1:5173"),
     supervised: env.AGENT_SUPERVISED === "true",
     runtimeSources: {} as Record<string, { mode: "managed" | "external"; command?: string }>,
@@ -55,7 +56,7 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
       .int()
       .min(0)
       .max(65535)
-      .parse(values.port ?? env.AGENT_PORT ?? 3000),
+      .parse(values.port ?? env.AGENT_PORT ?? defaultGateway.port),
     dataDirectory: path.resolve(env.AGENT_DATA_DIR ?? ".agentbridge"),
     database:
       env.AGENT_STORAGE === "memory"

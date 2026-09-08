@@ -39,6 +39,7 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) =>
 env.AGENT_DESKTOP_DATA_DIR = data;
 env.AGENT_HOST = "127.0.0.1";
 env.AGENT_PORT = "0";
+env.AGENT_ENGINE = "grok"; // Desktop selection comes from settings, not a shell engine override.
 if (!executable) {
   env.AGENT_RUNTIME_NODE = process.execPath;
   env.AGENT_RUNTIME_NPM ??= path.resolve(path.dirname(process.execPath), process.platform === "win32" ? "node_modules/npm/bin/npm-cli.js" : "../lib/node_modules/npm/bin/npm-cli.js");
@@ -71,9 +72,10 @@ try {
   await page.waitForURL(/\/agents$/);
   await expect(page.getByRole("heading", { name: "Agent 管理", exact: true })).toBeVisible();
   let origin = new URL(page.url()).origin;
-  const { storeId } = await page.evaluate(async () => (await fetch("/api/runtime")).json());
+  const { storeId, engine: defaultEngine } = await page.evaluate(async () => (await fetch("/api/runtime")).json());
+  assert.equal(defaultEngine, "pi");
   assert.equal((await fetch(`${origin}/api/settings`)).status, 200);
-  const stream = await fetch(`${origin}/api/events`);
+  const stream = await fetch(`${origin}/event`);
   assert.equal(stream.status, 200);
   await stream.body.cancel();
   assert.match(await (await fetch(`${origin}/api/docs`)).text(), /prompt_async/);
@@ -109,9 +111,9 @@ try {
   });
   assert.deepEqual(preferences, { sandbox: true, contextIsolation: true, nodeIntegration: false });
   assert.equal(await page.evaluate(() => new Promise((resolve, reject) => {
-    const events = new EventSource("/api/events");
+    const events = new EventSource("/event");
     const timer = setTimeout(() => { events.close(); reject(new Error("SSE did not connect")); }, 5000);
-    events.addEventListener("server.connected", () => { clearTimeout(timer); events.close(); resolve(true); });
+    events.onmessage = (event) => { if (JSON.parse(event.data).type === "server.connected") { clearTimeout(timer); events.close(); resolve(true); } };
     events.onerror = () => { clearTimeout(timer); events.close(); reject(new Error("SSE failed")); };
   })), true);
   await application.evaluate(({ dialog }, directory) => {

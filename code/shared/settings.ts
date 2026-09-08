@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { EngineHealth, ModelOption } from "./contracts.js";
 
+export const defaultInteractionPolicy = { permission: "auto", question: "auto" } as const;
+export const defaultAgent = "pi";
+
 export const agentIds = ["pi", "opencode", "codex", "grok"] as const;
 export const agentIdSchema = z.enum(agentIds);
 export type AgentId = z.infer<typeof agentIdSchema>;
@@ -27,7 +30,7 @@ export const agentSchema = z
         question: z.enum(["auto", "manual"]),
       })
       .strict()
-      .default({ permission: "manual", question: "manual" }),
+      .default(defaultInteractionPolicy),
   })
   .strict();
 export type AgentConfiguration = z.infer<typeof agentSchema>;
@@ -119,8 +122,8 @@ export const mcpSchema = z
   .strict();
 export const settingsSchema = z
   .object({
-    schemaVersion: z.literal(3).default(3),
-    defaultAgent: agentIdSchema.default("pi"),
+    schemaVersion: z.literal(1).default(1),
+    defaultAgent: agentIdSchema.default(defaultAgent),
     agents: z
       .array(agentSchema)
       .length(4)

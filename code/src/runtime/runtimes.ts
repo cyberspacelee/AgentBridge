@@ -430,7 +430,7 @@ export class RuntimeManager {
     try {
       signal.throwIfAborted();
       await within(adapter.start(), config.limits.startupTimeoutMs);
-      if (id === "pi") await within(adapter.createSession({ id: randomUUID(), engineId: id, title: "Protocol check", directory: probeDirectory, availability: "unavailable", interactionPolicy: { permission: "manual", question: "manual" }, createdAt: timestamp(), updatedAt: timestamp(), version: 1 }), config.limits.startupTimeoutMs);
+      if (id === "pi") await within(adapter.createSession({ id: randomUUID(), engineId: id, title: "Protocol check", titleSource: "user", directory: probeDirectory, availability: "unavailable", interactionPolicy: { permission: "manual", question: "manual" }, createdAt: timestamp(), updatedAt: timestamp(), version: 1 }), config.limits.startupTimeoutMs);
       signal.throwIfAborted();
     } finally { await adapter.stop(); await rm(probeDirectory, removeOptions); }
   }

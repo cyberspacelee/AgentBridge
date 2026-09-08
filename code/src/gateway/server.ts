@@ -24,9 +24,8 @@ import { within } from "../async.js";
 import { isTerminal } from "../domain/transitions.js";
 import { artifactPath } from "../runtime/artifacts.js";
 import { Telemetry } from "../observability/metrics.js";
-import { evaluationEvent, evaluationMessage } from "./serialization.js";
 import { agentConfiguration } from "../settings.js";
-import { agentIdSchema, agentActionSchema, runtimeSourceSchema } from "../../shared/settings.js";
+import { agentIdSchema, defaultInteractionPolicy, agentActionSchema, runtimeSourceSchema } from "../../shared/settings.js";
 import { runtimeActionSchema } from "../../shared/runtimes.js";
 
 const id = (params: unknown) =>
@@ -163,7 +162,7 @@ export function createServer(runtime: SessionRuntime) {
       method: request.method,
       status_class: `${Math.floor(reply.statusCode / 100)}xx`,
     });
-    if (route !== "/event" && route !== "/api/events")
+    if (route !== "/event")
       telemetry.httpDuration.observe(
         { route, method: request.method },
         reply.elapsedTime / 1000,
@@ -242,7 +241,7 @@ export function createServer(runtime: SessionRuntime) {
     storage: store.filename === ":memory:" ? "memory" : "sqlite",
     models: config.model ? [config.model] : [],
     limits: config.limits,
-    interactionDefaults: { permission: "auto", question: "auto" },
+    interactionDefaults: agentConfiguration(config, runtime.engine().id)?.interactionPolicy ?? defaultInteractionPolicy,
     capabilities: {
       text: true,
       tools: true,
@@ -434,6 +433,9 @@ export function createServer(runtime: SessionRuntime) {
     return reply.code(200).send({
       id: session.id,
       title: session.title,
+      engineId: session.engineId,
+      directory: session.directory,
+      interactionPolicy: session.interactionPolicy,
       created_at: session.createdAt,
       status: "idle",
     });
@@ -443,9 +445,7 @@ export function createServer(runtime: SessionRuntime) {
       store.list("sessions").map((s) => [
         s.id,
         {
-          type: runtime.runs(s.id).some((r) => !isTerminal(r.state))
-            ? "busy"
-            : "idle",
+          type: runtime.sessionStatus(s.id),
         },
       ]),
     ),
@@ -455,18 +455,18 @@ export function createServer(runtime: SessionRuntime) {
     return {
       id: s.id,
       title: s.title,
+      engineId: s.engineId,
+      interactionPolicy: s.interactionPolicy,
       directory: s.directory,
       created_at: s.createdAt,
-      status: runtime.runs(s.id).some((r) => !isTerminal(r.state))
-        ? "busy"
-        : "idle",
+      status: runtime.sessionStatus(s.id),
       message_count: s.messageCount,
     };
   });
   server.get("/session/:id/message", async (request) => {
     const sessionId = id(request.params);
     runtime.session(sessionId);
-    return store.messages(sessionId).map(evaluationMessage);
+    return store.messages(sessionId);
   });
   server.post("/session/:id/prompt_async", async (request, reply) => {
     const run = runtime.enqueue(
@@ -522,8 +522,7 @@ export function createServer(runtime: SessionRuntime) {
     });
   }
 
-  for (const route of ["/event", "/api/events"])
-    server.get(route, (request, reply) => {
+  server.get("/event", (request, reply) => {
       if (connections >= config.limits.maxSseConnections)
         throw new GatewayError(
           "SERVICE_UNAVAILABLE",
@@ -537,7 +536,7 @@ export function createServer(runtime: SessionRuntime) {
       const raw = reply.raw;
       reply.hijack();
       raw.writeHead(200, {
-        "content-type": "text/event-stream",
+        "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
         connection: "keep-alive",
         "x-accel-buffering": "no",
@@ -560,9 +559,9 @@ export function createServer(runtime: SessionRuntime) {
       };
       closeStreams.add(close);
       raw.on("close", close);
-      const write = (type: string, data: unknown, eventId?: string) => {
+      const write = (data: unknown, eventId?: string) => {
         if (closed) return;
-        const frame = `${eventId ? `id: ${eventId}\n` : ""}${route === "/api/events" ? `event: ${type}\n` : ""}data: ${JSON.stringify(data)}\n\n`;
+        const frame = `${eventId ? `id: ${eventId}\n` : ""}data: ${JSON.stringify(data)}\n\n`;
         if (raw.writableLength + Buffer.byteLength(frame) > 2 * 1024 * 1024) {
           telemetry.sseDrops.inc({ reason: "backpressure" });
           close();
@@ -572,7 +571,7 @@ export function createServer(runtime: SessionRuntime) {
         telemetry.sseBytes.inc(Buffer.byteLength(frame));
       };
       const control = (type: string) =>
-        write(type, {
+        write({
           type,
           properties: { ...store.snapshot(), heartbeatMs: 15000 },
         });
@@ -582,11 +581,7 @@ export function createServer(runtime: SessionRuntime) {
       ) => {
         for (const event of events) {
           if (sessionId && event.sessionId !== sessionId) continue;
-          if (route === "/api/events") write(event.type, event, event.eventId);
-          else {
-            const value = evaluationEvent(event);
-            if (value) write(event.type, value, event.eventId);
-          }
+          write(event, event.eventId);
         }
       };
       const cursor = request.headers["last-event-id"];
@@ -803,10 +798,10 @@ export function createServer(runtime: SessionRuntime) {
             p.type === "tool"
               ? [
                   {
-                    name: p.name,
+                    name: p.tool,
                     startedAt: p.startedAt,
                     finishedAt: p.finishedAt,
-                    state: p.state,
+                    state: p.state.status,
                   },
                 ]
               : [],

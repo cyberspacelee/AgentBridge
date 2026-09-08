@@ -8,7 +8,7 @@
 
 ## 配置与所有权
 
-`AGENT_DATA_DIR/settings.json` 是唯一管理配置源，schemaVersion 为 3，包含 defaultAgent、agents、providers、skills、mcp。agents 保存 id、enabled、runtime（managed 或 external 命令）、model references、defaultModel、skillIds、mcpIds、interactionPolicy。模型连接只支持 OpenAI Chat Completions 与 Responses，包括名称、baseUrl、apiKey、模型列表。不提供模型服务登录、OAuth、订阅或账号发现；Web/Desktop 在本机和局域网直接访问，不使用实例配对或网关鉴权。
+`AGENT_DATA_DIR/settings.json` 是唯一管理配置源，schemaVersion 为 1，包含 defaultAgent、agents、providers、skills、mcp。agents 保存 id、enabled、runtime（managed 或 external 命令）、model references、defaultModel、skillIds、mcpIds、interactionPolicy。模型连接只支持 OpenAI Chat Completions 与 Responses，包括名称、baseUrl、apiKey、模型列表。不提供模型服务登录、OAuth、订阅或账号发现；Web/Desktop 在本机和局域网直接访问，不使用实例配对或网关鉴权。
 
 资源定义共享，启用引用归 Agent；没有 both、全局自动分发、用户原生配置目录编辑入口。保存时校验引用、重复项、默认模型归属与引擎协议支持。删除被引用资源须先解除引用。密钥脱敏返回，保持乐观并发 revision 校验。连接测试进行一次受限的真实模型请求，错误须脱敏。
 
@@ -44,3 +44,9 @@ Pi 保留逐会话 RPC，OpenCode 保留 HTTP/SSE。Codex 使用 app-server stdi
 ## 验收
 
 共享 schema、引用和密钥校验；四引擎生成配置与目录隔离；模型协议不匹配；真实连接测试成功/失败；Agent 启用、排队关闭、执行中关闭、强停、应用失败、重新启用与恢复；人工/自动审批与提问；多轮完整历史；桌面/移动、浅深色、键盘、错误和空状态。运行后端与前端类型检查、lint、构建、单元/集成/浏览器测试。真实模型和 Windows 环境的验证范围按实际证据记录，不将协议模拟测试写成真实模型验收。
+
+## 网关契约统一（2026-09-08）
+
+Desktop 不增加引擎启动参数；创建会话显式 engineId 优先，否则使用配置 defaultAgent。Web 命令行显式 --engine 只覆盖本次进程的默认引擎。会话固定引擎、工作目录和交互策略；首次输入为未命名会话生成标题。默认交互策略统一为 auto/auto，可在 Agent 配置或创建会话时设置 manual。
+
+Message、Interaction、AppEvent 在 shared/contracts.ts 唯一定义，原生协议转换只发生在 EngineAdapter。HTTP 查询直接返回领域快照；Web/Desktop/评测共同订阅 /event，不存在第二条应用事件流或评测 serializer。请求 agent 只支持 assistant，表示引擎默认助手，不作为引擎 ID。领域快照和事件保持相同字段；前端不自行转换旧字段。配置 schemaVersion、运行时清单、事件和数据库版本均为 1；历史配置、字段和数据库拒绝加载，不提供兼容或迁移。

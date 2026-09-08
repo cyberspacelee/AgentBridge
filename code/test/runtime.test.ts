@@ -121,10 +121,10 @@ class ControlledEngine implements EngineAdapter {
       sessionId,
       runId: entry.run.id,
       role: "assistant",
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
       completedAt: new Date().toISOString(),
-      finishReason: "stop",
-      parts: [{ id: randomUUID(), type: "text", text: "finished" }],
+      info: { finish: "stop" },
+      parts: [{ id: randomUUID(), type: "text", content: "finished" }],
     };
     entry.emit({ type: "message", message: msg });
     this.executions.delete(sessionId);
@@ -217,9 +217,10 @@ test("bundled evaluation script collects successful results and fails cancelled 
       const output = await result;
       assert.equal(output.code, cancelled ? 1 : 0, output.stderr);
       const data = JSON.parse(output.stdout);
-      assert.equal(data.run.state, cancelled ? "cancelled" : "completed");
+      assert.equal(data.completed, !cancelled);
+      if (cancelled) assert.equal(data.error.code, "CONFLICT");
+      else assert.ok(data.events["session.idle"]);
       assert.equal(data.sessionId, sessionId);
-      assert.ok(Array.isArray(data.artifacts));
       if (!cancelled) assert.ok(data.messages.some((message: Message) => message.role === "assistant"));
     }
   } finally { await server.close(); await rm(f.directory, { recursive: true, force: true }); }
@@ -472,9 +473,9 @@ test("engine Error messages survive database and JSON serialization", async () =
       stage: "engine",
     });
     const event = f.store.db
-      .prepare("SELECT data FROM events WHERE runId=? AND type='run.finished'")
+      .prepare("SELECT properties FROM events WHERE runId=? AND type='run.finished'")
       .get(accepted.runId);
-    assert.deepEqual(JSON.parse(String(event?.data)).error, persisted.error);
+    assert.deepEqual(JSON.parse(String(event?.properties)).error, persisted.error);
   } finally {
     await f.close();
   }
@@ -539,20 +540,22 @@ test("task engines route models, follow-ups, approvals, cancellation and recover
       type: "interaction",
       interaction: {
         id: interactionId,
-        sessionId: b.sessionId,
+        sessionID: b.sessionId,
         runId: b.runId,
         kind: "permission",
         title: "Approve",
+        permission: "",
+        patterns: [],
         questions: [],
         state: "pending",
         policy: "manual",
-        createdAt: new Date().toISOString(),
+        created_at: new Date().toISOString(),
         resolvedAt: null,
         reply: null,
         error: null,
       },
     });
-    await f.runtime.reply(interactionId, { decision: "once" });
+    await f.runtime.reply(interactionId, { reply: "once" });
     assert.equal(second.replies.length, 1);
     assert.equal(f.adapter.replies.length, 0);
     await f.runtime.cancel(b.sessionId);
@@ -613,18 +616,18 @@ test("observability isolates engine outcomes, tools, logs and samples", async ()
           sessionId: result.taskId,
           runId: result.runId,
           role: "assistant",
-          createdAt: at,
+          created_at: at,
           completedAt: at,
-          finishReason: "stop",
+          info: { finish: "stop" },
           parts: [
             {
               id: randomUUID(),
               type: "tool",
               toolCallId: randomUUID(),
-              name: `${engine}-tool`,
+              tool: `${engine}-tool`,
               input: {},
               output: "ok",
-              state: "completed",
+              state: { status: "completed", title: `${engine}-tool` },
               startedAt: at,
               finishedAt: at,
             },
@@ -738,7 +741,7 @@ test("transaction rollback publishes no events and does not notify completion ob
   store.subscribe(() => notifications++);
   assert.throws(() =>
     store.transaction(() => {
-      store.emit({ type: "test", data: {} });
+      store.emit({ type: "test", properties: {} });
       store.afterCommit(() => notifications++);
       throw new Error("rollback");
     }),
@@ -752,7 +755,7 @@ test("event replay storage is bounded by bytes as well as record count", () => {
   const store = new Store(":memory:", 2000);
   for (let index = 0; index < 10; index++)
     store.transaction(() =>
-      store.emit({ type: "test", data: { text: "x".repeat(800) } }),
+      store.emit({ type: "test", properties: { text: "x".repeat(800) } }),
     );
   assert.ok(Number(store.meta("eventBytes")) <= 2000);
   assert.equal(store.replay(`${store.storeId}:0`), null);
@@ -768,7 +771,7 @@ test("SQLite lock excludes another gateway and committed history survives reopen
   const store = new Store(filename);
   const id = store.storeId;
   store.transaction(() =>
-    store.emit({ type: "test", data: { durable: true } }),
+    store.emit({ type: "test", properties: { durable: true } }),
   );
   assert.throws(() => new Store(filename));
   store.close();
@@ -814,7 +817,7 @@ test("same session runs serially and successful snapshots have a final assistant
     await f.runtime.wait(b.runId);
     const last = f.store.messages(a.sessionId).at(-1)!;
     assert.equal(last.role, "assistant");
-    assert.equal(last.finishReason, "stop");
+    assert.equal(last.info.finish, "stop");
     assert.ok(last.parts.some((p) => p.type === "step-finish"));
     assert.throws(() =>
       transitionRun(f.runtime.run(a.runId), "failed", new Date().toISOString()),
@@ -1196,5 +1199,141 @@ test("gateway restart rebuilds both engines from durable bindings without replay
     await runtime.stop();
     store.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("one gateway contract drives engine selection, messages, SSE and manual or automatic interactions", async () => {
+  const pi = new ControlledEngine(); pi.id = "pi";
+  const opencode = new ControlledEngine(); opencode.id = "opencode";
+  const f = await fixture(10000, [pi, opencode]);
+  const server = createServer(f.runtime);
+  const streamController = new AbortController();
+  let reading: Promise<void> | undefined;
+  const events: { type: string; properties: Record<string, unknown> }[] = [];
+  try {
+    const view = f.runtime.settings.view();
+    f.runtime.settings.save({ revision: view.revision, settings: { ...view.settings, defaultAgent: "opencode" } });
+    const base = await server.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await fetch(`${base}/event`, { signal: streamController.signal });
+    assert.match(stream.headers.get("content-type")!, /text\/event-stream; charset=utf-8/);
+    const reader = stream.body!.getReader();
+    reading = (async () => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) return;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let boundary;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+          assert.ok(!frame.startsWith("event:"));
+          const data = frame.split("\n").find((line) => line.startsWith("data:"));
+          if (data) events.push(JSON.parse(data.slice(5)));
+        }
+      }
+    })();
+    // Install a rejection observer before any cleanup can abort the stream.
+    void reading.catch(() => {});
+    await until(() => events.some((event) => event.type === "server.connected"));
+    const create = async (body: Record<string, unknown>) => {
+      const result = await server.inject({ method: "POST", url: "/session", payload: { directory: f.directory, ...body } });
+      assert.equal(result.statusCode, 200, result.body);
+      return result.json();
+    };
+    const desktopDefault = await create({});
+    assert.equal(desktopDefault.engineId, "opencode");
+    assert.deepEqual(desktopDefault.interactionPolicy, { permission: "auto", question: "auto" });
+    f.config.engineOverride = readConfig(["--engine", "pi"], {}).engineOverride;
+    assert.equal((await create({})).engineId, "pi");
+    assert.equal(f.runtime.settings.view().settings.defaultAgent, "opencode", "CLI selection must not rewrite saved settings");
+    assert.equal((await create({ engineId: "opencode" })).engineId, "opencode");
+    f.config.engineOverride = undefined;
+    assert.equal(f.runtime.session(desktopDefault.id).engineId, "opencode");
+
+    for (const engine of [pi, opencode]) {
+      const session = await create({ engineId: engine.id, interactionPolicy: { permission: "manual", question: "manual" } });
+      const prefix = `/session/${session.id}`;
+      const payload = { parts: [{ type: "text", text: `${engine.id} contract run` }], model: { providerID: engine.id, modelID: "chosen" }, agent: "assistant" };
+      const invalid = await server.inject({ method: "POST", url: `${prefix}/prompt_async`, payload: { ...payload, agent: "unsupported" } });
+      assert.equal(invalid.statusCode, 400);
+      assert.equal(invalid.json().code, "VALIDATION_ERROR");
+      let returned = false;
+      const prompt = server.inject({ method: "POST", url: `${prefix}/prompt_async`, payload }).then((response) => { returned = true; return response; });
+      await until(() => engine.executions.has(session.id));
+      const execution = engine.executions.get(session.id)!;
+      assert.deepEqual(execution.run.model, payload.model);
+      assert.equal((await server.inject("/session/status")).json()[session.id].type, "busy");
+      assert.equal((await server.inject(prefix)).json().title, `${engine.id} contract run`);
+      const at = new Date().toISOString();
+      const interaction = {
+        id: randomUUID(), sessionID: session.id, runId: execution.run.id,
+        kind: "permission" as const, title: "Write report", permission: "file.write", patterns: [f.directory], questions: [],
+        state: "pending" as const, policy: "manual" as const, created_at: at, resolvedAt: null, reply: null, error: null,
+      };
+      execution.emit({ type: "interaction", interaction });
+      const permissions = (await server.inject("/permission")).json();
+      assert.deepEqual(permissions.find((item: { id: string }) => item.id === interaction.id), interaction);
+      assert.equal(returned, false, "prompt must stay open during permission handling");
+      const legacy = await server.inject({ method: "POST", url: `/permission/${interaction.id}/reply`, payload: { decision: "always" } });
+      assert.equal(legacy.statusCode, 400, "old reply fields are not aliases");
+      const permissionReply = { reply: "always" as const, message: "Approved for evaluation" };
+      assert.equal((await server.inject({ method: "POST", url: `/permission/${interaction.id}/reply`, payload: permissionReply })).statusCode, 200);
+      assert.deepEqual(engine.replies.at(-1), permissionReply);
+      const question = { ...interaction, id: randomUUID(), kind: "question" as const, permission: "", patterns: [], questions: [{ question: "Choose", options: [{ label: "A", description: "First option" }], multiple: false, allowCustom: false }] };
+      execution.emit({ type: "interaction", interaction: question });
+      assert.deepEqual((await server.inject("/question")).json().find((item: { id: string }) => item.id === question.id), question);
+      assert.equal((await server.inject({ method: "POST", url: `/question/${question.id}/reply`, payload: { answers: [["invalid"]] } })).statusCode, 400);
+      assert.equal((await server.inject({ method: "POST", url: `/question/${question.id}/reply`, payload: { answers: [["A"]] } })).statusCode, 200);
+      assert.equal(returned, false, "answering a question does not finish the run");
+      const toolMessage: Message = {
+        id: randomUUID(), sessionId: session.id, runId: execution.run.id, role: "assistant", created_at: at, completedAt: at,
+        info: { finish: "tool-calls" }, parts: [
+          { id: randomUUID(), type: "tool", tool: "write", toolCallId: "call", input: { path: f.directory }, output: "written", state: { status: "completed", title: "Write report" }, startedAt: at, finishedAt: at },
+          { id: randomUUID(), type: "step-finish", reason: "tool-calls", usage: null },
+        ],
+      };
+      execution.emit({ type: "message", message: toolMessage });
+      assert.equal(returned, false, "a tool-calls step is not final completion");
+      engine.complete(session.id);
+      const response = await prompt;
+      assert.equal(response.statusCode, 204);
+      assert.equal(response.body, "");
+      await until(() => events.some((event) => event.type === "session.idle" && event.properties.sessionID === session.id));
+      const messages = (await server.inject(`${prefix}/message`)).json();
+      assert.deepEqual(messages, (await server.inject(`/api/runs/${execution.run.id}`)).json().detail.messages);
+      assert.deepEqual(messages, (await server.inject(`/api/tasks/${session.id}`)).json().detail.messages);
+      const last = messages.at(-1);
+      assert.equal(last.role, "assistant"); assert.equal(last.info.finish, "stop");
+      assert.equal(last.parts[0].content, "finished");
+      assert.ok(last.parts.some((part: { type: string }) => part.type === "step-finish"));
+      assert.ok(!("finishReason" in last));
+      const parts = events.filter((event) => event.type === "message.part.updated" && event.properties.messageID === last.id);
+      assert.deepEqual(parts.at(-1)!.properties.part, last.parts.at(-1));
+      assert.deepEqual(events.find((event) => event.type === "permission.asked" && event.properties.id === interaction.id)!.properties, interaction);
+      assert.equal((await server.inject("/session/status")).json()[session.id].type, "idle");
+      const pending = server.inject({ method: "POST", url: `${prefix}/prompt_async`, payload });
+      await until(() => engine.executions.has(session.id));
+      assert.equal((await server.inject({ method: "POST", url: `${prefix}/stop` })).statusCode, 200);
+      assert.equal((await pending).statusCode, 409);
+      assert.equal((await server.inject({ method: "DELETE", url: prefix })).statusCode, 200);
+      assert.equal((await server.inject(`${prefix}/message`)).statusCode, 404);
+    }
+    // All entry points inherit the same automatic policy from the Agent configuration.
+    const session = await create({ engineId: "pi" });
+    const prompt = server.inject({ method: "POST", url: `/session/${session.id}/prompt_async`, payload: { parts: [{ type: "text", text: "auto" }], agent: "assistant", model: { providerID: "pi", modelID: "model" } } });
+    await until(() => pi.executions.has(session.id));
+    const execution = pi.executions.get(session.id)!;
+    const id = randomUUID();
+    execution.emit({ type: "interaction", interaction: { id, sessionID: session.id, runId: execution.run.id, kind: "question", title: "Automatic", permission: "", patterns: [], questions: [{ question: "Pick", options: [{ label: "A", description: "Default" }], multiple: false, allowCustom: false }], policy: "auto", state: "pending", created_at: new Date().toISOString(), resolvedAt: null, reply: null, error: null } });
+    await until(() => f.store.get("interactions", id)?.state === "resolved");
+    assert.deepEqual(pi.replies.at(-1), { answers: [["A"]] });
+    pi.complete(session.id);
+    assert.equal((await prompt).statusCode, 204);
+  } finally {
+    streamController.abort();
+    await reading?.catch(() => {});
+    await server.close();
+    await rm(f.directory, { recursive: true, force: true });
   }
 });

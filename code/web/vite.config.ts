@@ -21,7 +21,7 @@ export default defineConfig({
         "/question",
         "/health",
         "/metrics",
-      ].map((prefix) => [prefix, "http://127.0.0.1:3000"])
+      ].map((prefix) => [prefix, "http://127.0.0.1:6217"])
     ),
   },
 })

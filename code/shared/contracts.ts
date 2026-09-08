@@ -57,7 +57,11 @@ export const createSessionSchema = z
   })
   .strict();
 export const promptSchema = z
-  .object({ parts: inputPartsSchema, model: modelSchema.optional() })
+  .object({
+    parts: inputPartsSchema,
+    model: modelSchema.optional(),
+    agent: z.literal("assistant").optional(),
+  })
   .strict();
 export const submissionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 export const submitRunSchema = promptSchema.extend({
@@ -86,6 +90,7 @@ export interface Usage {
 export interface Session {
   id: string;
   title: string;
+  titleSource: "user" | "generated";
   directory: string;
   engineId: string;
   interactionPolicy: InteractionPolicy;
@@ -116,22 +121,19 @@ export interface Run {
 export interface TextPart {
   id: string;
   type: "text";
-  text: string;
+  content: string;
 }
 export interface ToolPart {
   id: string;
   type: "tool";
   toolCallId: string;
-  name: string;
+  tool: string;
   input: unknown;
   output: string;
-  state:
-    | "pending"
-    | "running"
-    | "completed"
-    | "failed"
-    | "cancelled"
-    | "interrupted";
+  state: {
+    title: string;
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  };
   startedAt: string | null;
   finishedAt: string | null;
 }
@@ -147,33 +149,38 @@ export interface Message {
   sessionId: string;
   runId: string;
   role: "user" | "assistant";
-  createdAt: string;
+  created_at: string;
   completedAt: string | null;
-  finishReason: string | null;
+  info: { finish: string | null };
   parts: MessagePart[];
 }
 export interface Question {
-  text: string;
-  options: string[];
+  question: string;
+  options: { label: string; description: string }[];
   multiple: boolean;
   allowCustom: boolean;
 }
 export interface Interaction {
   id: string;
-  sessionId: string;
+  sessionID: string;
   runId: string;
   kind: "permission" | "question";
   title: string;
   questions: Question[];
+  permission: string;
+  patterns: string[];
   state: "pending" | "replying" | "resolved" | "expired";
   policy: "auto" | "manual";
-  createdAt: string;
+  created_at: string;
   resolvedAt: string | null;
   reply: InteractionReply | null;
   error: string | null;
 }
 export const interactionReplySchema = z.union([
-  z.object({ decision: z.enum(["once", "always", "reject"]) }).strict(),
+  z.object({
+    reply: z.enum(["once", "always", "reject"]),
+    message: z.string().max(10000).optional(),
+  }).strict(),
   z
     .object({
       answers: z.array(z.array(z.string().max(10000)).max(100)).max(100),
@@ -221,7 +228,7 @@ export interface AppEvent {
   type: string;
   sessionId?: string;
   runId?: string;
-  data: unknown;
+  properties: unknown;
 }
 export interface Snapshot {
   storeId: string;

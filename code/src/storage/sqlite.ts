@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type {
   AppEvent,
   Artifact,
@@ -15,6 +15,8 @@ import type {
 } from "../../shared/contracts.js";
 import { databaseSchema, databaseVersion } from "./schema.js";
 
+const schemaFingerprint = createHash("sha256").update(databaseSchema).digest("hex");
+
 type Entities = {
   sessions: Session;
   runs: Run;
@@ -26,13 +28,13 @@ type Table = keyof Entities;
 const jsonColumns: Record<Table, string[]> = {
   sessions: ["interactionPolicy"],
   runs: ["inputParts", "model", "error", "usage"],
-  interactions: ["questions", "reply"],
+  interactions: ["questions", "patterns", "reply"],
   artifacts: [],
   submissions: ["result", "error"],
 };
 export type EventInput = Pick<
   AppEvent,
-  "type" | "data" | "sessionId" | "runId"
+  "type" | "properties" | "sessionId" | "runId"
 >;
 
 export class Store {
@@ -59,13 +61,16 @@ export class Store {
       const version = Number(
         this.db.prepare("PRAGMA user_version").get()?.user_version ?? 0,
       );
-      if (version !== databaseVersion && (version !== 0 || this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").get()))
+      const populated = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").get();
+      const hasMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").get();
+      if ((version !== 0 || populated) && (version !== databaseVersion || !hasMeta || this.meta("schemaFingerprint") !== schemaFingerprint))
         throw new Error("Unsupported legacy database. Use a new AGENT_DATA_DIR; no migration is provided and the existing data has been preserved.");
       this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
       if (version !== databaseVersion) {
         this.db.exec("BEGIN IMMEDIATE");
         try {
           this.db.exec(databaseSchema);
+          this.setMeta("schemaFingerprint", schemaFingerprint);
           this.db.exec(`PRAGMA user_version=${databaseVersion}; COMMIT;`);
         } catch (error) { this.db.exec("ROLLBACK"); throw error; }
       }
@@ -79,7 +84,7 @@ export class Store {
           String(
             this.db
               .prepare(
-                "SELECT COALESCE(SUM(length(CAST(data AS BLOB))),0) AS n FROM events",
+                "SELECT COALESCE(SUM(length(CAST(properties AS BLOB))),0) AS n FROM events",
               )
               .get()?.n ?? 0,
           ),
@@ -218,16 +223,16 @@ export class Store {
     }
     this.db
       .prepare(
-        "INSERT INTO messages(id,sessionId,runId,role,createdAt,completedAt,finishReason) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET completedAt=excluded.completedAt,finishReason=excluded.finishReason",
+        "INSERT INTO messages(id,sessionId,runId,role,created_at,completedAt,info) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET completedAt=excluded.completedAt,info=excluded.info",
       )
       .run(
         message.id,
         message.sessionId,
         message.runId,
         message.role,
-        message.createdAt,
+        message.created_at,
         message.completedAt,
-        message.finishReason,
+        JSON.stringify(message.info),
       );
     this.db
       .prepare("DELETE FROM message_parts WHERE messageId=?")
@@ -248,6 +253,7 @@ export class Store {
       .all(...params)
       .map((row) => ({
         ...row,
+        info: JSON.parse(String(row.info)),
         parts: this.db
           .prepare(
             "SELECT content FROM message_parts WHERE messageId=? ORDER BY position",
@@ -260,10 +266,10 @@ export class Store {
     this.assertTransaction();
     const at = new Date().toISOString();
     const revision = Number(this.meta("revision"));
-    const data = JSON.stringify(input.data);
+    const properties = JSON.stringify(input.properties);
     const result = this.db
       .prepare(
-        "INSERT INTO events(revision,instanceId,occurredAt,type,sessionId,runId,data) VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO events(revision,instanceId,occurredAt,type,sessionId,runId,properties) VALUES (?,?,?,?,?,?,?)",
       )
       .run(
         revision,
@@ -272,16 +278,16 @@ export class Store {
         input.type,
         input.sessionId ?? null,
         input.runId ?? null,
-        data,
+        properties,
       );
-    const bytes = Number(this.meta("eventBytes")) + Buffer.byteLength(data);
+    const bytes = Number(this.meta("eventBytes")) + Buffer.byteLength(properties);
     this.setMeta("eventBytes", String(bytes));
     if (bytes > this.eventByteLimit) {
       let remaining = bytes,
         floor = 0;
       for (const row of this.db
         .prepare(
-          "SELECT seq,length(CAST(data AS BLOB)) AS bytes FROM events ORDER BY seq",
+          "SELECT seq,length(CAST(properties AS BLOB)) AS bytes FROM events ORDER BY seq",
         )
         .iterate()) {
         remaining -= Number(row.bytes);
@@ -345,7 +351,7 @@ export class Store {
         type: String(row.type),
         ...(row.sessionId ? { sessionId: String(row.sessionId) } : {}),
         ...(row.runId ? { runId: String(row.runId) } : {}),
-        data: JSON.parse(String(row.data)),
+        properties: JSON.parse(String(row.properties)),
       }));
   }
   pruneEvents(max: number, before: string) {
@@ -368,7 +374,7 @@ export class Store {
     const removed = Number(
       this.db
         .prepare(
-          "SELECT COALESCE(SUM(length(CAST(data AS BLOB))),0) AS n FROM events WHERE seq<=?",
+          "SELECT COALESCE(SUM(length(CAST(properties AS BLOB))),0) AS n FROM events WHERE seq<=?",
         )
         .get(floor)?.n ?? 0,
     );
@@ -396,7 +402,7 @@ export class Store {
       .prepare("DELETE FROM runtime_logs WHERE sessionId=?")
       .run(sessionId);
     this.db.prepare("DELETE FROM sessions WHERE id=?").run(sessionId);
-    this.emit({ type: "session.deleted", sessionId, data: { sessionId } });
+    this.emit({ type: "session.deleted", sessionId, properties: { sessionID: sessionId } });
   }
   close() {
     this.listeners.clear();

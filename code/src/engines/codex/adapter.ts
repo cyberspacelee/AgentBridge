@@ -249,9 +249,9 @@ export class CodexAdapter implements EngineAdapter {
       sessionId: session.id,
       runId: run.id,
       role: "assistant",
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
       completedAt: null,
-      finishReason: null,
+      info: { finish: null },
       parts: [],
     };
     native.active = {
@@ -317,21 +317,23 @@ export class CodexAdapter implements EngineAdapter {
         type: "interaction",
         interaction: {
           id,
-          sessionId: native.session.id,
+          sessionID: native.session.id,
           runId: active.run.id,
           kind: question ? "question" : "permission",
           title:
             string(params.reason) ||
             string(params.command) ||
             (question ? "Codex clarification" : "Codex permission"),
+          permission: question ? "" : method,
+          patterns: question ? [] : [string(params.command), string(params.cwd), ...Object.keys(record(params.changes ?? {}))].filter(Boolean),
           questions: question
             ? list(params.questions).map((q) => {
                 const item = record(q);
                 return {
-                  text: string(item.question),
-                  options: list(item.options).map((o) =>
-                    string(record(o).label),
-                  ),
+                  question: string(item.question),
+                  options: list(item.options).map((o) => ({
+                    label: string(record(o).label), description: string(record(o).description),
+                  })),
                   multiple: false,
                   allowCustom: !item.isOther
                     ? list(item.options).length === 0
@@ -343,7 +345,7 @@ export class CodexAdapter implements EngineAdapter {
           policy: question
             ? native.session.interactionPolicy.question
             : native.session.interactionPolicy.permission,
-          createdAt: new Date().toISOString(),
+          created_at: new Date().toISOString(),
           resolvedAt: null,
           reply: null,
           error: null,
@@ -362,10 +364,10 @@ export class CodexAdapter implements EngineAdapter {
       const id = string(params.itemId);
       let part = message.parts.find((p) => p.id === id && p.type === "text");
       if (!part) {
-        part = { id, type: "text", text: "" };
+        part = { id, type: "text", content: "" };
         message.parts.push(part);
       }
-      if (part.type === "text") part.text += string(params.delta);
+      if (part.type === "text") part.content += string(params.delta);
     } else if (method === "item/started" || method === "item/completed") {
       const item = record(params.item),
         id = string(item.id),
@@ -374,9 +376,9 @@ export class CodexAdapter implements EngineAdapter {
       if (type === "agentMessage") {
         const part = message.parts.find((p) => p.id === id);
         if (part?.type === "text" && typeof item.text === "string")
-          part.text = item.text;
+          part.content = item.text;
         else if (!part)
-          message.parts.push({ id, type: "text", text: string(item.text) });
+          message.parts.push({ id, type: "text", content: string(item.text) });
       } else {
         let part = message.parts.find((p) => p.id === id);
         if (!part) {
@@ -384,10 +386,10 @@ export class CodexAdapter implements EngineAdapter {
             id,
             type: "tool",
             toolCallId: id,
-            name: string(item.tool) || type,
+            tool: string(item.tool) || type,
             input: item.arguments ?? item.command ?? item.changes ?? item,
             output: "",
-            state: "running",
+            state: { status: "running", title: string(item.tool) || type },
             startedAt: new Date().toISOString(),
             finishedAt: null,
           };
@@ -402,7 +404,7 @@ export class CodexAdapter implements EngineAdapter {
                 ? JSON.stringify(item.changes)
                 : part.output);
           if (method === "item/completed") {
-            part.state = ["failed", "declined"].includes(string(item.status))
+            part.state.status = ["failed", "declined"].includes(string(item.status))
               ? "failed"
               : "completed";
             part.finishedAt = new Date().toISOString();
@@ -453,10 +455,10 @@ export class CodexAdapter implements EngineAdapter {
         status = string(turn.status),
         completed = status === "completed";
       message.completedAt = new Date().toISOString();
-      message.finishReason = completed ? "stop" : status;
+      message.info.finish = completed ? "stop" : status;
       for (const part of message.parts)
-        if (part.type === "tool" && part.state === "running") {
-          part.state = "interrupted";
+        if (part.type === "tool" && part.state.status === "running") {
+          part.state.status = "interrupted";
           part.finishedAt = message.completedAt;
         }
       active.emit({ type: "message", message });
@@ -499,20 +501,20 @@ export class CodexAdapter implements EngineAdapter {
         ),
       };
     else if (
-      "decision" in reply &&
+      "reply" in reply &&
       pending.method === "item/permissions/requestApproval"
     )
       result = {
         permissions:
-          reply.decision === "reject" ? {} : pending.params.permissions,
-        scope: reply.decision === "always" ? "session" : "turn",
+          reply.reply === "reject" ? {} : pending.params.permissions,
+        scope: reply.reply === "always" ? "session" : "turn",
       };
-    else if ("decision" in reply)
+    else if ("reply" in reply)
       result = {
         decision:
-          reply.decision === "reject"
+          reply.reply === "reject"
             ? "decline"
-            : reply.decision === "always"
+            : reply.reply === "always"
               ? "acceptForSession"
               : "accept",
       };

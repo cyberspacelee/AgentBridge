@@ -227,9 +227,9 @@ export class GrokAdapter implements EngineAdapter {
       sessionId: session.id,
       runId: run.id,
       role: "assistant",
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
       completedAt: null,
-      finishReason: null,
+      info: { finish: null },
       parts: [],
     };
     let reject!: (error: Error) => void;
@@ -253,10 +253,10 @@ export class GrokAdapter implements EngineAdapter {
       const cancelled = active.cancelled || reason === "cancelled";
       const completed = reason === "end_turn";
       message.completedAt = new Date().toISOString();
-      message.finishReason = completed ? "stop" : reason;
+      message.info.finish = completed ? "stop" : reason;
       for (const part of message.parts)
-        if (part.type === "tool" && part.state === "running") {
-          part.state = "interrupted";
+        if (part.type === "tool" && part.state.status === "running") {
+          part.state.status = "interrupted";
           part.finishedAt = message.completedAt;
         }
       emit({ type: "message", message });
@@ -318,20 +318,22 @@ export class GrokAdapter implements EngineAdapter {
         type: "interaction",
         interaction: {
           id,
-          sessionId: native.session.id,
+          sessionID: native.session.id,
           runId: active.run.id,
           kind: question ? "question" : "permission",
           title: question
             ? "Grok clarification"
             : string(record(params.toolCall ?? {}).title) || "Grok permission",
+          permission: question ? "" : string(record(params.toolCall ?? {}).kind) || "tool.execute",
+          patterns: question ? [] : list(record(params.toolCall ?? {}).locations).map((location) => string(record(location).path)).filter(Boolean),
           questions: question
             ? list(params.questions).map((q) => {
                 const item = record(q);
                 return {
-                  text: string(item.question),
-                  options: list(item.options).map((o) =>
-                    string(record(o).label),
-                  ),
+                  question: string(item.question),
+                  options: list(item.options).map((o) => ({
+                    label: string(record(o).label), description: string(record(o).description),
+                  })),
                   multiple:
                     item.multiSelect === true || item.multi_select === true,
                   allowCustom: true,
@@ -342,7 +344,7 @@ export class GrokAdapter implements EngineAdapter {
           policy: question
             ? native.session.interactionPolicy.question
             : native.session.interactionPolicy.permission,
-          createdAt: new Date().toISOString(),
+          created_at: new Date().toISOString(),
           resolvedAt: null,
           reply: null,
           error: null,
@@ -364,10 +366,10 @@ export class GrokAdapter implements EngineAdapter {
       if (content.type !== "text") return;
       let part = message.parts.at(-1);
       if (part?.type !== "text") {
-        part = { id: randomUUID(), type: "text", text: "" };
+        part = { id: randomUUID(), type: "text", content: "" };
         message.parts.push(part);
       }
-      part.text += string(content.text);
+      part.content += string(content.text);
     } else if (type === "tool_call" || type === "tool_call_update") {
       const id = string(update.toolCallId);
       if (!id) throw engineError("Grok tool call is missing its ID");
@@ -377,17 +379,17 @@ export class GrokAdapter implements EngineAdapter {
           id,
           type: "tool",
           toolCallId: id,
-          name: string(update.title) || string(update.kind) || "tool",
+          tool: string(update.title) || string(update.kind) || "tool",
           input: update.rawInput ?? {},
           output: "",
-          state: "running",
+          state: { status: "running", title: string(update.title) || string(update.kind) || "tool" },
           startedAt: new Date().toISOString(),
           finishedAt: null,
         };
         message.parts.push(part);
       }
       if (part.type === "tool") {
-        if (typeof update.title === "string") part.name = update.title;
+        if (typeof update.title === "string") part.state.title = update.title;
         if (update.rawInput !== undefined) part.input = update.rawInput;
         if (update.rawOutput !== undefined)
           part.output =
@@ -404,7 +406,7 @@ export class GrokAdapter implements EngineAdapter {
             })
             .join("\n");
         if (["completed", "failed"].includes(string(update.status))) {
-          part.state = update.status === "failed" ? "failed" : "completed";
+          part.state.status = update.status === "failed" ? "failed" : "completed";
           part.finishedAt = new Date().toISOString();
         }
       }
@@ -432,22 +434,22 @@ export class GrokAdapter implements EngineAdapter {
       });
       result = { outcome: "accepted", answers, annotations };
     } else if (
-      "decision" in reply &&
+      "reply" in reply &&
       pending.method === "session/request_permission"
     ) {
       const kind =
-        reply.decision === "reject"
+        reply.reply === "reject"
           ? "reject_once"
-          : reply.decision === "always"
+          : reply.reply === "always"
             ? "allow_always"
             : "allow_once";
       const options = list(pending.params.options).map(record);
       const option =
         options.find((o) => o.kind === kind) ??
-        (reply.decision === "always"
+        (reply.reply === "always"
           ? options.find((o) => o.kind === "allow_once")
           : undefined);
-      if (!option && reply.decision !== "reject")
+      if (!option && reply.reply !== "reject")
         throw engineError("Grok did not offer this permission decision");
       result = {
         outcome: option

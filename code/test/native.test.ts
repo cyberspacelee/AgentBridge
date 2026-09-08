@@ -33,6 +33,7 @@ for (const engine of ["pi", "opencode"] as const)
       const session: Session = {
         id: randomUUID(),
         title: "Native smoke",
+        titleSource: "user",
         directory,
         engineId: engine,
         interactionPolicy: { permission: "auto", question: "auto" },
@@ -353,7 +354,7 @@ for (const engine of ["pi", "opencode"] as const)
         );
         assert.equal(pending.kind, "permission");
         await assert.rejects(readFile(output), { code: "ENOENT" });
-        await runtime.reply(pending.id, { decision: "once" });
+        await runtime.reply(pending.id, { reply: "once" });
         const result = await within(runtime.wait(accepted.runId), 20000);
         assert.equal(result.state, "completed", JSON.stringify(result.error));
         assert.equal(await readFile(output, "utf8"), "native tool verified\n");
@@ -373,10 +374,10 @@ for (const engine of ["pi", "opencode"] as const)
         const messages = store.messages(accepted.sessionId);
         assert.ok(
           messages.some((m) =>
-            m.parts.some((p) => p.type === "tool" && p.state === "completed"),
+            m.parts.some((p) => p.type === "tool" && p.state.status === "completed"),
           ),
         );
-        assert.equal(messages.at(-1)?.finishReason, "stop");
+        assert.equal(messages.at(-1)?.info.finish, "stop");
         assert.ok(messages.at(-1)?.parts.some((p) => p.type === "step-finish"));
         const originalBinding = store.db
           .prepare(

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const defaultGateway = Object.freeze({ host: "127.0.0.1", port: 6217 });
+
 export const gatewaySchema = z.object({
   host: z.union([z.ipv4(), z.ipv6(), z.literal("localhost")]),
   port: z.number().int().min(0).max(65535),

@@ -30,14 +30,14 @@ pnpm web:build
 pnpm start
 ```
 
-服务注册 Pi、OpenCode、Codex CLI 和 Grok Build。无模型配置时四个 Agent 均停用；在 `/agents` 添加兼容模型连接并按 Agent 分配、保存和启用。`--engine` 只提供首次初始化的默认值；settings.json 保存后是唯一配置源，不复用个人 CLI 目录。
+服务注册 Pi、OpenCode、Codex CLI 和 Grok Build。无模型配置时四个 Agent 均停用；在 `/agents` 添加兼容模型连接并按 Agent 分配、保存和启用。Desktop 使用 settings.json 中的默认 Agent；创建会话可用 engineId 覆盖。Web 命令行显式 `--engine` 覆盖本次进程的默认 Agent，不改写保存值，不复用个人 CLI 目录。
 
-访问 http://127.0.0.1:3000/tasks、http://127.0.0.1:3000/observability 和 http://127.0.0.1:3000/settings。支持当前目录 `.env`，变量见 [.env.example](.env.example)。开发分别运行 `pnpm dev --engine pi` 和 `pnpm web:dev`。
+访问 http://127.0.0.1:6217/tasks、http://127.0.0.1:6217/observability 和 http://127.0.0.1:6217/settings。支持当前目录 `.env`，变量见 [.env.example](.env.example)。开发分别运行 `pnpm dev --engine pi` 和 `pnpm web:dev`。
 
-分层：`shared` 为应用契约，`src/domain` 为状态规则，`src/runtime` 为会话/执行/交互用例，`src/storage` 为 SQLite 和事务事件，`src/engines` 为适配器与进程，`src/gateway` 为 HTTP/SSE/评测映射，`src/observability` 为指标，`web` 为前端，`tools` 为 Pi 交互扩展和打包脚本。办公能力通过 skill/MCP 接入。测试引擎仅位于 `test/`，不注册进生产入口。
+分层：`shared` 为应用契约，`src/domain` 为状态规则，`src/runtime` 为会话/执行/交互用例，`src/storage` 为 SQLite 和事务事件，`src/engines` 为适配器与进程，`src/gateway` 为 HTTP/SSE 传输，`src/observability` 为指标，`web` 为前端，`tools` 为 Pi 交互扩展和打包脚本。办公能力通过 skill/MCP 接入。测试引擎仅位于 `test/`，不注册进生产入口。
 
 `host/` 为两种入口共用的 Node 启动与网络管理，`desktop/` 只提供 Electron 系统集成。新实例均默认受管 CLI；每个 Agent 可检测并绑定外部命令。浏览器直接使用相同管理页面，无需配对。Web/Desktop 均可在“系统信息 → 网关服务”配置监听地址和端口。接口文档与自动评测脚本见 [网关 API](docs/GATEWAY_API.md)，运行后可通过 `/api/docs` 阅读。详见[统一运行方案](../docs/design/WEB_DESKTOP.md)。历史配置与数据库不兼容，不提供迁移。
 
-四个内置 Agent 通过 /agents 独立管理，配置与个人 CLI 目录隔离。新增引擎实现 `EngineAdapter`，在 `src/main.ts` 注册，同步更新配置与共享契约中的引擎枚举以及前端选项。引擎原生事件在适配器边界转换为共享 Message/Interaction，再由网关 serializer 输出评测协议。
+四个内置 Agent 通过 /agents 独立管理，配置与个人 CLI 目录隔离。新增引擎实现 `EngineAdapter`，在 `src/main.ts` 注册，同步更新配置与共享契约中的引擎枚举以及前端选项。引擎原生事件只在适配器边界转换为共享 Message/Interaction；HTTP、SSE 和前端直接使用同一份契约。schemaVersion 与数据库版本均为 1，不提供历史别名、历史字段兼容或迁移。
 
 `pnpm test` 检查网关；先执行 `pnpm web:build` 和 `pnpm exec playwright install chromium`，再通过 `pnpm test:browser` 检查桌面/手机流程。当前验证范围、截图及剩余限制见 [UI QA 报告](artifacts/ui/qa/README.md)。

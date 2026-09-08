@@ -814,20 +814,23 @@ function InteractionRow({
         <Status state={busy ? "replying" : i.state} />
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
-        {i.policy === "auto" ? "自动策略" : "人工处理"} · {date(i.createdAt)}
+        {i.policy === "auto" ? "自动策略" : "人工处理"} · {date(i.created_at)}
       </p>
       {i.state === "pending" && i.kind === "permission" && (
         <div className="flex flex-col gap-3">
           <p className="text-xs text-muted-foreground">
-            始终允许的范围由当前引擎权限策略决定。
+            {i.permission} · 始终允许的范围由当前引擎权限策略决定。
           </p>
+          {i.patterns.length > 0 && (
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{i.patterns.join("\n")}</pre>
+          )}
           <div className="flex flex-wrap gap-2">
             {(["once", "always", "reject"] as const).map((decision, index) => (
               <Button
                 key={decision}
                 variant={decision === "reject" ? "destructive" : "outline"}
                 disabled={busy}
-                onClick={() => void reply({ decision })}
+                onClick={() => void reply({ reply: decision })}
               >
                 {["允许本次", "始终允许", "拒绝"][index]}
               </Button>
@@ -847,14 +850,14 @@ function InteractionRow({
               {i.questions.map((q, index) => (
                 <FieldSet key={index}>
                   <FieldLegend id={`${i.id}-${index}-legend`} variant="label">
-                    {q.text}
+                    {q.question}
                   </FieldLegend>
                   {q.options.length ? (
                     q.multiple ? (
                       <FieldGroup>
                         {q.options.map((option, optionIndex) => (
                           <Field
-                            key={option}
+                            key={option.label}
                             orientation="horizontal"
                             data-disabled={busy || i.state !== "pending"}
                           >
@@ -862,7 +865,7 @@ function InteractionRow({
                               id={`${i.id}-${index}-${optionIndex}`}
                               disabled={busy || i.state !== "pending"}
                               checked={
-                                answers[index]?.includes(option) ?? false
+                                answers[index]?.includes(option.label) ?? false
                               }
                               onCheckedChange={(checked) =>
                                 setAnswers((previous) =>
@@ -870,8 +873,8 @@ function InteractionRow({
                                     n !== index
                                       ? a
                                       : checked
-                                        ? [...a, option]
-                                        : a.filter((v) => v !== option)
+                                        ? [...a, option.label]
+                                        : a.filter((v) => v !== option.label)
                                   )
                                 )
                               }
@@ -879,7 +882,8 @@ function InteractionRow({
                             <FieldLabel
                               htmlFor={`${i.id}-${index}-${optionIndex}`}
                             >
-                              {option}
+                              {option.label}
+                              {option.description && <span className="block text-xs text-muted-foreground">{option.description}</span>}
                             </FieldLabel>
                           </Field>
                         ))}
@@ -890,7 +894,7 @@ function InteractionRow({
                         disabled={busy || i.state !== "pending"}
                         value={
                           answers[index]?.find((answer) =>
-                            q.options.includes(answer)
+                            q.options.some((option) => option.label === answer)
                           ) ?? null
                         }
                         onValueChange={(value) => {
@@ -904,18 +908,19 @@ function InteractionRow({
                       >
                         {q.options.map((option, optionIndex) => (
                           <Field
-                            key={option}
+                            key={option.label}
                             orientation="horizontal"
                             data-disabled={busy || i.state !== "pending"}
                           >
                             <RadioGroupItem
                               id={`${i.id}-${index}-${optionIndex}`}
-                              value={option}
+                              value={option.label}
                             />
                             <FieldLabel
                               htmlFor={`${i.id}-${index}-${optionIndex}`}
                             >
-                              {option}
+                              {option.label}
+                              {option.description && <span className="block text-xs text-muted-foreground">{option.description}</span>}
                             </FieldLabel>
                           </Field>
                         ))}
@@ -925,10 +930,10 @@ function InteractionRow({
                   {(q.allowCustom || !q.options.length) && (
                     <Input
                       id={`${i.id}-${index}`}
-                      aria-label={`${q.text} 自定义回答`}
+                      aria-label={`${q.question} 自定义回答`}
                       value={
                         answers[index]
-                          ?.filter((a) => !q.options.includes(a))
+                          ?.filter((a) => !q.options.some((option) => option.label === a))
                           .join("\n") ?? ""
                       }
                       onChange={(e) =>
@@ -939,11 +944,11 @@ function InteractionRow({
                               : e.target.value
                                 ? [
                                     ...(q.multiple
-                                      ? a.filter((v) => q.options.includes(v))
+                                      ? a.filter((v) => q.options.some((option) => option.label === v))
                                       : []),
                                     e.target.value,
                                   ]
-                                : a.filter((v) => q.options.includes(v))
+                                : a.filter((v) => q.options.some((option) => option.label === v))
                           )
                         )
                       }
@@ -966,12 +971,12 @@ function InteractionRow({
       )}
       {i.reply && (
         <p className="text-sm break-words">
-          {"decision" in i.reply
+          {"reply" in i.reply
             ? {
                 once: "已允许本次",
                 always: "已按引擎策略允许",
                 reject: "已拒绝",
-              }[i.reply.decision]
+              }[i.reply.reply]
             : i.reply.answers.map((a) => a.join("、")).join("；")}{" "}
           · {date(i.resolvedAt)}
         </p>

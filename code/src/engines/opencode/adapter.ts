@@ -354,13 +354,13 @@ export class OpenCodeAdapter implements EngineAdapter {
       sessionId: native.session.id,
       runId: active.run.id,
       role: "assistant",
-      createdAt: timestamp(time.created),
+      created_at: timestamp(time.created),
       completedAt: null,
-      finishReason: null,
+      info: { finish: null },
       parts: [],
     };
     message.completedAt = time.completed ? timestamp(time.completed) : null;
-    message.finishReason = info.error
+    message.info.finish = info.error
       ? "error"
       : typeof info.finish === "string"
         ? info.finish
@@ -382,7 +382,7 @@ export class OpenCodeAdapter implements EngineAdapter {
     if (!active) return;
     const id = `${active.run.id}:${z.string().parse(p.id)}`;
     if (p.type === "text")
-      return { id, type: "text", text: z.string().parse(p.text) };
+      return { id, type: "text", content: z.string().parse(p.text) };
     if (p.type === "step-finish")
       return {
         id,
@@ -400,10 +400,10 @@ export class OpenCodeAdapter implements EngineAdapter {
         id,
         type: "tool",
         toolCallId: z.string().parse(p.callID),
-        name: z.string().parse(p.tool),
+        tool: z.string().parse(p.tool),
         input: state.input ?? {},
         output: str(state.output ?? state.error),
-        state: status === "error" ? "failed" : status,
+        state: { status: status === "error" ? "failed" : status, title: str(state.title) || z.string().parse(p.tool) },
         startedAt: time.start ? timestamp(time.start) : null,
         finishedAt: time.end ? timestamp(time.end) : null,
       };
@@ -445,7 +445,7 @@ export class OpenCodeAdapter implements EngineAdapter {
         (p) => p.id === `${active.run.id}:${str(properties.partID)}`,
       );
       if (message && target?.type === "text" && properties.field === "text") {
-        target.text += z.string().parse(properties.delta);
+        target.content += z.string().parse(properties.delta);
         active.emit({ type: "message", message: structuredClone(message) });
       }
     } else if (
@@ -457,28 +457,30 @@ export class OpenCodeAdapter implements EngineAdapter {
         event.type === "permission.asked" ? "permission" : "question";
       const interaction: Interaction = {
         id,
-        sessionId: native.session.id,
+        sessionID: native.session.id,
         runId: active.run.id,
         kind,
         title: str(properties.permission) || "Agent question",
+        permission: kind === "permission" ? z.string().parse(properties.permission) : "",
+        patterns: kind === "permission" ? z.array(z.string()).parse(properties.patterns ?? []) : [],
         questions:
           kind === "question"
             ? z
                 .array(z.record(z.string(), z.unknown()))
                 .parse(properties.questions)
                 .map((q) => ({
-                  text: z.string().parse(q.question),
+                  question: z.string().parse(q.question),
                   options: z
                     .array(z.record(z.string(), z.unknown()))
                     .parse(q.options)
-                    .map((o) => z.string().parse(o.label)),
+                    .map((o) => ({ label: z.string().parse(o.label), description: typeof o.description === "string" ? o.description : "" })),
                   multiple: q.multiple === true,
                   allowCustom: q.custom !== false,
                 }))
             : [],
         state: "pending",
         policy: native.session.interactionPolicy[kind],
-        createdAt: new Date().toISOString(),
+        created_at: new Date().toISOString(),
         resolvedAt: null,
         reply: null,
         error: null,
@@ -554,13 +556,13 @@ export class OpenCodeAdapter implements EngineAdapter {
           ? usages.reduce((n, u) => n + (u[key] ?? 0), 0)
           : null;
       return {
-        outcome: last?.finishReason === "stop" ? "completed" : "failed",
-        ...(last?.finishReason !== "stop"
+        outcome: last?.info.finish === "stop" ? "completed" : "failed",
+        ...(last?.info.finish !== "stop"
           ? {
               error:
                 active.error ??
                 engineError(
-                  `OpenCode ended without completion (finishReason=${last?.finishReason || "missing"})`,
+                  `OpenCode ended without completion (finishReason=${last?.info.finish || "missing"})`,
                 ),
             }
           : {}),
@@ -630,8 +632,8 @@ export class OpenCodeAdapter implements EngineAdapter {
     await this.request(
       `/${interaction.kind}/${encodeURIComponent(interaction.nativeId)}/reply`,
       "POST",
-      "decision" in reply
-        ? { reply: reply.decision }
+      "reply" in reply
+        ? reply
         : { answers: reply.answers },
       native.session.directory,
     );

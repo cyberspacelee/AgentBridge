@@ -141,23 +141,23 @@ function designFixture() {
         sessionId: "design-fixture",
         runId: run.id,
         role: "assistant",
-        createdAt: at,
+        created_at: at,
         completedAt: at,
-        finishReason: "stop",
+        info: { finish: "stop" },
         parts: [
           {
             id: "text",
             type: "text",
-            text: '# 网关检查结果\n\n已完成检查，**需要处理一项异常**。\n\n| 服务 | 状态 |\n| --- | --- |\n| 文档处理 | 就绪 |\n| 搜索服务 | 连接超时 |\n\n- [x] 检查连接\n- [ ] 处理超时\n\n```json\n{"status": "degraded"}\n```\n\n[公开参考](https://example.com) [危险链接](javascript:alert(1)) ![外部图片](https://example.com/tracking.png)\n\n<script>window.hacked=true</script>',
+            content: '# 网关检查结果\n\n已完成检查，**需要处理一项异常**。\n\n| 服务 | 状态 |\n| --- | --- |\n| 文档处理 | 就绪 |\n| 搜索服务 | 连接超时 |\n\n- [x] 检查连接\n- [ ] 处理超时\n\n```json\n{"status": "degraded"}\n```\n\n[公开参考](https://example.com) [危险链接](javascript:alert(1)) ![外部图片](https://example.com/tracking.png)\n\n<script>window.hacked=true</script>',
           },
           {
             id: "tool",
             type: "tool",
             toolCallId: "call-sample",
-            name: "search",
+            tool: "search",
             input: { path: "C:/workspace/report.json" },
             output: "连接超时：上游搜索服务没有响应。",
-            state: "failed",
+            state: { status: "failed", title: "search" },
             startedAt: at,
             finishedAt: "2026-09-06T06:00:04.000Z",
           },
@@ -652,7 +652,7 @@ test("task rounds, follow mode, information panel and narrow dialogs", async ({
     ...detail.messages.find((message) => message.role === "assistant")!,
     id: "second-message",
     runId: "second-run",
-    parts: [{ id: "second-text", type: "text", text: "### 第二次执行结果" }],
+    parts: [{ id: "second-text", type: "text", content: "### 第二次执行结果" }],
   });
   await mockTask(page, detail);
   await expect(page.locator(".markdown h3")).toHaveCount(2);
@@ -812,16 +812,18 @@ test("every detail and observation subview has responsive screenshot evidence", 
   const at = new Date().toISOString();
   detail.interactions.push({
     id: "qa-permission",
-    sessionId: detail.task.id,
+    sessionID: detail.task.id,
     runId: detail.runs[0].id,
     kind: "permission",
     title: "写入检查报告",
-    questions: [],
+    permission: "",
+        patterns: [],
+        questions: [],
     state: "resolved",
     policy: "manual",
-    createdAt: at,
+    created_at: at,
     resolvedAt: at,
-    reply: { decision: "once" },
+    reply: { reply: "once" },
     error: null,
   });
   const log = {
@@ -1154,21 +1156,23 @@ test("inline questions preserve input on conflict and expire without actionable 
   const detail = designFixture();
   const interaction = {
     id: "question-sample",
-    sessionId: "design-fixture",
+    sessionID: "design-fixture",
     runId: "design-run",
     kind: "question",
     title: "选择检查范围",
-    questions: [
+    permission: "",
+        patterns: [],
+        questions: [
       {
-        text: "检查项目",
-        options: ["连接", "文件"],
+        question: "检查项目",
+        options: [{ label: "连接", description: "" }, { label: "文件", description: "" }],
         multiple: true,
         allowCustom: true,
       },
     ],
     state: "pending",
     policy: "manual",
-    createdAt: "2026-09-06T06:00:00.000Z",
+    created_at: "2026-09-06T06:00:00.000Z",
     resolvedAt: null,
     reply: null,
     error: null,
@@ -1265,7 +1269,7 @@ test("execution workspace keeps messages primary across viewport sizes", async (
   test.skip(info.project.name !== "desktop", "Responsive matrix runs once");
   test.setTimeout(90000);
   const detail = designFixture();
-  detail.messages[0].parts[0].text = "执行输出，保留可读的上下文。\n\n".repeat(
+  detail.messages[0].parts[0].content = "执行输出，保留可读的上下文。\n\n".repeat(
     100,
   );
   await mockTask(page, detail);
@@ -1348,14 +1352,14 @@ test("history scroll stays put on updates and IME does not submit", async ({
     "Desktop scroll container behavior",
   );
   const detail = designFixture();
-  detail.messages[0].parts[0].text = "历史记录。\n\n".repeat(100);
+  detail.messages[0].parts[0].content = "历史记录。\n\n".repeat(100);
   await mockTask(page, detail);
   const log = page.getByLabel("执行消息", { exact: true });
   await log.evaluate((element) => {
     element.scrollTop = 0;
     element.dispatchEvent(new Event("scroll"));
   });
-  detail.messages[0].parts[0].text += "新的累计输出";
+  detail.messages[0].parts[0].content += "新的累计输出";
   await page.getByRole("button", { name: "刷新任务", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "回到最新进度" }),
@@ -1453,7 +1457,7 @@ test("tool states, keyboard focus, reduced motion and enlarged text", async ({
 }, info) => {
   const detail = designFixture();
   const toolPart = detail.messages[0].parts[1];
-  toolPart.state = "running";
+  toolPart.state.status = "running";
   toolPart.output = "";
   toolPart.finishedAt = null as unknown as string;
   await mockTask(page, detail);
@@ -1471,7 +1475,7 @@ test("tool states, keyboard focus, reduced motion and enlarged text", async ({
     ["cancelled", "已取消"],
     ["interrupted", "已中断"],
   ]) {
-    toolPart.state = state;
+    toolPart.state.status = state;
     await page.getByRole("button", { name: "刷新任务", exact: true }).click();
     await expect(tool.locator(".status")).toHaveText(label);
   }
@@ -1782,21 +1786,23 @@ test("single choice keyboard navigation and custom answers remain exclusive", as
   const detail = designFixture();
   detail.interactions.push({
     id: "single-choice",
-    sessionId: "design-fixture",
+    sessionID: "design-fixture",
     runId: "design-run",
     kind: "question",
     title: "选择输出格式",
-    questions: [
+    permission: "",
+        patterns: [],
+        questions: [
       {
-        text: "输出格式",
-        options: ["Markdown", "JSON"],
+        question: "输出格式",
+        options: [{ label: "Markdown", description: "" }, { label: "JSON", description: "" }],
         multiple: false,
         allowCustom: true,
       },
     ],
     state: "pending",
     policy: "manual",
-    createdAt: "2026-09-06T06:00:00.000Z",
+    created_at: "2026-09-06T06:00:00.000Z",
     resolvedAt: null,
     reply: null,
     error: null,

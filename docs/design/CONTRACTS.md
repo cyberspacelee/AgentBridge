@@ -1,6 +1,6 @@
 # 接口与事件契约
 
-本文区分本网关可自行确定的应用契约，以及必须核对原文的评测 wire contract。后续实现以提交到源码的 JSON Schema/OpenAPI 为机器可读定义，并据此生成或校验前端类型；本文不把未见到的赛题 schema 标记为已兼容。
+网关只有一套消息、交互和事件契约，以 code/shared/contracts.ts 的 Zod 请求定义和共享类型为准。引擎适配器负责原生协议转换；HTTP、SSE、Web/Desktop 与评测直接使用共享对象。所有 schemaVersion 与数据库版本为 1，不兼容历史格式，不提供迁移。
 
 ## 1. 公共约定
 
@@ -18,13 +18,13 @@
 
 | 方法与路径 | 已有需求 | HTTP 成功语义 |
 | --- | --- | --- |
-| POST `/session` | directory 必需，title 可选；创建原生会话后返回 `{id,title,created_at,status:"idle"}` | 创建成功；精确状态码核对原文 |
+| POST `/session` | directory 必需，title 可选；创建原生会话后返回 `{id,title,created_at,status:"idle"}` | 200 |
 | GET `/session/{id}` | 详情与 message_count | 当前快照 |
 | DELETE `/session/{id}` | 取消执行、清理原生资源、删除记录 | `{ok:true}` 只在清理完成后返回 |
 | GET `/session/status` | 所有会话的 `{sessionId:{type:"idle"|"busy"}}` | 运行状态投影，不是健康结果 |
-| POST `/session/{id}/prompt_async` | parts、model；接收后等待该 Run 终态 | completed 且最终快照已提交时返回无 body 的 204 |
+| POST `/session/{id}/prompt_async` | parts、model、可选 agent:assistant；等待该 Run 终态 | completed 且最终快照已提交时返回无 body 的 204 |
 | GET `/session/{id}/message` | 消息快照 | 正常完成时最后为 assistant，finish=stop，含 step-finish |
-| POST `/session/{id}/abort` | 请求停止并等待确认 | `{ok:true}`；精确取消范围核对原文 |
+| POST `/session/{id}/abort` | 请求停止并等待确认 | 200 `{ok:true}`；取消活动执行与排队项 |
 | POST `/session/{id}/stop` | abort 别名 | 使用同一用例 |
 | GET `/event` | 全局 SSE，connected 与 15s 心跳 | 正确的 SSE 长连接 |
 | GET `/permission` | 待处理权限 | 列表，可为空 |
@@ -34,9 +34,11 @@
 
 必须具备的事件类型：server.connected、server.heartbeat、session.status、session.idle、session.error、message.part.updated、question.asked、permission.asked。question/permission 在真实请求发生时发出；不能为了“全部必发”伪造用户交互。是否另需演示覆盖以赛题解释为准。
 
-完整消息对象、info 时间字段、part ID、SSE 外层包装、交互回复 body、取消和超时状态码均以原始协议确认。通过单独 serializer 映射领域对象；不得直接透传 OpenCode 消息，也不得要求 Pi 伪装成完整 OpenCode 服务。
+Message 使用顶层 id、sessionId、runId、role、created_at、completedAt、info.finish 和 parts。text part 使用 content；tool part 使用 tool、toolCallId、input、output、state.status/title 和时间；step-finish 使用 reason、usage。查询接口返回同一快照，SSE message.part.updated 的 properties 为 {sessionID,messageID,part}。只有最终 assistant 的 info.finish=stop 且包含 step-finish 才表示成功回复。
 
-myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表：旧方法/路径、旧请求 schema、目标用例、旧响应 serializer、测试样例。路径别名只有在请求响应字段等价时才做简单映射；字段不同必须转换，不能猜测别名后宣称支持。
+Interaction 直接使用 sessionID、created_at、permission/patterns、questions[].question、options[].label/description；回复为 {reply:once|always|reject,message?} 或 {answers:string[][]}。不接受 decision 等历史字段。默认交互策略统一来自 Agent 配置，初值 auto/auto；创建会话可显式覆盖。
+
+Desktop 默认引擎来自 settings.defaultAgent；创建会话的 engineId 优先且会话创建后固定。独立命令行的 --engine 只覆盖本次进程默认值，不改写设置。默认端口 6217。标准评测请求应传入 model；网关所有提交入口额外支持省略 model 后继承本会话模型或所选 Agent 默认模型，未配置可用模型时失败，不静默更换显式指定模型。
 
 ## 3. 应用 API
 
@@ -58,7 +60,7 @@ myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表�
 | GET `/api/runs/{id}` | 无 | RunDetail 与该轮初始消息页 |
 | GET `/api/runs/{id}/messages` | cursor、limit | 完整 Message 与 parts 的分页快照 |
 | GET `/api/submissions/{id}` | operation、sessionId（按操作需要） | processing、accepted、rejected、indeterminate 及可公开结果 |
-| GET `/api/events` | 可选 sessionId；Last-Event-ID | 全局或指定会话的应用事件 |
+| GET `/event` | 可选 sessionId；Last-Event-ID | 全局或指定会话的应用事件 |
 | GET `/api/artifacts/{id}` | 无 | 文件元数据、可用性、验证结果 |
 | GET `/api/artifacts/{id}/content` | disposition=inline 或 attachment | 流式文件；inline 只允许受控文本 |
 | GET `/api/observability/overview` | engine、from、to | agents: 所选范围各 Agent 的状态快照；health 仅在指定单个 Agent 时返回，否则为 null；配额、执行统计和异常提示 |
@@ -69,7 +71,7 @@ myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表�
 | GET `/health/ready` | 无 | 存储、初始化与引擎前提可用；未就绪为 503 |
 | GET `/metrics` | 无 | Prometheus 文本格式 |
 
-中止、删除和交互回复复用会话/交互控制用例与已有控制路由，前端客户端模块集中转换 wire body。客户端不能直接依赖原生引擎 API。
+中止、删除和交互回复复用会话/交互控制用例与已有控制路由，前端直接使用共享请求类型。客户端不能直接依赖原生引擎 API。
 
 ### CreateTaskInput
 
@@ -86,7 +88,7 @@ myagent 1.1 的八个路由别名尚未提供。收到原文后建立逐行表�
 
 title 可选；空白 title 由服务端生成普通任务标题。directory 与 parts 必需。engineId 缺省使用 defaultAgent。interactionPolicy 缺省使用 Agent 的已应用策略，允许请求覆盖 auto/manual；自动答案内容来自受控配置。
 
-SubmitRunInput 仅包含 submissionId、parts 与可选 model；不得在追加轮次时改变 Session 的目录或引擎。
+SubmitRunInput 包含 submissionId、parts、可选 model 与 agent；不得在追加轮次时改变 Session 的目录或引擎。
 
 ### AcceptedRun
 
@@ -128,7 +130,7 @@ TaskDetail 与 RunDetail 使用同一 snapshot 元数据，但携带 detail 而�
 
 ## 4. 事件契约
 
-领域事件和应用 SSE 使用相同业务事实，评测 SSE 通过独立 serializer 形成赛题规定的包装。
+领域事件持久化后直接通过 /event 推送；不存在评测 serializer 或第二份事件格式。
 
 ```json
 {
@@ -140,9 +142,10 @@ TaskDetail 与 RunDetail 使用同一 snapshot 元数据，但携带 detail 而�
   "type": "message.part.updated",
   "sessionId": "ses_opaque_id",
   "runId": "run_opaque_id",
-  "data": {
-    "messageId": "msg_opaque_id",
-    "part": { "id": "part_opaque_id", "type": "text", "text": "正在读取工作簿。" }
+  "properties": {
+    "sessionID": "ses_opaque_id",
+    "messageID": "msg_opaque_id",
+    "part": { "id": "part_opaque_id", "type": "text", "content": "正在读取工作簿。" }
   }
 }
 ```
@@ -160,11 +163,11 @@ eventId 为 storeId 与持久化事件序号，逐事件递增；revision 为业
 | interaction.updated | 最新回复状态，不重复发送原生回复 |
 | artifact.updated | 文件登记或检查状态变化 |
 | agents.updated | Agent 启停、配置应用与可公开状态 |
-| session.status / session.idle / session.error | 评测 serializer 所需的规范化状态或错误事实 |
+| session.status / session.idle / session.error | 规范化会话状态或错误事实 |
 
 server.connected、server.heartbeat、server.resync_required 为连接控制事件，不写业务日志、不带持久化 SSE id，不推进业务 cursor。connected 包含当前 instanceId/storeId、保留窗口最早和最新 cursor。
 
-SSE 帧使用 `id:`（仅业务事件）、`event:` 与 `data:`，空行分隔；响应设置 text/event-stream、禁止缓存和代理缓冲，15s 心跳。评测流是否允许 `event:` 命名行等细节仍按原文验证。
+SSE 帧使用 `id:`（仅业务事件）与 `data:`，不发送命名 event 行；data 中的 type 标识事件。响应为 text/event-stream; charset=utf-8，禁止缓存和代理缓冲，15s 心跳。前端使用 EventSource.onmessage。
 
 ### 回放与快照恢复
 

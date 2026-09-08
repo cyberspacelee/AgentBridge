@@ -48,7 +48,7 @@ export function readSettings(config: Config): Settings {
   const file = path.join(config.dataDirectory, "settings.json");
   if (existsSync(file)) {
     const value = readJson(file);
-    if (value.schemaVersion !== 3) throw new GatewayError("CONFIGURATION_ERROR", "不支持历史配置。请使用新的数据目录重新配置；不提供迁移。", 400);
+    if (value.schemaVersion !== 1) throw new GatewayError("CONFIGURATION_ERROR", "不支持历史配置。请使用新的数据目录重新配置；不提供迁移。", 400);
     return settingsSchema.parse(value);
   }
   const settings = settingsSchema.parse({ defaultAgent: config.engine });

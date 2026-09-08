@@ -107,7 +107,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 
 设置 `AGENT_DESKTOP_DATA_DIR` 为绝对路径可覆盖根目录，例如指定 `/home/me/AgentBridge` 后，配置位于 `/home/me/AgentBridge/data/settings.json`。应用菜单的“打开日志目录”可直接定位日志。
 
-Web 默认 `.agentbridge`，Desktop 默认用户数据目录下的 `data/`；两者使用同一当前数据格式。不同实例使用不同目录。不兼容历史数据，不提供迁移。备份完整的业务数据目录应先显式退出应用；同一数据目录只允许一个网关写入。桌面内置网关默认 `127.0.0.1:3000`，在“系统信息 → 网关服务”配置监听地址、端口，保存并重启后可供本机或局域网调用；无需额外安装 server。完整接口与自动化评测示例见[网关 API](code/docs/GATEWAY_API.md)，运行中可访问 `/api/docs`。
+Web 默认 `.agentbridge`，Desktop 默认用户数据目录下的 `data/`；两者使用同一当前数据格式。不同实例使用不同目录。不兼容历史数据，不提供迁移。备份完整的业务数据目录应先显式退出应用；同一数据目录只允许一个网关写入。桌面内置网关默认 `127.0.0.1:6217`，在“系统信息 → 网关服务”配置监听地址、端口，保存并重启后可供本机或局域网调用；无需额外安装 server。完整接口与自动化评测示例见[网关 API](code/docs/GATEWAY_API.md)，运行中可访问 `/api/docs`。
 
 ### 源码 Web 模式
 
@@ -122,7 +122,7 @@ pnpm web:build
 pnpm start
 ```
 
-浏览器访问 `http://127.0.0.1:3000/agents`，无需配对码。新 Web/Desktop 实例均默认受管来源；在“安装与版本”按需安装，或输入主机已有 CLI 命令并验证切换。Pi/OpenCode 开发依赖用于开发验证，不决定业务实例的来源。详情见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
+浏览器访问 `http://127.0.0.1:6217/agents`，无需配对码。新 Web/Desktop 实例均默认受管来源；在“安装与版本”按需安装，或输入主机已有 CLI 命令并验证切换。Pi/OpenCode 开发依赖用于开发验证，不决定业务实例的来源。详情见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
 
 首次无配置启动时四个 Agent 均停用。前端与管理 API 仍可访问；就绪状态不代表模型连接、额度或凭据验证通过。
 
@@ -134,7 +134,7 @@ pnpm start
 4. 修改已启用 Agent 的配置后，点击应用。页面分别显示保存修订与已应用修订；保存不会改变正在执行的进程配置。
 5. 连接测试会向已保存的供应商发送一次最多 64 个输出 token 的请求，超时 30 秒。它可能产生模型费用。
 
-配置唯一来源是 `AGENT_DATA_DIR/settings.json`。文件包含 `schemaVersion: 3`、`defaultAgent`、四项 `agents`、`providers`、`skills`、`mcp`。每个 Agent 保存模型引用、默认模型、Skill/MCP 引用和默认交互策略。删除被引用的资源前须解除引用。
+配置唯一来源是 `AGENT_DATA_DIR/settings.json`。文件包含 `schemaVersion: 1`、`defaultAgent`、四项 `agents`、`providers`、`skills`、`mcp`。每个 Agent 保存模型引用、默认模型、Skill/MCP 引用和默认交互策略。删除被引用的资源前须解除引用。
 
 密钥只在服务器保存；API 返回掩码，保留掩码表示不改，清空表示移除。POSIX 新建配置文件权限为 0600，目录为 0700。保存使用 revision 乐观并发控制，冲突须刷新后重新编辑。
 
@@ -176,11 +176,11 @@ Codex/Grok 每个会话有独立的托管 HOME，加载前检查原生 Skill 发
 
 ## 启动参数与环境
 
-源码 Web 启动器只读取启动工作目录的 `.env`，已有进程环境变量优先。CLI 的 host/port/engine 参数覆盖对应环境变量。业务配置保存后，以 settings.json 为准。两种入口均按 Web CLI host/port > AGENT_HOST/AGENT_PORT > system.json 的 gateway > 默认 127.0.0.1:3000 初始化监听设置。Desktop 不加载 `.env`；更改桌面数据位置使用 `AGENT_DESKTOP_DATA_DIR`。
+源码 Web 启动器只读取启动工作目录的 `.env`，已有进程环境变量优先。CLI 的 host/port/engine 参数覆盖对应环境变量。Desktop 使用 settings.json 的默认 Agent；Web 显式 --engine 或 AGENT_ENGINE 仅覆盖本次进程的默认值，会话 engineId 优先且创建后固定。两种入口均按 Web CLI host/port > AGENT_HOST/AGENT_PORT > system.json 的 gateway > 默认 127.0.0.1:6217 初始化监听设置。Desktop 不加载 `.env`；更改桌面数据位置使用 `AGENT_DESKTOP_DATA_DIR`。
 
 | 配置 | 范围 |
 | --- | --- |
-| `AGENT_HOST` / `AGENT_PORT` | 默认 127.0.0.1 / 3000 |
+| `AGENT_HOST` / `AGENT_PORT` | 默认 127.0.0.1 / 6217 |
 | `AGENT_DATA_DIR` | 源码模式默认当前目录下 .agentbridge，多个实例必须分开 |
 | `AGENT_DESKTOP_DATA_DIR` | 桌面用户数据根目录，业务数据位于其 data/ 子目录 |
 | `AGENT_MANAGED_RUNTIMES=false` | 仅首次初始化为外部来源，默认受管；之后逐 Agent 管理 |
@@ -205,7 +205,7 @@ AGENT_OPENAI_API_KEY=replace-with-your-key
 
 不要把真实密钥提交到 Git。当前 settings 和数据库版本均为 3；历史格式一律拒绝，不提供兼容或迁移，不覆盖原文件。使用新的 AGENT_DATA_DIR，按新设计重新配置。
 
-局域网可运行 `pnpm start --host 0.0.0.0 --port 3000`，Desktop 也可在网关服务页面保存相同监听设置。Web、HTTP/SSE、产物与指标均无需网关鉴权；外部脚本直接调用桌面监听地址。修改地址/端口重启后 desktop 自动重连，Web 使用新地址打开。
+局域网可运行 `pnpm start --host 0.0.0.0 --port 6217`，Desktop 也可在网关服务页面保存相同监听设置。Web、HTTP/SSE、产物与指标均无需网关鉴权；外部脚本直接调用桌面监听地址。修改地址/端口重启后 desktop 自动重连，Web 使用新地址打开。
 
 系统网络、网关配置、重启和证书接口及平台边界见[Web/Desktop 统一运行](docs/design/WEB_DESKTOP.md)。
 

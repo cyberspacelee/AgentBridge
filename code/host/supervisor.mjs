@@ -5,7 +5,7 @@ import { access, mkdir, readFile, writeFile, rename, realpath, rm } from "node:f
 import { constants } from "node:fs";
 import path from "node:path";
 import { networkInterfaces } from "node:os";
-import { gatewaySchema, gatewayUrl } from "./gateway.mjs";
+import { gatewaySchema, gatewayUrl, defaultGateway } from "./gateway.mjs";
 import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment } from "./network.mjs";
 
 const revision = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -89,7 +89,7 @@ export class Supervisor {
       const value = match[2] ?? options.args[++i];
       this.gatewayOverrides[match[1]] = match[1] === "port" ? Number(value) : value;
     }
-    this.gateway = gatewaySchema.parse({ host: "127.0.0.1", port: 3000, ...this.gatewayOverrides });
+    this.gateway = gatewaySchema.parse({ ...defaultGateway, ...this.gatewayOverrides });
     this.appliedGateway = this.gateway;
   }
   async initialize() {

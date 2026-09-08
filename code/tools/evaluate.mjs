@@ -1,45 +1,82 @@
 import { parseArgs } from "node:util";
-import { randomUUID } from "node:crypto";
-import { setTimeout } from "node:timers/promises";
+import { Readable } from "node:stream";
+import { createInterface } from "node:readline";
 
 const { values } = parseArgs({ options: {
-  url: { type: "string", default: "http://127.0.0.1:3000" },
+  url: { type: "string", default: "http://127.0.0.1:6217" },
   directory: { type: "string" },
-  engine: { type: "string", default: "pi" },
+  engine: { type: "string" },
+  provider: { type: "string" },
+  model: { type: "string" },
   prompt: { type: "string", default: "只回复 OK" },
   timeout: { type: "string", default: "660000" },
 } });
 if (!values.directory) throw new Error("请用 --directory 指定网关主机上存在的绝对工作目录");
+if (!!values.provider !== !!values.model) throw new Error("--provider 和 --model 必须一起传入");
 const timeout = Number(values.timeout);
 if (!Number.isSafeInteger(timeout) || timeout < 1000 || timeout > 2147483647) throw new Error("--timeout 必须为 1000–2147483647 毫秒");
-const signal = AbortSignal.timeout(timeout);
+const deadline = AbortSignal.timeout(timeout);
 const base = new URL(values.url);
 if (!["http:", "https:"].includes(base.protocol) || base.username || base.password) throw new Error("--url 必须为无凭据的 HTTP(S) 网关地址");
-async function request(route, body) {
+async function request(route, body, signal = deadline) {
   const response = await fetch(new URL(route, base), {
     signal, ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${JSON.stringify(result)}`);
-  return result;
+  const result = response.status === 204 ? null : await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.message ?? `HTTP ${response.status}`), { code: result.code, status: response.status });
+  return { status: response.status, result };
 }
-await request("/health/ready");
-const submissionId = randomUUID();
-// Keep the submission ID in stderr so an interrupted request can be reconciled.
-process.stderr.write(`submissionId=${submissionId}\n`);
-const accepted = await request("/api/tasks", {
-  submissionId, engineId: values.engine, directory: values.directory,
-  title: "自动化网关评测", parts: [{ type: "text", text: values.prompt }],
+const { result: runtime } = await request("/api/runtime");
+const engine = runtime.engines.find((item) => item.id === (values.engine ?? runtime.engine));
+if (!engine || engine.health.status !== "ready") throw new Error("所选引擎尚未就绪");
+const model = values.model ? { providerID: values.provider, modelID: values.model } : engine.defaultModel;
+if (!model) throw new Error("请配置默认模型，或传入 --provider 和 --model");
+const { result: created } = await request("/session", {
+  directory: values.directory, ...(values.engine ? { engineId: values.engine } : {}),
   interactionPolicy: { permission: "auto", question: "auto" },
 });
-process.stderr.write(`sessionId=${accepted.sessionId} runId=${accepted.runId}\n`);
-for (;;) {
-  const { detail } = await request(`/api/runs/${encodeURIComponent(accepted.runId)}`);
-  if (["completed", "failed", "timed_out", "cancelled"].includes(detail.run.state)) {
-    const task = await request(`/api/tasks/${encodeURIComponent(accepted.sessionId)}`);
-    process.stdout.write(JSON.stringify({ ...accepted, ...detail, artifacts: task.detail.artifacts }, null, 2) + "\n");
-    if (detail.run.state !== "completed") process.exitCode = 1;
-    break;
-  }
-  await setTimeout(500, undefined, { signal });
+const sessionId = created.id;
+process.stderr.write(`sessionId=${sessionId} engineId=${created.engineId}\n`);
+const prefix = `/session/${encodeURIComponent(sessionId)}`;
+const controller = new AbortController();
+const events = {};
+let reading;
+let failure;
+let messages = [];
+let session = created;
+let completed = false;
+try {
+  const response = await fetch(new URL("/event", base), { signal: AbortSignal.any([deadline, controller.signal]), headers: { Accept: "text/event-stream" } });
+  if (!response.ok || !response.headers.get("content-type")?.startsWith("text/event-stream")) throw new Error("无法订阅 SSE 事件");
+  const idle = Promise.withResolvers();
+  reading = (async () => {
+    const lines = createInterface({ input: Readable.fromWeb(response.body) });
+    for await (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const event = JSON.parse(line.slice(5));
+      const owner = event.properties?.sessionID ?? event.sessionId;
+      if (owner && owner !== sessionId) continue;
+      events[event.type] = (events[event.type] ?? 0) + 1;
+      if (owner === sessionId && event.type === "session.idle") idle.resolve();
+    }
+    throw new Error("SSE 连接在评测结束前关闭");
+  })();
+  const prompt = await Promise.race([request(`${prefix}/prompt_async`, {
+    parts: [{ type: "text", text: values.prompt }], model, agent: "assistant",
+  }), reading]);
+  await Promise.race([idle.promise, reading]);
+  ({ result: messages } = await request(`${prefix}/message`));
+  ({ result: session } = await request(prefix));
+  const last = messages.at(-1);
+  completed = prompt.status === 204 && session.status === "idle" && last?.role === "assistant" && last.info.finish === "stop" && last.parts.some((part) => part.type === "step-finish");
+  if (!completed) throw new Error("本轮缺少成功终态或最终助手消息");
+} catch (error) {
+  failure = { code: error.code ?? "EVALUATION_FAILED", message: error.message };
+  await request(`${prefix}/abort`, {}, AbortSignal.timeout(5000)).catch(() => {});
+  ({ result: messages } = await request(`${prefix}/message`, undefined, AbortSignal.timeout(5000)).catch(() => ({ result: [] })));
+} finally {
+  controller.abort();
+  await reading?.catch(() => {});
 }
+process.stdout.write(JSON.stringify({ sessionId, engineId: created.engineId, completed, session, messages, events, ...(failure ? { error: failure } : {}) }, null, 2) + "\n");
+if (!completed) process.exitCode = 1;

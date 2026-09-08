@@ -12,14 +12,14 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 
 export function ToolCall({ part }: { part: ToolPart }) {
-  const failed = part.state === "failed" || part.state === "interrupted"
+  const failed = part.state.status === "failed" || part.state.status === "interrupted"
   const [view, setView] = useState({ failed, open: failed })
   const [limit, setLimit] = useState(4096)
   if (view.failed !== failed) setView({ failed, open: failed || view.open })
   const result = useMemo(() => {
     let text = part.output
     if (
-      part.state === "completed" &&
+      part.state.status === "completed" &&
       new TextEncoder().encode(text).length <= 65536
     ) {
       try {
@@ -34,7 +34,7 @@ export function ToolCall({ part }: { part: ToolPart }) {
     })
     if (limit === 4096) visible = visible.split("\n").slice(0, 12).join("\n")
     return { visible, more: visible.length < text.length, size: encoded.length }
-  }, [part.output, part.state, limit])
+  }, [part.output, part.state.status, limit])
   const input =
     part.input && typeof part.input === "object"
       ? (part.input as Record<string, unknown>)
@@ -46,14 +46,14 @@ export function ToolCall({ part }: { part: ToolPart }) {
     <ElapsedTime
       start={part.startedAt}
       end={part.finishedAt}
-      active={part.state === "running"}
+      active={part.state.status === "running"}
     />
   )
   return (
     <Collapsible
       render={<section />}
       className="tool-call"
-      aria-label={`工具 ${part.name}`}
+      aria-label={`工具 ${part.tool}`}
       open={view.open}
       onOpenChange={(open) => setView({ failed, open })}
     >
@@ -68,10 +68,10 @@ export function ToolCall({ part }: { part: ToolPart }) {
         )}
         <Wrench aria-hidden="true" />
         <span className="tool-name">
-          <strong>{part.name}</strong>
+          <strong>{part.tool}</strong>
           {target && <small>{target}</small>}
         </span>
-        <Status state={part.state} />
+        <Status state={part.state.status} />
         <span className="tool-duration">{elapsed}</span>
       </CollapsibleTrigger>
       <CollapsibleContent keepMounted>
@@ -90,9 +90,9 @@ export function ToolCall({ part }: { part: ToolPart }) {
           >
             <pre>
               {result.visible ||
-                (part.state === "pending"
+                (part.state.status === "pending"
                   ? "尚未开始"
-                  : part.state === "running"
+                  : part.state.status === "running"
                     ? "等待工具输出"
                     : "无文本输出")}
             </pre>

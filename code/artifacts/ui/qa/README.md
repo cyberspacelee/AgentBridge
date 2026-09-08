@@ -145,3 +145,11 @@ HTTP、SSE、SQLite、网关进程内存等是本实例指标，页面单独标�
 `pnpm test:browser` 的 3 项跳过是手机项目不重复两套视口矩阵及桌面内部滚动测试；这些用例在 desktop 项目已执行。`pnpm test` 的 4 项跳过是需显式开启的原生引擎测试，不计为已通过。
 
 复现：在 `code/` 执行 `pnpm web:build`、`pnpm test:browser`、`pnpm test`。本轮最后的针对性回归使用 `pnpm exec playwright test --grep 'empty task and observation|fixed workspace|task assignment|every detail'`。Playwright 自动启动隔离测试服务并在完成后关闭；局域网验收使用的 3000 端口服务有意保留。
+
+## 2026-09-08：统一网关契约（0.1.8）
+
+引擎适配器、SQLite、会话/任务查询、SSE 与 Web/Desktop 使用同一 Message、Interaction 和事件结构。统一 `/event`，移除评测 serializer 和旧应用事件入口；消息使用 created_at、info.finish、text.content、tool.state.status/title；权限回复使用 reply/message，问题保留选项描述。配置与数据库版本统一为 1；不兼容历史、不迁移。Desktop 忽略 AGENT_ENGINE，使用保存的默认 Agent；会话 engineId 可覆盖；默认端口 6217。
+
+验证：后端 64 项通过、6 项原生环境用例默认跳过；另行运行真实 Pi、OpenCode CLI 与本地模型夹具，均完成工具调用、人工权限、会话恢复及失败检查；Codex/Grok 协议转换测试通过。前后端类型检查、lint 和构建通过。浏览器 72 项通过、4 项按平台跳过；覆盖 desktop/mobile、人工问题与权限、消息和工具状态、运行历史、网关设置。Electron 开发模式冒烟通过，包括全新数据目录、窄窗口导航、统一 SSE、网关重启/端口切换、外部 HTTP 访问，以及继承 AGENT_ENGINE=grok 时仍采用配置默认 Pi。
+
+以上原生模型测试使用本地 HTTP 模型夹具，不等同于真实远端模型服务评测。打包验证由同一提交的 Desktop 工作流与安装目录冒烟另行记录。

@@ -19,10 +19,10 @@
 | --- | --- |
 | [后端依赖](../../code/package.json)为 TypeScript、Fastify，要求 Node.js >= 22.21.0；[存储](../../code/src/storage/sqlite.ts)直接使用 `node:sqlite` | 后端不能直接放进 WebView；需兼容 Node 运行时，或承担后端重写成本 |
 | [主入口](../../code/src/main.ts)组合 Store、SessionRuntime、四个适配器和 HTTP 服务 | 可以保留整个业务后端，仅新增桌面启动与生命周期控制 |
-| [前端 API](../../code/web/src/lib/api.ts)使用相对 URL 和 `EventSource("/api/events")`；[网关](../../code/src/gateway/server.ts)同时提供静态前端 | 桌面窗口加载网关的同源地址即可复用 HTTP/SSE；改成 `file://` 或自定义协议需额外适配 |
+| [前端 API](../../code/web/src/lib/api.ts)使用相对 URL 和 `EventSource("/event")`；[网关](../../code/src/gateway/server.ts)同时提供静态前端 | 桌面窗口加载网关的同源地址即可复用 HTTP/SSE；改成 `file://` 或自定义协议需额外适配 |
 | [进程管理](../../code/src/engines/process.ts)用 cross-spawn，Windows 通过 `taskkill /T /F` 终止引擎进程树 | 两个框架都要管理网关及其后代进程，关闭窗口不能替代受控退出 |
 | Pi/OpenCode 来自项目依赖，Codex/Grok 当前依赖主机命令；[Pi 适配器](../../code/src/engines/pi/adapter.ts)还加载 `tools/*.mjs` 扩展 | 安装包必须携带或明确安装运行时、扩展和依赖，不能只打包前端与网关 JS |
-| [配置](../../code/src/config.ts)默认端口 3000，校验不允许 0，数据目录相对 cwd | 桌面启动需要端口发现、稳定用户数据目录和独立于安装路径的工作目录 |
+| [配置](../../code/src/config.ts)默认端口 6217，支持端口 0 自动分配，数据目录由启动宿主指定 | 桌面启动需要端口发现、稳定用户数据目录和独立于安装路径的工作目录 |
 | [启动脚本](../../code/tools/start.mjs)先加载环境，再用 `process.execPath` 启动 Node | Electron 的可执行文件不能直接当普通 `node` 使用；代理和 CA 环境也要在后端启动前注入 |
 
 ## 对比

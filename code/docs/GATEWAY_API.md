@@ -4,15 +4,27 @@ Web 与 Desktop 使用同一个 Fastify 网关；桌面安装包自带 Node.js �
 
 ## 启动与地址
 
-- Desktop：启动应用，在“系统信息 → 网关服务”设置监听地址与端口，保存后点击“重启网关”。默认 `127.0.0.1:3000`；`0.0.0.0` 监听全部 IPv4 网卡，供局域网访问；也支持本机指定 IPv4/IPv6 和 localhost。端口范围 0–65535，0 自动分配；自动化建议固定端口。
-- Web：在源码 code 目录运行 `pnpm start --host 0.0.0.0 --port 3000`（此前执行 `pnpm build && pnpm web:build`）。
+- Desktop：启动应用，在“系统信息 → 网关服务”设置监听地址与端口，保存后点击“重启网关”。默认 `127.0.0.1:6217`；`0.0.0.0` 监听全部 IPv4 网卡，供局域网访问；也支持本机指定 IPv4/IPv6 和 localhost。端口范围 0–65535，0 自动分配；自动化建议固定端口。
+- Web：在源码 code 目录运行 `pnpm start --host 0.0.0.0 --port 6217`（此前执行 `pnpm build && pnpm web:build`）。
 - 局域网客户端使用 `http://<网关主机 IP>:<端口>`，主机防火墙应允许对应 TCP 端口。工作目录必须存在于网关主机上。
 - 配置保存在业务数据目录的 `system.json` 的 `gateway: {host, port}` 中；`appliedGateway` 是已生效配置。Desktop 业务数据目录为 Electron 用户数据根目录的 `data/`，可由 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
 - 启动时优先级为 Web CLI `--host/--port` > `AGENT_HOST/AGENT_PORT` > 已保存配置 > 默认值。启动参数作为本次初始配置，运行期间可以通过页面/API 修改。保留环境覆盖会在下次启动时再次覆盖文件值。
 - 保存不立即断开连接。重启可以等待任务完成或停止任务；同时应用已保存的网络代理配置。更换地址/端口后 desktop 自动重连；Web 用页面提供的新地址打开。端口占用或绑定失败时，服务内重启恢复此前监听配置，错误可从网关配置接口读取。若首次启动默认端口已被占用，可设置 `AGENT_PORT` 后启动安装程序，或退出应用后修改 `system.json` 的 gateway。
 - 托盘可用时关闭桌面窗口，网关继续运行；显式退出应用会停止网关。独立运行 server 使用 Web 启动入口。
 
-下文路径相对于 Base URL，例如 `http://127.0.0.1:3000`。在线文档为 `GET /api/docs`，示例脚本为 `GET /api/examples/evaluate.mjs`；两者随安装包离线分发。
+下文路径相对于 Base URL，例如 `http://127.0.0.1:6217`。在线文档为 `GET /api/docs`，示例脚本为 `GET /api/examples/evaluate.mjs`；两者随安装包离线分发。
+
+## 引擎、会话与默认值
+
+Desktop 从 `settings.json` 的 `defaultAgent` 读取默认引擎，不读取启动引擎参数或 `AGENT_ENGINE`。`POST /session` 和 `POST /api/tasks` 均允许可选 `engineId`，取值为 `pi/opencode/codex/grok`；未传时使用默认引擎。会话创建后固定引擎、工作目录和交互策略，修改默认设置只影响新会话。
+
+独立 Web 网关可用 `pnpm start --engine opencode --port 6217` 启动。显式 `--engine` 优先于 `AGENT_ENGINE`，只覆盖本次进程的默认引擎，不改写保存的默认值；会话显式 `engineId` 仍优先。新配置的默认引擎为 Pi，配置模型并启用后才能创建会话。
+
+交互策略的唯一优先级是创建会话的 `interactionPolicy` > 所选 Agent 的已应用配置。初值为 `{permission:"auto",question:"auto"}`；auto 权限自动批准，auto 问题按首个选项或配置的默认文本回答。manual 会等待 HTTP 回复。所有入口遵循同一规则，不按评测/页面设置不同默认值。
+
+`title` 可选，未填写先显示 Untitled task，接收第一条消息时自动更新为该消息的前 80 个字符（合并空白）；显式标题保持用户输入。消息请求的 `agent` 是助手角色，目前支持省略或 `"assistant"`，使用所选引擎的默认助手，不是引擎 ID。标准评测请求传入 `model:{providerID,modelID}`；所有提交入口还允许省略 model 并继承本会话模型或 Agent 默认模型。显式 model 必须属于所选 Agent，不会静默换成其他模型。
+
+配置、运行时清单、事件的 `schemaVersion` 和 SQLite 数据库版本均为 **1**。不兼容历史配置、历史请求字段或旧数据库，不提供迁移；使用全新的业务数据目录。当前契约定义在 `shared/contracts.ts`，引擎适配器是唯一的原生协议转换边界。
 
 ## 通用约定
 
@@ -51,11 +63,11 @@ Web 与 Desktop 使用同一个 Fastify 网关；桌面安装包自带 Node.js �
 端口配置例子（revision 替换为 GET 结果）：
 
 ```sh
-curl http://127.0.0.1:3000/api/system/gateway
-curl -X PUT http://127.0.0.1:3000/api/system/gateway \
+curl http://127.0.0.1:6217/api/system/gateway
+curl -X PUT http://127.0.0.1:6217/api/system/gateway \
   -H 'Content-Type: application/json' \
   -d '{"revision":"<revision>","settings":{"host":"0.0.0.0","port":3100}}'
-curl -X POST http://127.0.0.1:3000/api/system/lifecycle \
+curl -X POST http://127.0.0.1:6217/api/system/lifecycle \
   -H 'Content-Type: application/json' -d '{"action":"restart","mode":"wait"}'
 curl http://127.0.0.1:3100/health/live
 ```
@@ -82,7 +94,7 @@ curl http://127.0.0.1:3100/health/live
 ## 推荐自动评测：提交后按 Run 轮询
 
 ```sh
-curl -X POST http://127.0.0.1:3000/api/tasks \
+curl -X POST http://127.0.0.1:6217/api/tasks \
   -H 'Content-Type: application/json' \
   -d '{"submissionId":"case-001-attempt-1","engineId":"pi","directory":"/absolute/workspace","title":"评测 case-001","parts":[{"type":"text","text":"只回复 OK"}],"interactionPolicy":{"permission":"auto","question":"auto"}}'
 ```
@@ -94,51 +106,91 @@ curl -X POST http://127.0.0.1:3000/api/tasks \
 - `submissionId` 必填，1–128 个字母、数字、下划线或短横线。同一操作/目标以相同 ID 和相同请求重试返回原结果，不重复执行；同 ID 不同输入冲突。每次新评测使用新 ID。提交结果不明时查询 `GET /api/submissions/:id?operation=create`；追加用 `operation=append&sessionId=...`，根据 status/result/error 对账，不盲目换 ID 重发。
 - 轮询 `GET /api/runs/:runId`，响应 `{snapshot,detail:{run,messages}}`。run.state 为 queued/running/stopping 或终态 completed/failed/timed_out/cancelled。只把 completed 算成功。run 还包含 error、usage、时间戳、traceId、configRevision 和 runtimeVersion。
 - 多轮任务使用 `POST /api/tasks/:sessionId/runs`，体为 `{submissionId,parts,model?}`，返回同样的 202；同会话串行，不重放旧执行。
-- `GET /api/tasks/:id` 返回 `{snapshot,detail:{task,runs,messages,interactions,artifacts}}`。messages 中有 role、runId、parts；text part 的 text 是文本，tool part 包含 name/input/output/state，step-finish 包含 usage。usage 缺失字段为 null，不能当作零消耗。
+- `GET /api/tasks/:id` 返回 `{snapshot,detail:{task,runs,messages,interactions,artifacts}}`。messages 中有 role、runId、parts；text part 的 content 是文本，tool part 包含 tool/input/output/state.status/state.title，step-finish 包含 usage。usage 缺失字段为 null，不能当作零消耗。
 - `GET /api/tasks`、`GET /api/tasks/:id/runs`、`GET /api/runs/:id/messages` 为分页 `{snapshot,items,nextCursor}`，通用参数 `limit=1..100`（默认20）、cursor；任务列表支持 q/status。cursor 应原样使用并保持筛选不变，409 时重查首页。
 
 安装包自带的 Node 标准库评测脚本（无需第三方依赖）：
 
 ```sh
-curl http://127.0.0.1:3000/api/examples/evaluate.mjs -o evaluate.mjs
-node evaluate.mjs --url http://127.0.0.1:3000 --engine pi \
+curl http://127.0.0.1:6217/api/examples/evaluate.mjs -o evaluate.mjs
+node evaluate.mjs --url http://127.0.0.1:6217 --engine pi \
   --directory /absolute/workspace --prompt '只回复 OK' > result.json
 ```
 
-源码脚本为 `code/tools/evaluate.mjs`。Node >=22.21；也可用安装包 resources/node 下的 Node 执行。stdout 只输出 JSON（run、messages、artifacts、各 ID），stderr 输出 submissionId/sessionId/runId 便于中断后对账。completed 退出码 0，其余终态、HTTP 错误及客户端超时为非 0。`--timeout` 默认 660000 毫秒。脚本超时不自动取消服务端任务，可用下文 abort；历史与产物保留供核对。脚本使用 auto 交互策略，验证人工审批时改用下文接口。
+源码脚本为 `code/tools/evaluate.mjs`。Node >=22.21；也可用安装包 resources/node 下的 Node 执行。脚本通过 `/api/runtime` 发现默认引擎和模型，再实际调用 `/session`、`/event`、`prompt_async`、消息与状态接口，确认 HTTP 204、SSE idle 和最终助手完成标记。`--engine` 不传使用配置默认值；可一起传 `--provider`、`--model` 指定模型。
 
-## 兼容评测协议
+stdout 输出 JSON：sessionId、engineId、completed、session、messages、事件计数及失败时的 error；stderr 输出会话与引擎 ID。只有完整成功才退出 0，其余情况非 0。`--timeout` 默认 660000 毫秒；脚本失败时尝试中止自己创建的执行。脚本显式选择 auto 交互策略，验证人工审批时使用下文接口。
+
+## 会话与消息接口
 
 | 方法与路径 | 请求 / 响应 |
 | --- | --- |
 | `POST /session` | `{directory,engineId?,title?,interactionPolicy?}` → 200 `{id,title,created_at,status:"idle"}`，仅创建会话 |
 | `GET /session/:id` | `{id,title,directory,created_at,status,message_count}`；status 为 busy 或 idle |
 | `GET /session/status` | `{[sessionId]:{type:"busy"或"idle"}}`；idle 不能判断执行是否成功 |
-| `POST /session/:id/prompt_async` | `{parts,model?}`；虽然名为 async，HTTP 会等待执行终态，成功204，失败502，超时504，取消409；不支持 submissionId 幂等 |
-| `GET /session/:id/message` | 评测协议消息数组，每条 `{info,parts}`；info 含 id/sessionID/role/time；parts 含文本、工具调用和用量映射 |
+| `POST /session/:id/prompt_async` | `{parts,model?,agent?}`；虽然名为 async，HTTP 会等待执行终态，成功204，失败502，超时504，取消409；不支持 submissionId 幂等 |
+| `GET /session/:id/message` | 共享 Message 数组，每条含 id/sessionId/runId/role/created_at/completedAt/info/parts；与应用任务、Run 查询返回的消息完全相同 |
 | `POST /session/:id/abort` 或 `/stop` | 无请求体，取消该会话执行，200 `{ok:true}` |
 | `DELETE /session/:id` | 删除会话，200 `{ok:true}`；评测结果采集完成后按需调用 |
 
 `prompt_async` 应设置大于运行超时（默认600秒）的 HTTP 超时。人工交互模式下，在另一连接处理 permission/question，不能只等待 prompt 响应。
 
-## SSE 与人工交互
+## 统一消息与 SSE
 
-```sh
-curl -N 'http://127.0.0.1:3000/event?sessionId=<sessionId>'
-curl -N 'http://127.0.0.1:3000/api/events?sessionId=<sessionId>'
+所有消息查询和事件使用同一份 Message/MessagePart；不存在评测 serializer 或额外字段别名。工具轨迹通过 tool part 表达，不额外伪造 tool 角色消息。
+
+```json
+{
+  "id": "msg_002",
+  "sessionId": "ses_abc123",
+  "runId": "run_001",
+  "role": "assistant",
+  "created_at": "2026-09-08T10:00:00.000Z",
+  "completedAt": "2026-09-08T10:00:05.000Z",
+  "info": {"finish": "stop"},
+  "parts": [
+    {"id":"part_001","type":"text","content":"完成。"},
+    {"id":"part_002","type":"step-finish","reason":"stop","usage":null}
+  ]
+}
 ```
 
-`/event` 为兼容评测流，每帧 `data: {type,properties}`，没有 SSE event 行；`/api/events` 是应用流，帧含 `event: <type>` 和 `data: <AppEvent>`。AppEvent 包含 schemaVersion、eventId、revision、instanceId、occurredAt、type、可选 sessionId/runId、data。连接即收到 server.connected；每15秒 server.heartbeat；事件可见 session.created/updated/deleted、message.part.updated、run.updated/finished、permission.asked、question.asked、interaction.updated、artifact.updated、agents.updated（兼容流只映射其支持的事件）。
+工具 part 字段为 `id/type:"tool"/tool/toolCallId/input/output/state:{status,title}/startedAt/finishedAt`。status 支持 pending/running/completed/failed/cancelled/interrupted；失败或中止不会改写为 completed。只有最后一条消息 `role=assistant`、`info.finish=stop` 且包含 step-finish 才表示最终回复完成；`finish=tool-calls` 或单独的 step-finish 不代表本轮结束。生成失败时仍可查询已产生的轨迹。
 
-记录 SSE `id:`，断线后以 `Last-Event-ID` 请求头回放；没有游标从当前开始。收到 server.resync_required 时重新 GET 会话/Run 快照，不能假定保留窗口内所有事件仍可获取。SSE 连接数和慢消费者缓冲有上限。
+```sh
+curl -N 'http://127.0.0.1:6217/event?sessionId=<sessionId>'
+```
+
+`/event` 是唯一事件入口，Web/Desktop 和评测均使用它。每帧为 `data: {type,properties,...}`，没有 SSE event 行。业务事件额外包含 schemaVersion:1、eventId、revision、instanceId、occurredAt、可选 sessionId/runId；同一字段在存储、查询和推送中含义一致。连接控制事件没有持久化事件 ID。响应头为 `text/event-stream; charset=utf-8`、`Cache-Control: no-cache, no-transform`、`Connection: keep-alive`、`X-Accel-Buffering: no`。
+
+| type | properties |
+| --- | --- |
+| server.connected / server.heartbeat | 当前存储快照与 heartbeatMs:15000；连接立即通知，每15秒心跳 |
+| session.status | `{sessionID,status:{type:"busy"或"idle"}}` |
+| session.idle | `{sessionID}`；空闲不等于成功，结合最终消息或 prompt 结果 |
+| session.error | `{sessionID,error:{code,message,stage}}`；错误已脱敏 |
+| message.updated | 消息元数据 |
+| message.part.updated | `{sessionID,messageID,part}`；part 与消息查询中的对象一致 |
+| question.asked / permission.asked | 完整 Interaction，与对应 GET 列表中的对象一致 |
+| interaction.updated | 最新交互及回复状态 |
+| session.created/updated/deleted、run.accepted/updated/finished、artifact.updated、agents.updated | 对应领域对象或状态变更；客户端可忽略不关心的类型 |
+
+记录 SSE `id:`，断线后以 `Last-Event-ID` 请求头回放；无游标从当前开始。收到 server.resync_required 后重新读取快照，不能假定保留窗口内所有事件仍可获取。SSE 连接数和慢消费者缓冲有上限。
+
+## 问题与权限
 
 | 方法与路径 | 请求 / 响应 |
 | --- | --- |
-| `GET /permission`、`GET /question` | 待处理交互数组，含 id/sessionId/runId/kind/title/questions/state |
-| `POST /permission/:id/reply` | `{decision:"once"或"always"或"reject"}` → `{ok:true}` |
-| `POST /question/:id/reply` | `{answers:[["第一题回答"],["第二题回答"]]}` → `{ok:true}` |
+| GET /question | 未完成的问题 Interaction 数组 |
+| POST /question/:id/reply | `{answers:[["第一题回答"],["第二题回答"]]}` → `{ok:true}` |
+| GET /permission | 未完成的权限 Interaction 数组 |
+| POST /permission/:id/reply | `{reply:"once"或"always"或"reject",message?:"附加说明"}` → `{ok:true}` |
 
-创建会话的 interactionPolicy 可设 `{permission:"manual",question:"manual"}`；自动评测通常使用 auto，但 auto 不代表某个原生 CLI 不支持的能力会自动出现。
+Interaction 公共字段为 id、sessionID、runId、kind、title、state、policy、created_at、resolvedAt、reply、error。问题包含 `questions:[{question,options:[{label,description}],multiple,allowCustom}]`；权限包含 `permission` 和 `patterns`。不适用的 questions/patterns 为 []，permission 为 ""；原生引擎未提供的选项描述为空字符串，不编造信息。permission 可使用引擎原生权限标识，patterns 保留已知路径或命令。
+
+回复被原子认领后交给原生引擎，成功后标记 resolved。重复、过期或已终止执行的回复为409；答案不符合问题数量、选项或多选约束为400。`always` 的作用范围服从原生引擎；附加 message 保存在回复记录，原生协议支持时一并发送。原生协议没有说明字段时不将它伪造成用户消息。
+
+创建会话时可设置 `{interactionPolicy:{permission:"manual",question:"manual"}}`。此时 prompt 请求保持打开，另一个连接通过 SSE 和上述接口完成交互。旧的 decision 字段和旧交互字段不再接受。
 
 ## 产物与观测
 

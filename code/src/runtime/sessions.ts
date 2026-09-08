@@ -46,6 +46,7 @@ import {
 } from "../settings.js";
 import {
   agentIdSchema,
+  defaultInteractionPolicy,
   settingsSchema,
   type AgentId,
   type AgentView,
@@ -184,7 +185,7 @@ export class SessionRuntime {
   }
   private publishAgents() {
     this.store.transaction(() =>
-      this.store.emit({ type: "agents.updated", data: this.agentViews() }),
+      this.store.emit({ type: "agents.updated", properties: this.agentViews() }),
     );
   }
   saveSettings(input: unknown) {
@@ -398,13 +399,11 @@ export class SessionRuntime {
   get adapters() {
     return [this.adapter, ...this.additionalAdapters];
   }
-  engine(
-    id: string = this.adapters.some(
-      (a) => a.id === readSettings(this.config).defaultAgent,
-    )
-      ? readSettings(this.config).defaultAgent
-      : this.adapter.id,
-  ) {
+  engine(id?: string) {
+    if (id === undefined) {
+      const preferred = this.config.engineOverride ?? readSettings(this.config).defaultAgent;
+      id = this.adapters.some((adapter) => adapter.id === preferred) ? preferred : this.adapter.id;
+    }
     const adapter = this.adapters.find((adapter) => adapter.id === id);
     if (!adapter)
       throw new GatewayError("VALIDATION_ERROR", "Unknown engine", 400);
@@ -530,20 +529,24 @@ export class SessionRuntime {
       artifacts: this.store.list("artifacts", "sessionId=?", [id]),
     };
   }
+  sessionStatus(id: string): "busy" | "idle" {
+    this.session(id);
+    return this.runs(id).some((run) => !isTerminal(run.state)) ? "busy" : "idle";
+  }
   private publishSession(id: string) {
     const task = this.summary(id);
-    this.store.emit({ type: "session.updated", sessionId: id, data: task });
-    const busy = this.runs(id).some((r) => !isTerminal(r.state));
+    this.store.emit({ type: "session.updated", sessionId: id, properties: task });
+    const busy = this.sessionStatus(id) === "busy";
     this.store.emit({
       type: "session.status",
       sessionId: id,
-      data: { sessionID: id, status: { type: busy ? "busy" : "idle" } },
+      properties: { sessionID: id, status: { type: busy ? "busy" : "idle" } },
     });
     if (!busy)
       this.store.emit({
         type: "session.idle",
         sessionId: id,
-        data: { sessionID: id },
+        properties: { sessionID: id },
       });
   }
   private ensureAdmission(adapter: EngineAdapter) {
@@ -598,12 +601,10 @@ export class SessionRuntime {
         id: randomUUID(),
         directory,
         title: input.title?.trim() || "Untitled task",
+        titleSource: input.title?.trim() ? "user" : "generated",
         engineId: adapter.id,
         interactionPolicy: input.interactionPolicy ??
-          agentConfiguration(this.config, adapter.id)?.interactionPolicy ?? {
-            permission: "auto",
-            question: "auto",
-          },
+          agentConfiguration(this.config, adapter.id)?.interactionPolicy ?? defaultInteractionPolicy,
         availability: "ready",
         createdAt: now(),
         updatedAt: now(),
@@ -635,7 +636,7 @@ export class SessionRuntime {
         this.store.emit({
           type: "session.created",
           sessionId: owned.id,
-          data: this.summary(owned.id),
+          properties: this.summary(owned.id),
         });
       });
       return owned;
@@ -826,12 +827,20 @@ export class SessionRuntime {
         400,
       );
     this.store.transaction(() => {
+      if (session.titleSource === "generated" && runs.length === 0) {
+        this.store.put("sessions", {
+          ...session,
+          title: input.parts.map((part) => part.text).join(" ").replace(/\s+/g, " ").trim().slice(0, 80),
+          updatedAt: now(),
+          version: session.version + 1,
+        });
+      }
       this.store.put("runs", run);
       this.store.emit({
         type: "run.accepted",
         sessionId,
         runId: run.id,
-        data: run,
+        properties: run,
       });
       this.publishSession(sessionId);
     });
@@ -1089,17 +1098,17 @@ export class SessionRuntime {
         sessionId: session.id,
         runId,
         role: "user",
-        createdAt: now(),
+        created_at: now(),
         completedAt: now(),
-        finishReason: null,
-        parts: run.inputParts.map((p) => ({ ...p, id: randomUUID() })),
+        info: { finish: null },
+        parts: run.inputParts.map((p) => ({ type: "text", content: p.text, id: randomUUID() })),
       };
       this.saveMessage(user);
       this.store.emit({
         type: "run.updated",
         sessionId: session.id,
         runId,
-        data: run,
+        properties: run,
       });
       this.publishSession(session.id);
     });
@@ -1126,7 +1135,7 @@ export class SessionRuntime {
       if (this.run(runId).state !== "running") return;
       if (result.outcome === "completed") {
         const last = this.store.messages(session.id, runId).at(-1);
-        if (!last || last.role !== "assistant" || last.finishReason !== "stop")
+        if (!last || last.role !== "assistant" || last.info.finish !== "stop")
           throw engineError(
             "Engine ended without a successful final assistant message",
           );
@@ -1142,7 +1151,7 @@ export class SessionRuntime {
                   type: "artifact.updated",
                   sessionId: session.id,
                   runId,
-                  data: artifact,
+                  properties: artifact,
                 });
               }
             });
@@ -1208,14 +1217,14 @@ export class SessionRuntime {
       type: "message.updated",
       sessionId: message.sessionId,
       runId: message.runId,
-      data: { ...message, parts: undefined },
+      properties: { ...message, parts: undefined },
     });
     for (const part of message.parts)
       this.store.emit({
         type: "message.part.updated",
         sessionId: message.sessionId,
         runId: message.runId,
-        data: { messageId: message.id, part },
+        properties: { sessionID: message.sessionId, messageID: message.id, part },
       });
   }
   private update(runId: string, update: EngineUpdate) {
@@ -1237,7 +1246,7 @@ export class SessionRuntime {
       const interaction = update.interaction;
       if (
         interaction.runId !== runId ||
-        interaction.sessionId !== run.sessionId
+        interaction.sessionID !== run.sessionId
       )
         throw engineError("Interaction belongs to a different execution");
       if (this.store.get("interactions", interaction.id)) return;
@@ -1247,17 +1256,17 @@ export class SessionRuntime {
           type: `${interaction.kind}.asked`,
           sessionId: run.sessionId,
           runId,
-          data: interaction,
+          properties: interaction,
         });
         this.publishSession(run.sessionId);
       });
       if (interaction.policy === "auto") {
         const reply: InteractionReply =
           interaction.kind === "permission"
-            ? { decision: "always" }
+            ? { reply: "always" }
             : {
                 answers: interaction.questions.map((q) => [
-                  q.options[0] ?? this.config.questionAnswer,
+                  q.options[0]?.label ?? this.config.questionAnswer,
                 ]),
               };
         void this.reply(interaction.id, reply).catch(() => {
@@ -1291,16 +1300,16 @@ export class SessionRuntime {
             !message.parts.some(
               (p) =>
                 p.type === "tool" &&
-                (p.state === "running" || p.state === "pending"),
+                (p.state.status === "running" || p.state.status === "pending"),
             )
           )
             continue;
           message.parts = message.parts.map((p) =>
             p.type === "tool" &&
-            (p.state === "running" || p.state === "pending")
+            (p.state.status === "running" || p.state.status === "pending")
               ? {
                   ...p,
-                  state: outcome === "cancelled" ? "cancelled" : "interrupted",
+                  state: { ...p.state, status: outcome === "cancelled" ? "cancelled" : "interrupted" },
                   finishedAt: now(),
                 }
               : p,
@@ -1316,21 +1325,21 @@ export class SessionRuntime {
           type: "interaction.updated",
           sessionId: current.sessionId,
           runId,
-          data: expired,
+          properties: expired,
         });
       }
       this.store.emit({
         type: "run.finished",
         sessionId: current.sessionId,
         runId,
-        data: finished,
+        properties: finished,
       });
       if (error)
         this.store.emit({
           type: "session.error",
           sessionId: current.sessionId,
           runId,
-          data: { sessionID: current.sessionId, error },
+          properties: { sessionID: current.sessionId, error },
         });
       const session = this.session(current.sessionId);
       this.store.put("sessions", {
@@ -1367,7 +1376,7 @@ export class SessionRuntime {
         409,
       );
     if (
-      i.kind === "permission" ? !("decision" in reply) : !("answers" in reply)
+      i.kind === "permission" ? !("reply" in reply) : !("answers" in reply)
     )
       throw new GatewayError(
         "VALIDATION_ERROR",
@@ -1382,7 +1391,7 @@ export class SessionRuntime {
           return (
             !a.length ||
             (!q.multiple && a.length !== 1) ||
-            (!q.allowCustom && a.some((v) => !q.options.includes(v)))
+            (!q.allowCustom && a.some((v) => !q.options.some((option) => option.label === v)))
           );
         })
       )
@@ -1397,14 +1406,14 @@ export class SessionRuntime {
       this.store.put("interactions", claimed);
       this.store.emit({
         type: "interaction.updated",
-        sessionId: i.sessionId,
+        sessionId: i.sessionID,
         runId: i.runId,
-        data: claimed,
+        properties: claimed,
       });
     });
     try {
       await within(
-        this.sessionEngine(i.sessionId).reply(id, reply),
+        this.sessionEngine(i.sessionID).reply(id, reply),
         this.config.limits.abortTimeoutMs,
       );
       if (this.store.get("interactions", id)?.state !== "replying") return;
@@ -1417,11 +1426,11 @@ export class SessionRuntime {
         this.store.put("interactions", resolved);
         this.store.emit({
           type: "interaction.updated",
-          sessionId: i.sessionId,
+          sessionId: i.sessionID,
           runId: i.runId,
-          data: resolved,
+          properties: resolved,
         });
-        this.publishSession(i.sessionId);
+        this.publishSession(i.sessionID);
       });
     } catch (error) {
       if (this.store.get("interactions", id)?.state === "replying")
@@ -1462,7 +1471,7 @@ export class SessionRuntime {
         type: "run.updated",
         sessionId: run.sessionId,
         runId,
-        data: stopping,
+        properties: stopping,
       });
       this.publishSession(run.sessionId);
     });
@@ -1565,7 +1574,7 @@ export class SessionRuntime {
             type: "run.updated",
             sessionId,
             runId: run.id,
-            data: stopping,
+            properties: stopping,
           });
         }
         this.publishSession(sessionId);

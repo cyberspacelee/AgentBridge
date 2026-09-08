@@ -199,7 +199,7 @@ for (const id of ["codex", "grok"] as const)
               m.parts.some(
                 (p) =>
                   p.type === "text" &&
-                  p.text.includes("Native protocol verified."),
+                  p.content.includes("Native protocol verified."),
               ),
             ),
         );

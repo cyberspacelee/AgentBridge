@@ -52,9 +52,9 @@ pnpm web:build
 pnpm start
 ```
 
-打开 [Agent 管理](http://127.0.0.1:3000/agents)；先安装所需 CLI，再在共享资源中添加模型连接，给 Agent 选择模型并保存，然后启用。首次启动未配置模型时，四个 Agent 均停用，管理界面仍可访问。任务入口是 [任务工作台](http://127.0.0.1:3000/tasks)。
+打开 [Agent 管理](http://127.0.0.1:6217/agents)；先安装所需 CLI，再在共享资源中添加模型连接，给 Agent 选择模型并保存，然后启用。首次启动未配置模型时，四个 Agent 均停用，管理界面仍可访问。任务入口是 [任务工作台](http://127.0.0.1:6217/tasks)。
 
-业务配置是 `AGENT_DATA_DIR/settings.json`（schemaVersion 3），系统网络配置是 `system.json`。不兼容历史配置或数据库，不提供迁移；请使用新的数据目录重新配置。原生配置单向生成到 `agents/<id>/`；Codex/Grok 的会话配置与上下文放在其下的 `sessions/<sessionId>/`。任务 cwd 始终是实际工作目录。不会复用或修改个人 `~/.codex`、`~/.grok`、Pi 或 OpenCode 配置。
+业务配置是 `AGENT_DATA_DIR/settings.json`（schemaVersion 1），系统网络配置是 `system.json`。不兼容历史配置或数据库，不提供迁移；请使用新的数据目录重新配置。原生配置单向生成到 `agents/<id>/`；Codex/Grok 的会话配置与上下文放在其下的 `sessions/<sessionId>/`。任务 cwd 始终是实际工作目录。不会复用或修改个人 `~/.codex`、`~/.grok`、Pi 或 OpenCode 配置。
 
 保存资源更改后，受影响 Agent 显示“待应用”；应用时取消尚未开始的排队项，等待当前执行结束后重启该 Agent，随后尝试恢复原生上下文，不重放历史执行。停用也等待当前执行结束；“立即停止”会中断执行。原生导入只读预览已支持字段，密钥需重新填写。
 
@@ -62,13 +62,13 @@ pnpm start
 
 ## 局域网访问
 
-Desktop 已内置同一个网关 server，在“系统信息 → 网关服务”设置监听地址 `0.0.0.0` 与固定端口，保存并重启后即可供局域网和评测脚本访问。默认监听 `127.0.0.1:3000`，支持自定义 IP、端口和 0 自动分配；界面显示当前访问地址，端口冲突时服务内重启恢复原配置。源码 Web 也可在 `code/` 中启动：
+Desktop 已内置同一个网关 server，在“系统信息 → 网关服务”设置监听地址 `0.0.0.0` 与固定端口，保存并重启后即可供局域网和评测脚本访问。默认监听 `127.0.0.1:6217`，支持自定义 IP、端口和 0 自动分配；界面显示当前访问地址，端口冲突时服务内重启恢复原配置。源码 Web 也可在 `code/` 中启动：
 
 ```sh
-pnpm start --host 0.0.0.0 --port 3000
+pnpm start --host 0.0.0.0 --port 6217
 ```
 
-同一局域网的设备访问 `http://<服务器局域网 IP>:3000/tasks`，并确保主机防火墙允许 TCP 3000。前端构建由网关直接提供，不需要额外启动 Vite。
+同一局域网的设备访问 `http://<服务器局域网 IP>:6217/tasks`，并确保主机防火墙允许 TCP 6217。前端构建由网关直接提供，不需要额外启动 Vite。
 
 本机和局域网均无需配对、登录或网关 token；Web、Desktop、HTTP/SSE 和下载共用这一规则。完整[网关 API 文档](code/docs/GATEWAY_API.md)也随安装包提供于 `/api/docs`，含配置、任务、兼容评测、SSE、交互和产物接口；可下载 `/api/examples/evaluate.mjs` 运行自动化评测。
 
@@ -77,7 +77,7 @@ pnpm start --host 0.0.0.0 --port 3000
 | 配置 | 作用 |
 | --- | --- |
 | `AGENT_ENGINE` | 初始化默认 Agent，支持 `pi`、`opencode`、`codex`、`grok`；保存后由 settings.json 管理 |
-| `AGENT_HOST` / `AGENT_PORT` | Web/Desktop 默认 `127.0.0.1` / `3000`；Web CLI > 环境变量 > system.json 已保存网关配置 |
+| `AGENT_HOST` / `AGENT_PORT` | Web/Desktop 默认 `127.0.0.1` / `6217`；Web CLI > 环境变量 > system.json 已保存网关配置 |
 | `AGENT_DATA_DIR` | 源码模式默认当前目录下 `.agentbridge`，存放 SQLite、日志和引擎数据 |
 | `AGENT_DESKTOP_DATA_DIR` | 桌面用户数据根目录，业务数据位于其 `data/` 子目录 |
 | `AGENT_MANAGED_RUNTIMES=false` | 仅初始化时选择外部来源，保存后由每个 Agent 的 runtime 配置管理 |
@@ -103,7 +103,7 @@ pnpm dev --engine pi
 ```
 
 ```sh
-# 终端二：前端，默认代理到本机 3000 端口
+# 终端二：前端，默认代理到本机 6217 端口
 pnpm web:dev
 ```
 
