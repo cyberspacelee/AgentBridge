@@ -61,6 +61,22 @@ jobs:
         env:
           AGENT_DESKTOP_EXECUTABLE: ${{ github.workspace }}/code/desktop-release/linux-unpacked/agentbridge
           DEBUG: pw:browser
+      - name: Install and launch the final Windows installer
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem desktop-release -Filter '*.exe')
+          if ($installers.Count -ne 1) { throw "Expected one NSIS installer" }
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'AgentBridge-installed-smoke'
+          $installer = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$installDirectory" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "NSIS installation failed: $($installer.ExitCode)" }
+          $env:AGENT_DESKTOP_EXECUTABLE = Join-Path $installDirectory 'agentbridge.exe'
+          if (!(Test-Path $env:AGENT_DESKTOP_EXECUTABLE)) { throw "Installed executable is missing" }
+          pnpm test:desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        env:
+          DEBUG: pw:browser
       - uses: actions/upload-artifact@v4
         with:
           name: AgentBridge-${{ matrix.os }}

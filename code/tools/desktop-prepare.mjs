@@ -106,6 +106,7 @@ await run(process.execPath, [
   pnpm,
   "--filter=agentbridge",
   "--config.inject-workspace-packages=true",
+  "--config.node-linker=hoisted",
   "deploy",
   "--prod",
   backend,

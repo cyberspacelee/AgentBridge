@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { cp, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -16,12 +17,14 @@ if (executable) {
   const portable = path.join(scratch, "application");
   assert.ok(!portable.startsWith(`${code}${path.sep}`), "Portable smoke must run outside the source tree");
   await cp(source, portable, { recursive: true, verbatimSymlinks: true });
+  const portableRoot = await realpath(portable);
   const inspectLinks = async (directory) => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) {
         const target = await realpath(file);
-        assert.ok(target === portable || target.startsWith(`${portable}${path.sep}`), `Packaged symlink escapes: ${file}`);
+        const relative = path.relative(portableRoot, target);
+        assert.ok(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative), `Packaged symlink escapes: ${file}`);
       } else if (entry.isDirectory()) await inspectLinks(file);
     }
   };
@@ -66,16 +69,22 @@ try {
   const runtime = await page.evaluate(async () => (await fetch("/api/runtimes")).json());
   assert.equal(runtime.runtimes.length, 4);
   assert.ok(runtime.runtimes.every((item) => item.managed && item.installedVersion === null));
-  if (executable && process.platform === "linux") {
-    const resources = path.join(path.dirname(executable), "resources");
-    const parentPid = application.process().pid;
-    const children = (await readFile(`/proc/${parentPid}/task/${parentPid}/children`, "utf8")).trim().split(/\s+/);
-    const programs = await Promise.all(children.map((pid) => readlink(`/proc/${pid}/exe`).catch(() => "")));
-    assert.ok(programs.includes(path.join(resources, "node/bin/node")), "Gateway must use bundled Node");
-    for (const name of ["fastify", "pino", "zod", "cross-spawn"]) {
-      const dependency = await realpath(path.join(resources, "backend/node_modules", name));
-      assert.ok(dependency.startsWith(`${resources}${path.sep}`), `${name} must resolve inside the relocated package`);
+  if (executable) {
+    const resources = await realpath(path.resolve(path.dirname(executable), process.platform === "darwin" ? "../Resources" : "resources"));
+    const node = path.join(resources, process.platform === "win32" ? "node/node.exe" : "node/bin/node");
+    if (process.platform === "linux") {
+      const parentPid = application.process().pid;
+      const children = (await readFile(`/proc/${parentPid}/task/${parentPid}/children`, "utf8")).trim().split(/\s+/);
+      const programs = await Promise.all(children.map((pid) => readlink(`/proc/${pid}/exe`).catch(() => "")));
+      assert.ok(programs.includes(node), "Gateway must use bundled Node");
     }
+    for (const name of ["fastify", "pino", "zod", "cross-spawn", "which"]) {
+      const dependency = await realpath(path.join(resources, "backend/node_modules", name));
+      const relative = path.relative(resources, dependency);
+      assert.ok(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative), `${name} must resolve inside the relocated package`);
+    }
+    const probe = "const r=require('node:module').createRequire(process.argv[1]); const child=r('cross-spawn').sync(process.execPath,['-e','process.stdout.write(\"spawn-ok\")'],{encoding:'utf8'}); if(child.error)throw child.error; if(child.status!==0)throw new Error(child.stderr); process.stdout.write(child.stdout)";
+    assert.equal(execFileSync(node, ["-e", probe, path.join(resources, "backend/package.json")], { cwd: scratch, env, encoding: "utf8", timeout: 10000 }), "spawn-ok");
     for (const name of ["opencode-ai", "@earendil-works/pi-coding-agent", "@openai/codex", "pi-mcp-adapter"]) {
       assert.equal(existsSync(path.join(resources, "backend/node_modules", name)), false, `${name} must be installed on demand`);
     }

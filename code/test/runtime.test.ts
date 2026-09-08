@@ -875,7 +875,7 @@ test("HTTP preserves directory and Grok project configuration errors", async () 
       });
       assert.equal(response.statusCode, 400);
       assert.equal(response.json().code, "CONFIGURATION_ERROR");
-      assert.ok(response.json().message.includes(file));
+      assert.ok(response.json().message.includes(await realpath(file)));
       assert.match(response.json().message, /Import these resources into AgentBridge/);
     }
   } finally {
