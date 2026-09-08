@@ -5,16 +5,19 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  safeStorage,
   session,
   shell,
   Tray,
 } from "electron";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { isWorkspaceUrl, externalUrl, authorizedHeaders } from "./security.mjs";
 import updater from "electron-updater";
+import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment } from "./network.mjs";
 
 app.setName("AgentBridge");
 app.setPath(
@@ -42,6 +45,11 @@ let promptOpen = false;
 let forcedExitTimer;
 let installingUpdate = false;
 let updateBusy = false;
+let restarting = false;
+let testingNetwork = false;
+let networkSettings = { ...defaultNetworkSettings, proxyPassword: "" };
+let appliedNetwork = networkSettings;
+const networkFile = path.join(dataDirectory, "network.json");
 const engineGroups = new Set();
 const resources = app.isPackaged
   ? process.resourcesPath
@@ -66,9 +74,93 @@ const backend =
   process.env.AGENT_DESKTOP_BACKEND ??
   path.join(resources, "backend/dist/src/main.js");
 
+function networkView() {
+  const { proxyPassword, ...settings } = networkSettings;
+  return {
+    settings,
+    hasPassword: Boolean(proxyPassword),
+    restartRequired: JSON.stringify(networkSettings) !== JSON.stringify(appliedNetwork),
+  };
+}
+
+function loadNetworkSettings() {
+  if (!existsSync(networkFile)) return;
+  const { encryptedPassword, ...stored } = JSON.parse(readFileSync(networkFile, "utf8"));
+  if (encryptedPassword)
+    stored.proxyPassword = safeStorage.decryptString(Buffer.from(encryptedPassword, "base64"));
+  networkSettings = validateNetworkSettings(stored);
+}
+
+function saveNetworkSettings(input) {
+  const next = validateNetworkSettings(input, networkSettings.proxyPassword);
+  const stored = { ...next };
+  if (next.proxyPassword && safeStorage.isEncryptionAvailable() &&
+      (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")) {
+    stored.encryptedPassword = safeStorage.encryptString(next.proxyPassword).toString("base64");
+    delete stored.proxyPassword;
+  }
+  // Match the private local storage used for provider credentials when no OS keyring is available.
+  const temporary = `${networkFile}.tmp`;
+  writeFileSync(temporary, JSON.stringify(stored, null, 2), { mode: 0o600 });
+  renameSync(temporary, networkFile);
+  networkSettings = next;
+  return networkView();
+}
+
+async function configureUpdateProxy() {
+  const env = networkEnvironment(appliedNetwork);
+  const addresses = [env.http_proxy || env.HTTP_PROXY, env.https_proxy || env.HTTPS_PROXY]
+    .map((address) => address || env.all_proxy || env.ALL_PROXY);
+  const proxies = addresses.map((address) => address ? new URL(address) : null);
+  const rules = proxies.map((proxy, i) => proxy ? `${i ? "https" : "http"}=${proxy.protocol}//${proxy.host}` : "").filter(Boolean);
+  await updater.autoUpdater.netSession.setProxy({
+    mode: rules.length ? "fixed_servers" : "direct",
+    ...(rules.length ? { proxyRules: rules.join(";"), proxyBypassRules: env.NO_PROXY.replaceAll(",", ";") } : {}),
+  });
+  updater.autoUpdater.on("login", (info, callback) => {
+    const proxy = proxies.find((candidate) => candidate && info.isProxy &&
+      candidate.hostname === info.host && Number(candidate.port || (candidate.protocol === "https:" ? 443 : 80)) === info.port);
+    if (proxy) callback(decodeURIComponent(proxy.username), decodeURIComponent(proxy.password));
+    else callback();
+  });
+}
+
+async function testNetworkSettings(input, target) {
+  if (testingNetwork) throw new Error("已有网络测试正在进行");
+  if (typeof target !== "string" || target.length > 4096) throw new Error("测试地址无效");
+  let url;
+  try { url = new URL(target); } catch { throw new Error("请输入有效的 HTTP 或 HTTPS 测试地址"); }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
+    throw new Error("测试地址仅支持不含用户名和密码的 HTTP 或 HTTPS URL");
+  const settings = validateNetworkSettings(input, networkSettings.proxyPassword);
+  const env = networkEnvironment(settings);
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.NODE_OPTIONS;
+  delete env.AGENT_DESKTOP_TOKEN;
+  testingNetwork = true;
+  try {
+    const script = `const start=Date.now();
+try {
+  const response=await fetch(process.argv[1],{signal:AbortSignal.timeout(10000)});
+  await response.body?.cancel();
+  console.log(JSON.stringify({status:response.status,durationMs:Date.now()-start}));
+} catch(error) {
+  console.log(JSON.stringify({error:error.cause?.code||error.code||error.name||"NETWORK_ERROR"}));
+}`;
+    const { stdout } = await promisify(execFile)(node, ["--input-type=module", "-e", script, url.href], {
+      env, cwd: dataDirectory, windowsHide: true, timeout: 15000, maxBuffer: 16384,
+    });
+    const result = JSON.parse(stdout);
+    if (result.error) throw new Error(`连接失败（${result.error}），请检查代理地址、认证信息或证书。`);
+    return result;
+  } finally { testingNetwork = false; }
+}
+
 function trusted(event) {
   return Boolean(
     window &&
+    !window.isDestroyed() &&
+    !window.webContents.isDestroyed() &&
     event.sender === window.webContents &&
     event.senderFrame === window.webContents.mainFrame &&
     isWorkspaceUrl(event.senderFrame.url, origin),
@@ -196,7 +288,7 @@ async function requestQuit() {
       forcedExitTimer = setTimeout(() => {
         void forceStop().finally(() => app.exit(1));
       }, 20000);
-      if (!child || child.exitCode !== null) app.quit();
+      if (!child || child.exitCode !== null) finishQuit();
     }
   } finally {
     promptOpen = false;
@@ -205,7 +297,10 @@ async function requestQuit() {
 
 function finishQuit() {
   if (installingUpdate) updater.autoUpdater.quitAndInstall(false, true);
-  else app.quit();
+  else {
+    if (restarting) app.relaunch();
+    app.quit();
+  }
 }
 
 async function checkForUpdates() {
@@ -261,10 +356,11 @@ async function checkForUpdates() {
   }
 }
 
-function createWindow() {
+async function createWindow() {
   const isolated = session.fromPartition(
     `desktop-${randomBytes(8).toString("hex")}`,
   );
+  await isolated.setProxy({ mode: "direct" });
   isolated.setPermissionRequestHandler((_webContents, _permission, callback) =>
     callback(false),
   );
@@ -289,6 +385,8 @@ function createWindow() {
   });
   isolated.webRequest.onBeforeSendHeaders((details, callback) => {
     const owned =
+      !window.isDestroyed() &&
+      !window.webContents.isDestroyed() &&
       details.webContentsId === window.webContents.id &&
       (details.resourceType === "mainFrame"
         ? isWorkspaceUrl(details.url, origin)
@@ -373,7 +471,7 @@ async function launchBackend() {
       "桌面运行文件不完整，请重新安装或运行 pnpm desktop:prepare。",
     );
   const env = {
-    ...process.env,
+    ...networkEnvironment(appliedNetwork),
     AGENT_HOST: "127.0.0.1",
     AGENT_PORT: "0",
     AGENT_DATA_DIR: path.join(dataDirectory, "data"),
@@ -472,11 +570,46 @@ else {
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
+  ipcMain.handle("desktop:network-get", (event) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    return networkView();
+  });
+  ipcMain.handle("desktop:network-save", (event, input) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    return saveNetworkSettings(input);
+  });
+  ipcMain.handle("desktop:network-test", (event, input, url) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    return testNetworkSettings(input, url);
+  });
+  ipcMain.handle("desktop:select-certificate", async (event) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    const result = await dialog.showOpenDialog(window, {
+      title: "选择企业 CA 证书", properties: ["openFile"],
+      filters: [{ name: "PEM 证书", extensions: ["pem", "crt", "cer"] }],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+  ipcMain.handle("desktop:restart", async (event) => {
+    if (!trusted(event)) throw new Error("Untrusted desktop request");
+    if (quitting || promptOpen || updateBusy) return false;
+    restarting = true;
+    await requestQuit();
+    if (!quitting) restarting = false;
+    return quitting;
+  });
   void app.whenReady().then(async () => {
     try {
       updater.autoUpdater.on("error", () => {});
+      let networkError;
+      try { loadNetworkSettings(); } catch {
+        networkError = "保存的代理或证书配置无法读取，已临时使用环境设置。请在系统信息中的网络与代理重新配置。";
+      }
+      appliedNetwork = networkSettings;
+      await configureUpdateProxy();
       await launchBackend();
-      createWindow();
+      await createWindow();
+      if (networkError) dialog.showErrorBox("网络配置需要修复", networkError);
       const iconFile = path.join(import.meta.dirname, "icon.png");
       if (existsSync(iconFile)) {
         tray = new Tray(

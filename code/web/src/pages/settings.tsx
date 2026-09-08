@@ -7,6 +7,7 @@ import { GatewayContext } from "@/lib/gateway"
 import { Failure, IconButton, duration, bytes } from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { NetworkSettingsPanel } from "./network-settings"
 
 export function Settings() {
   const { runtime } = useContext(GatewayContext)
@@ -19,6 +20,7 @@ export function Settings() {
           <RefreshCw />
         </IconButton>
       </div>
+      <NetworkSettingsPanel />
       <Failure error={settings.error} />
       {!runtime || !settings.data ? (
         <Skeleton className="h-48" />

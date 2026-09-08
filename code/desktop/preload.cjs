@@ -9,6 +9,11 @@ if (process.isMainFrame) {
     contextBridge.exposeInMainWorld("agentBridge", {
       version: initial.version,
       selectDirectory: () => ipcRenderer.invoke("desktop:select-directory"),
+      getNetworkSettings: () => ipcRenderer.invoke("desktop:network-get"),
+      saveNetworkSettings: (input) => ipcRenderer.invoke("desktop:network-save", input),
+      testNetworkSettings: (input, url) => ipcRenderer.invoke("desktop:network-test", input, url),
+      selectCertificate: () => ipcRenderer.invoke("desktop:select-certificate"),
+      restart: () => ipcRenderer.invoke("desktop:restart"),
     });
     // Persist only these non-secret preferences across the gateway's random ports.
     let previous = JSON.stringify(initial.preferences);

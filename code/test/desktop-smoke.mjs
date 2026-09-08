@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rm } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
+import { rootCertificates } from "node:tls";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -47,6 +49,8 @@ if (!executable) {
   env.PATH = process.platform === "win32" ? `${process.env.SystemRoot}\\System32` : "/usr/bin:/bin";
 }
 let application;
+const networkServers = [];
+const networkSockets = new Set();
 const launch = () => _electron.launch({
   ...(executable ? { executablePath: executable } : {}),
   cwd: scratch,
@@ -107,6 +111,65 @@ try {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
   }, data);
   assert.equal(await page.evaluate(() => window.agentBridge.selectDirectory()), data);
+  const initialNetwork = await page.evaluate(() => window.agentBridge.getNetworkSettings());
+  const proxyRequests = [];
+  const proxyPassword = "desktop-smoke-secret:@/";
+  const proxyAuthorization = `Basic ${Buffer.from(`smoke-user:${proxyPassword}`).toString("base64")}`;
+  const proxy = createServer((request, response) => {
+    proxyRequests.push({ target: request.url, authorization: request.headers["proxy-authorization"] });
+    const authorized = request.headers["proxy-authorization"] === proxyAuthorization;
+    response.writeHead(authorized ? 207 : 407, authorized ? {} : { "Proxy-Authenticate": 'Basic realm="proxy"' });
+    response.end("proxy");
+  });
+  proxy.on("connect", (request, socket) => {
+    proxyRequests.push({ target: request.url, authorization: request.headers["proxy-authorization"] });
+    if (request.headers["proxy-authorization"] !== proxyAuthorization) {
+      socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="proxy"\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    socket.once("data", () => socket.end("HTTP/1.1 207 Multi-Status\r\nContent-Length: 5\r\nConnection: close\r\n\r\nproxy"));
+  });
+  const direct = createServer((_request, response) => { response.writeHead(204); response.end(); });
+  for (const server of [proxy, direct]) {
+    networkServers.push(server);
+    server.on("connection", (socket) => {
+      networkSockets.add(socket);
+      socket.on("error", () => {});
+      socket.on("close", () => networkSockets.delete(socket));
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  }
+  const caFile = path.join(scratch, "test CA.pem");
+  await writeFile(caFile, rootCertificates[0]);
+  await application.evaluate(({ dialog }, filename) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filename] });
+  }, caFile);
+  assert.equal(await page.evaluate(() => window.agentBridge.selectCertificate()), caFile);
+  const manualNetwork = {
+    ...initialNetwork.settings,
+    mode: "manual",
+    proxyUrl: `http://127.0.0.1:${proxy.address().port}`,
+    proxyUsername: "smoke-user",
+    proxyPassword,
+    noProxy: "",
+    caFile,
+  };
+  const savedNetwork = await page.evaluate((input) => window.agentBridge.saveNetworkSettings(input), manualNetwork);
+  assert.equal(savedNetwork.hasPassword, true);
+  assert.equal(savedNetwork.restartRequired, true);
+  assert.equal(Object.hasOwn(savedNetwork.settings, "proxyPassword"), false);
+  assert.ok(!JSON.stringify(savedNetwork).includes(proxyPassword));
+  const preservedNetwork = await page.evaluate((input) => window.agentBridge.saveNetworkSettings(input), savedNetwork.settings);
+  assert.equal(preservedNetwork.hasPassword, true);
+  const proxyResult = await page.evaluate(([input, url]) => window.agentBridge.testNetworkSettings(input, url), [savedNetwork.settings, "http://proxy-fixture.invalid/check"]);
+  assert.equal(proxyResult.status, 207);
+  assert.ok(Number.isFinite(proxyResult.durationMs) && proxyResult.durationMs >= 0);
+  assert.ok(proxyRequests.some((request) => request.target.includes("proxy-fixture.invalid") && request.authorization === proxyAuthorization));
+  const proxiedCount = proxyRequests.length;
+  const directResult = await page.evaluate(([input, url]) => window.agentBridge.testNetworkSettings(input, url), [savedNetwork.settings, `http://127.0.0.1:${direct.address().port}/check`]);
+  assert.equal(directResult.status, 204);
+  assert.equal(proxyRequests.length, proxiedCount, "Loopback requests must bypass the configured proxy");
   await page.evaluate(() => localStorage.setItem("theme", "dark"));
   await expect.poll(async () => JSON.parse(await readFile(path.join(data, "desktop.json"), "utf8").catch(() => "{}")).theme).toBe("dark");
   await page.getByRole("link", { name: "Pi", exact: true }).click();
@@ -133,10 +196,43 @@ try {
   await reopened.waitForURL(/\/agents$/);
   assert.equal(await reopened.evaluate(() => localStorage.getItem("theme")), "dark");
   assert.equal((await reopened.evaluate(async () => (await fetch("/api/runtime")).json())).storeId, storeId);
+  const restoredNetwork = await reopened.evaluate(() => window.agentBridge.getNetworkSettings());
+  assert.deepEqual(restoredNetwork.settings, savedNetwork.settings);
+  assert.equal(restoredNetwork.hasPassword, true);
+  assert.equal(restoredNetwork.restartRequired, false);
+  assert.ok(!JSON.stringify(restoredNetwork).includes(proxyPassword));
+  const restoredResult = await reopened.evaluate(([input, url]) => window.agentBridge.testNetworkSettings(input, url), [restoredNetwork.settings, "http://proxy-fixture.invalid/after-restart"]);
+  assert.equal(restoredResult.status, 207, "Saved proxy credentials must still authenticate after restart");
+  const updaterNetwork = await application.evaluate(async ({ app }) => {
+    const createRequire = process.getBuiltinModule("node:module").createRequire;
+    const require = createRequire(`${app.getAppPath()}/package.json`);
+    const updater = require("electron-updater").autoUpdater;
+    const { CancellationToken } = createRequire(require.resolve("electron-updater"))("builder-util-runtime");
+    const cancellation = new CancellationToken();
+    const timer = setTimeout(() => cancellation.cancel(), 8000);
+    try {
+      return {
+        proxy: await updater.netSession.resolveProxy("https://proxy-fixture.invalid/check"),
+        loopback: await updater.netSession.resolveProxy("http://localhost/check"),
+        body: await updater.httpExecutor.request({ protocol: "http:", hostname: "proxy-fixture.invalid", path: "/updater-check", method: "GET", timeout: 5000 }, cancellation),
+      };
+    } finally { clearTimeout(timer); }
+  });
+  assert.equal(updaterNetwork.proxy, `PROXY 127.0.0.1:${proxy.address().port}`);
+  assert.equal(updaterNetwork.loopback, "DIRECT");
+  assert.equal(updaterNetwork.body, "proxy");
+  const updaterRequests = proxyRequests.filter((request) => request.target.includes("/updater-check"));
+  assert.ok(updaterRequests.some((request) => !request.authorization), "Updater must receive the proxy authentication challenge");
+  assert.ok(updaterRequests.some((request) => request.authorization === proxyAuthorization), "Updater must answer the proxy challenge with saved credentials");
+  const clearedNetwork = await reopened.evaluate((input) => window.agentBridge.saveNetworkSettings(input), { ...initialNetwork.settings, proxyPassword: "" });
+  assert.equal(clearedNetwork.hasPassword, false);
+  assert.equal(clearedNetwork.restartRequired, true);
   await application.close();
   application = undefined;
   console.log(`Desktop smoke passed (${executable ? "packaged" : "development"}); screenshots: ${artifactDirectory}`);
 } finally {
   await application?.close();
+  for (const socket of networkSockets) socket.destroy();
+  await Promise.all(networkServers.map((server) => new Promise((resolve) => server.close(resolve))));
   await rm(scratch, { recursive: true, force: true });
 }
