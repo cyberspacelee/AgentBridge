@@ -16,6 +16,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Rocket,
   Save,
   Square,
   Trash2,
@@ -114,16 +115,15 @@ export function Agents() {
               ? names[id]
               : "Agent 管理"}
         </h1>
-        <IconButton
-          label="刷新 Agent 配置"
+        <Button variant="outline" size="sm"
           onClick={() => {
             query.reload()
             agents.reload()
             runtimes.reload()
           }}
         >
-          <RefreshCw />
-        </IconButton>
+          刷新 Agent 配置
+        </Button>
       </div>
       <Failure error={query.error ?? agents.error} />
       {query.data && agents.data ? (
@@ -1381,7 +1381,7 @@ function AgentEditor({
             {busy ? (
               <LoaderCircle className="animate-spin" />
             ) : state.enabled ? (
-              <RefreshCw />
+              <Rocket />
             ) : (
               <Play />
             )}

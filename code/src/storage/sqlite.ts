@@ -241,7 +241,8 @@ export class Store {
       "INSERT INTO message_parts(id,messageId,position,type,content) VALUES (?,?,?,?,?)",
     );
     message.parts.forEach((part, index) =>
-      write.run(part.id, message.id, index, part.type, JSON.stringify(part)),
+      // The SQL type indexes text/tool/step families; JSON retains the exact part type.
+      write.run(part.id, message.id, index, part.type === "reasoning" ? "text" : part.type, JSON.stringify(part)),
     );
   }
   messages(sessionId: string, runId?: string): Message[] {

@@ -79,6 +79,7 @@ MessagePart 是判别联合：
 | type | 内容 |
 | --- | --- |
 | text | 完整 content、稳定 id |
+| reasoning | 引擎明确返回的思考或摘要 content、稳定 id；独立于最终回答 |
 | tool | tool、toolCallId、state.status/title、input/output、startedAt/finishedAt |
 | step-finish | 当前模型步骤结束原因与实际可得用量；不自动终止 Run |
 

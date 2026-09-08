@@ -123,6 +123,11 @@ export interface TextPart {
   type: "text";
   content: string;
 }
+export interface ReasoningPart {
+  id: string;
+  type: "reasoning";
+  content: string;
+}
 export interface ToolPart {
   id: string;
   type: "tool";
@@ -143,7 +148,7 @@ export interface StepPart {
   reason: string;
   usage: Usage | null;
 }
-export type MessagePart = TextPart | ToolPart | StepPart;
+export type MessagePart = TextPart | ReasoningPart | ToolPart | StepPart;
 export interface Message {
   id: string;
   sessionId: string;

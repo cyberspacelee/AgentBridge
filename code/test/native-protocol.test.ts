@@ -105,6 +105,15 @@ for (const id of ["codex", "grok"] as const)
     const notify = (update: Record<string, unknown>) =>
       event("session/update", { ...address, update });
     if (id === "codex") {
+      event("item/started", { ...address, item: { id: "reason", type: "reasoning", summary: [] } });
+      event("item/reasoning/summaryTextDelta", { ...address, itemId: "reason", summaryIndex: 0, delta: "Checking " });
+      event("item/reasoning/summaryTextDelta", { ...address, itemId: "reason", summaryIndex: 0, delta: "inputs" });
+      event("item/completed", { ...address, item: { id: "reason", type: "reasoning", summary: ["Checking inputs"] } });
+    } else {
+      notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Checking " } });
+      notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "inputs" } });
+    }
+    if (id === "codex") {
       event("item/started", {
         ...address,
         item: { id: "tool", type: "commandExecution", command: "echo result" },
@@ -240,6 +249,7 @@ for (const id of ["codex", "grok"] as const)
     assert.equal(message.type, "message");
     if (message.type !== "message") throw new Error("Expected message");
     assert.equal(message.message.info.finish, "stop");
+    assert.deepEqual(message.message.parts.filter(p => p.type === "reasoning").map(p => p.content), ["Checking inputs"]);
     assert.ok(
       message.message.parts.some(
         (part) =>

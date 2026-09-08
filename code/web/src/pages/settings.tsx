@@ -1,11 +1,11 @@
 import type { SystemView } from "../../../shared/system"
 import { useContext } from "react"
 import { Link } from "react-router-dom"
-import { ChevronDown, RefreshCw, Bot } from "lucide-react"
+import { ChevronDown, Bot } from "lucide-react"
 import type { SettingsView } from "../../../shared/settings"
 import { useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
-import { Failure, IconButton, duration, bytes } from "@/components/workspace-ui"
+import { Failure, duration, bytes } from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -37,15 +37,14 @@ export function Settings() {
             管理下载源、网络连接与实例运行信息。
           </p>
         </div>
-        <IconButton
-          label="刷新系统配置"
+        <Button variant="outline" size="sm"
           onClick={() => {
             settings.reload()
             system.reload()
           }}
         >
-          <RefreshCw />
-        </IconButton>
+          刷新系统配置
+        </Button>
       </div>
       <GatewaySettingsPanel system={system.data} />
       <NetworkSettingsPanel />

@@ -361,15 +361,16 @@ export class GrokAdapter implements EngineAdapter {
     const update = record(params.update),
       type = string(update.sessionUpdate),
       message = active.message;
-    if (type === "agent_message_chunk") {
+    if (type === "agent_message_chunk" || type === "agent_thought_chunk") {
+      const partType = type === "agent_thought_chunk" ? "reasoning" : "text";
       const content = record(update.content);
       if (content.type !== "text") return;
       let part = message.parts.at(-1);
-      if (part?.type !== "text") {
-        part = { id: randomUUID(), type: "text", content: "" };
+      if (part?.type !== partType) {
+        part = partType === "reasoning" ? { id: randomUUID(), type: "reasoning", content: "" } : { id: randomUUID(), type: "text", content: "" };
         message.parts.push(part);
       }
-      part.content += string(content.text);
+      if (part.type === "text" || part.type === "reasoning") part.content += string(content.text);
     } else if (type === "tool_call" || type === "tool_call_update") {
       const id = string(update.toolCallId);
       if (!id) throw engineError("Grok tool call is missing its ID");

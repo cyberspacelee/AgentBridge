@@ -1,5 +1,14 @@
 import { useMemo, useState } from "react"
-import { ChevronDown, ChevronRight, Wrench } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  Wrench,
+  Terminal,
+  FileText,
+  FilePenLine,
+  Search,
+  Globe,
+} from "lucide-react"
 import type { ToolPart } from "../../../shared/contracts"
 import { Button } from "@/components/ui/button"
 import { CopyText, ElapsedTime, Status } from "@/components/workspace-ui"
@@ -12,7 +21,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 
 export function ToolCall({ part }: { part: ToolPart }) {
-  const failed = part.state.status === "failed" || part.state.status === "interrupted"
+  const failed =
+    part.state.status === "failed" || part.state.status === "interrupted"
   const [view, setView] = useState({ failed, open: failed })
   const [limit, setLimit] = useState(4096)
   if (view.failed !== failed) setView({ failed, open: failed || view.open })
@@ -42,6 +52,19 @@ export function ToolCall({ part }: { part: ToolPart }) {
   const target = [input.filePath, input.path, input.file, input.command].find(
     (v) => typeof v === "string"
   ) as string | undefined
+  const ToolIcon =
+    (
+      {
+        bash: Terminal,
+        commandExecution: Terminal,
+        read: FileText,
+        write: FilePenLine,
+        edit: FilePenLine,
+        search: Search,
+        grep: Search,
+        webfetch: Globe,
+      } as Record<string, typeof Wrench>
+    )[part.tool] ?? Wrench
   const elapsed = (
     <ElapsedTime
       start={part.startedAt}
@@ -54,6 +77,7 @@ export function ToolCall({ part }: { part: ToolPart }) {
       render={<section />}
       className="tool-call"
       aria-label={`工具 ${part.tool}`}
+      data-state-status={part.state.status}
       open={view.open}
       onOpenChange={(open) => setView({ failed, open })}
     >
@@ -66,7 +90,7 @@ export function ToolCall({ part }: { part: ToolPart }) {
         ) : (
           <ChevronRight aria-hidden="true" />
         )}
-        <Wrench aria-hidden="true" />
+        <ToolIcon aria-hidden="true" />
         <span className="tool-name">
           <strong>{part.tool}</strong>
           {target && <small>{target}</small>}

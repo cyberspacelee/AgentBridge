@@ -4,6 +4,8 @@
 
 > 能用 shadcn/ui 的基础组件实现，就不自行造基础组件；业务组件基于 shadcn/ui 组合封装。
 
+最新会话、thinking、Questionnaire、图表与控件复审见 [2026-09-08 改动复审](UI_REVIEW.md)。下方既有验收数据为上一轮记录。
+
 ## 组件边界
 
 - 基础组件入口为 `code/web/src/components/ui`，只在此层对接 Base UI。业务组件复用已有 Status、IconButton、Choice、Failure、Blank，新增封装必须承载实际业务或重复组合。
@@ -23,7 +25,9 @@
 | 单行、多行、组合输入 | Input、Textarea、InputGroup |
 | 字段、字段错误 | Field、FieldGroup、FieldSet、FieldLegend、FieldError |
 | 选择与搜索选择 | Select/Choice；模型与供应商使用 Base UI Combobox，支持键盘筛选 |
-| 布尔、单选、多选 | Switch、RadioGroup、Checkbox |
+| 布尔、单选、多选 | Switch、RadioGroup、Checkbox；Agent 多题问答用 Questionnaire |
+| 对话角色与气泡 | Message / MessageContent / MessageHeader、Bubble / BubbleContent |
+| 图表 | ChartContainer / ChartTooltipContent，复用已安装的 Recharts |
 | 即时反馈、持续提示、状态 | Sonner、Alert、Badge/Status |
 | 危险确认、编辑及预览 | AlertDialog、Dialog |
 | 侧面详情及移动导航 | Sheet；底部移动操作确有需求时使用 Drawer |

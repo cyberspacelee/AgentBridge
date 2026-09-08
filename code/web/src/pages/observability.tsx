@@ -7,15 +7,12 @@ import {
   RefreshCw,
   Server,
 } from "lucide-react"
+import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts"
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart"
 import type { EngineHealth } from "../../../shared/contracts"
 import type { AgentView } from "../../../shared/settings"
 import { agentNames } from "@/lib/agent-draft"
@@ -737,7 +734,15 @@ function Trend({ data }: { data?: Series }) {
     <>
       <div className="trend">
         {data.points.length ? (
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartContainer
+            className="h-full w-full"
+            config={{
+              value: {
+                label: data.unit === "bytes" ? "内存" : "数量",
+                color: "var(--chart-1)",
+              },
+            }}
+          >
             <LineChart
               data={data.points}
               margin={{ top: 12, right: 20, bottom: 5, left: 0 }}
@@ -768,21 +773,17 @@ function Trend({ data }: { data?: Series }) {
                 axisLine={false}
                 tickLine={false}
               />
-              <Tooltip
-                labelFormatter={(value) => date(String(value))}
-                formatter={(value) => [
-                  data.unit === "bytes"
-                    ? bytes(Number(value))
-                    : number(Number(value)),
-                  data.unit === "bytes" ? "内存" : "数量",
-                ]}
-                contentStyle={{
-                  background: "var(--popover)",
-                  color: "var(--popover-foreground)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(value) => date(String(value))}
+                    formatter={(value) =>
+                      data.unit === "bytes"
+                        ? bytes(Number(value))
+                        : number(Number(value))
+                    }
+                  />
+                }
               />
               <Line
                 type="stepAfter"
@@ -793,7 +794,7 @@ function Trend({ data }: { data?: Series }) {
                 isAnimationActive={false}
               />
             </LineChart>
-          </ResponsiveContainer>
+          </ChartContainer>
         ) : (
           <Blank>该时间范围内暂无采样</Blank>
         )}

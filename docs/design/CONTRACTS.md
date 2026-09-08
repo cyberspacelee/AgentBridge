@@ -34,7 +34,7 @@
 
 必须具备的事件类型：server.connected、server.heartbeat、session.status、session.idle、session.error、message.part.updated、question.asked、permission.asked。question/permission 在真实请求发生时发出；不能为了“全部必发”伪造用户交互。是否另需演示覆盖以赛题解释为准。
 
-Message 使用顶层 id、sessionId、runId、role、created_at、completedAt、info.finish 和 parts。text part 使用 content；tool part 使用 tool、toolCallId、input、output、state.status/title 和时间；step-finish 使用 reason、usage。查询接口返回同一快照，SSE message.part.updated 的 properties 为 {sessionID,messageID,part}。只有最终 assistant 的 info.finish=stop 且包含 step-finish 才表示成功回复。
+Message 使用顶层 id、sessionId、runId、role、created_at、completedAt、info.finish 和 parts。text 与 reasoning part 使用 content；reasoning 仅保留引擎明确返回的思考/摘要，不由正文猜测。SQLite type 列仍索引 text/tool/step 三个存储家族，reasoning 在 text 家族中保存完整 JSON discriminator，读取、HTTP 与 SSE 返回 reasoning；tool part 使用 tool、toolCallId、input、output、state.status/title 和时间；step-finish 使用 reason、usage。查询接口返回同一快照，SSE message.part.updated 的 properties 为 {sessionID,messageID,part}。只有最终 assistant 的 info.finish=stop 且包含 step-finish 才表示成功回复。
 
 Interaction 直接使用 sessionID、created_at、permission/patterns、questions[].question、options[].label/description；回复为 {reply:once|always|reject,message?} 或 {answers:string[][]}。不接受 decision 等历史字段。默认交互策略统一来自 Agent 配置，初值 auto/auto；创建会话可显式覆盖。
 

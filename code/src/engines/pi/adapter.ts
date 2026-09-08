@@ -424,16 +424,17 @@ export class PiAdapter implements EngineAdapter {
       this.publish(rpc);
     } else if (event.type === "message_update" && a.message) {
       const delta = object(event.assistantMessageEvent);
-      if (delta.type !== "text_delta") return;
+      if (delta.type !== "text_delta" && delta.type !== "thinking_delta") return;
       const index = z.number().int().nonnegative().parse(delta.contentIndex);
       const id = `${a.message.id}:part:${index}`;
-      if (delta.type === "text_delta") {
+      {
+        const type = delta.type === "thinking_delta" ? "reasoning" : "text";
         let part = a.message.parts.find((p) => p.id === id);
         if (!part) {
-          part = { id, type: "text", content: "" };
+          part = type === "reasoning" ? { id, type: "reasoning", content: "" } : { id, type: "text", content: "" };
           a.message.parts.push(part);
         }
-        if (part.type === "text") part.content += z.string().parse(delta.delta);
+        if (part.type === "text" || part.type === "reasoning") part.content += z.string().parse(delta.delta);
       }
       this.publish(rpc);
     } else if (event.type === "message_end") {
@@ -444,14 +445,16 @@ export class PiAdapter implements EngineAdapter {
         .parse(native.content);
       content.forEach((part, index) => {
         const id = `${a.message!.id}:part:${index}`;
-        if (part.type === "text") {
+        if (part.type === "text" || part.type === "thinking") {
+          const type = part.type === "thinking" ? "reasoning" : "text";
+          const content = z.string().parse(part.type === "thinking" ? part.thinking : part.text);
           const found = a.message!.parts.find((p) => p.id === id);
-          if (found?.type === "text") found.content = z.string().parse(part.text);
+          if (found?.type === type) found.content = content;
           else
             a.message!.parts.push({
               id,
-              type: "text",
-              content: z.string().parse(part.text),
+              type,
+              content,
             });
         } else if (
           part.type === "toolCall" &&

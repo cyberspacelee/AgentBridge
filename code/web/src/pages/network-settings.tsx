@@ -2,7 +2,7 @@ import { useContext, useRef, useState, type FormEvent } from "react"
 import {
   ChevronDown,
   FileInput,
-  RefreshCw,
+  Power,
   Save,
   Trash2,
   Zap,
@@ -635,7 +635,7 @@ function NetworkForm({ initial }: { initial: NetworkView }) {
               disabled={!!busy || dirty}
               onClick={() => setConfirmRestart(true)}
             >
-              <RefreshCw data-icon="inline-start" />
+              <Power data-icon="inline-start" />
               {view.restartRequired ? "应用设置并重启服务" : "重启服务"}
             </Button>
           }

@@ -381,8 +381,8 @@ export class OpenCodeAdapter implements EngineAdapter {
     const active = native.active;
     if (!active) return;
     const id = `${active.run.id}:${z.string().parse(p.id)}`;
-    if (p.type === "text")
-      return { id, type: "text", content: z.string().parse(p.text) };
+    if (p.type === "text" || p.type === "reasoning")
+      return { id, type: p.type, content: z.string().parse(p.text) };
     if (p.type === "step-finish")
       return {
         id,
@@ -444,7 +444,7 @@ export class OpenCodeAdapter implements EngineAdapter {
       const target = message?.parts.find(
         (p) => p.id === `${active.run.id}:${str(properties.partID)}`,
       );
-      if (message && target?.type === "text" && properties.field === "text") {
+      if (message && (target?.type === "text" || target?.type === "reasoning") && properties.field === "text") {
         target.content += z.string().parse(properties.delta);
         active.emit({ type: "message", message: structuredClone(message) });
       }

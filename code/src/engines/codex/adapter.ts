@@ -360,20 +360,26 @@ export class CodexAdapter implements EngineAdapter {
     if (params.turnId && active.turnId && params.turnId !== active.turnId)
       return;
     const message = active.message;
-    if (method === "item/agentMessage/delta") {
+    if (method === "item/agentMessage/delta" || method === "item/reasoning/summaryTextDelta") {
+      const type = method === "item/agentMessage/delta" ? "text" : "reasoning";
       const id = string(params.itemId);
-      let part = message.parts.find((p) => p.id === id && p.type === "text");
+      let part = message.parts.find((p) => p.id === id);
       if (!part) {
-        part = { id, type: "text", content: "" };
+        part = type === "reasoning" ? { id, type: "reasoning", content: "" } : { id, type: "text", content: "" };
         message.parts.push(part);
       }
-      if (part.type === "text") part.content += string(params.delta);
+      if (part.type === "text" || part.type === "reasoning") part.content += string(params.delta);
     } else if (method === "item/started" || method === "item/completed") {
       const item = record(params.item),
         id = string(item.id),
         type = string(item.type);
-      if (!id || ["userMessage", "reasoning"].includes(type)) return;
-      if (type === "agentMessage") {
+      if (!id || type === "userMessage") return;
+      if (type === "reasoning") {
+        const content = Array.isArray(item.summary) ? item.summary.map(string).join("\n\n") : "";
+        const part = message.parts.find((p) => p.id === id);
+        if (part?.type === "reasoning" && content) part.content = content;
+        else if (!part) message.parts.push({ id, type: "reasoning", content });
+      } else if (type === "agentMessage") {
         const part = message.parts.find((p) => p.id === id);
         if (part?.type === "text" && typeof item.text === "string")
           part.content = item.text;

@@ -1289,6 +1289,7 @@ test("one gateway contract drives engine selection, messages, SSE and manual or 
       const toolMessage: Message = {
         id: randomUUID(), sessionId: session.id, runId: execution.run.id, role: "assistant", created_at: at, completedAt: at,
         info: { finish: "tool-calls" }, parts: [
+          { id: randomUUID(), type: "reasoning", content: "Checking inputs" },
           { id: randomUUID(), type: "tool", tool: "write", toolCallId: "call", input: { path: f.directory }, output: "written", state: { status: "completed", title: "Write report" }, startedAt: at, finishedAt: at },
           { id: randomUUID(), type: "step-finish", reason: "tool-calls", usage: null },
         ],
@@ -1303,6 +1304,7 @@ test("one gateway contract drives engine selection, messages, SSE and manual or 
       const messages = (await server.inject(`${prefix}/message`)).json();
       assert.deepEqual(messages, (await server.inject(`/api/runs/${execution.run.id}`)).json().detail.messages);
       assert.deepEqual(messages, (await server.inject(`/api/tasks/${session.id}`)).json().detail.messages);
+      assert.deepEqual(messages.find((m: Message) => m.id === toolMessage.id).parts, toolMessage.parts);
       const last = messages.at(-1);
       assert.equal(last.role, "assistant"); assert.equal(last.info.finish, "stop");
       assert.equal(last.parts[0].content, "finished");

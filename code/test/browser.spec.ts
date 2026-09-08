@@ -269,7 +269,7 @@ test("sidebar toggles, persists, centers icons and supports mobile navigation", 
   page,
 }, info) => {
   await page.goto("/tasks");
-  await expect(page.getByRole("heading", { name: "任务工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "新会话" })).toBeVisible();
   if (info.project.name === "desktop") {
     const shell = page.locator(".app-shell");
     await page.getByRole("button", { name: "收起侧边栏" }).click();
@@ -339,10 +339,11 @@ test("task list search, history, filters, pagination, empty state and create for
     });
   });
   await page.goto("/tasks");
-  const search = page.getByRole("textbox", { name: "搜索任务" });
+  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
+  const search = page.getByRole("textbox", { name: "搜索会话" });
   await search.fill("不存在");
   await search.press("Enter");
-  await expect(page.getByText("没有符合条件的任务")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "会话列表", exact: true }).getByText("没有符合条件的会话")).toBeVisible();
   await captureQa(page, `tasks-empty-${info.project.name}`);
   await search.fill("网关");
   await search.press("Enter");
@@ -355,7 +356,7 @@ test("task list search, history, filters, pagination, empty state and create for
   await expect(search).toHaveValue("网关");
   const input = await search.boundingBox();
   const icon = await page
-    .locator('.toolbar [data-slot="input-group"] svg')
+    .locator('.conversation-history:visible [data-slot="input-group"] svg')
     .boundingBox();
   expect(
     Math.abs(input!.y + input!.height / 2 - icon!.y - icon!.height / 2),
@@ -365,95 +366,48 @@ test("task list search, history, filters, pagination, empty state and create for
     page.getByRole("link", { name: "第二页任务", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "返回第一页" }).click();
-  await page.getByRole("combobox", { name: "任务状态" }).click();
+  await page.getByRole("combobox", { name: "会话状态" }).click();
   await page.getByRole("option", { name: "失败", exact: true }).click();
-  await expect(page.getByText("没有符合条件的任务")).toBeVisible();
-  await page.getByRole("button", { name: "分派任务", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  await expect(page.getByRole("navigation", { name: "会话列表", exact: true }).getByText("没有符合条件的会话")).toBeVisible();
+  if (info.project.name === "mobile") await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
+  const dialog = page.getByRole("form", { name: "新会话" });
   await captureQa(page, `create-${info.project.name}`);
-  await expect(dialog).toHaveCSS("overflow-y", "hidden");
-  await expect(dialog.locator('[data-slot="scroll-area-viewport"]')).toHaveCSS(
-    "scrollbar-width",
-    "none",
-  );
-  await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(dialog).toBeVisible();
   expect(
     await dialog.locator("input:invalid, textarea:invalid").count(),
   ).toBeGreaterThan(0);
   await dialog.getByLabel("服务器工作目录", { exact: true }).fill("/tmp");
-  await dialog.getByLabel("任务要求", { exact: true }).fill("检查");
+  await dialog.getByLabel("消息", { exact: true }).fill("检查");
   await dialog
     .getByLabel("服务器工作目录", { exact: true })
     .fill("/__qa_missing_directory__");
-  await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
+  await dialog.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(dialog.locator('[role="alert"]')).toBeVisible();
   await captureQa(page, `create-invalid-${info.project.name}`);
-  await page.keyboard.press("Escape");
-  await expect(dialog).not.toBeVisible();
+  await expect(dialog.getByLabel("消息", { exact: true })).toHaveValue("检查");
 });
 
-test("fixed workspace keeps empty and short list pagination at the bottom", async ({
-  page,
-}, info) => {
+test("conversation history scrolls independently and composer stays reachable", async ({ page }, info) => {
   const task = designFixture().task;
-  await page.route("**/api/tasks?*", (route) => {
-    const q = new URL(route.request().url()).searchParams.get("q");
-    return route.fulfill({
-      json: {
-        items:
-          q === "empty"
-            ? []
-            : Array.from({ length: q === "many" ? 50 : 1 }, (_, i) => ({
-                ...task,
-                id: `task-${i}`,
-              })),
-        nextCursor: null,
-      },
-    });
-  });
-  const bottoms: number[] = [];
-  for (const q of ["empty", "short", "many"]) {
-    await page.goto(`/tasks?q=${q}`);
-    await expect(page.locator(".pagination")).toContainText(
-      q === "empty" ? "0 个任务" : q === "many" ? "50 个任务" : "1 个任务",
-    );
-    await expect(page.locator(".app-footer")).toHaveCount(0);
-    await expect(page.locator('.app-header [data-slot="badge"]')).toHaveCount(
-      1,
-    );
-    const metrics = await page.evaluate(() => {
-      const list = document.querySelector(".list-body")!;
-      const pagination = document
-        .querySelector(".pagination")!
-        .getBoundingClientRect();
-      const blank = list
-        .querySelector('[data-slot="empty"]')
-        ?.getBoundingClientRect();
-      return {
-        height: innerHeight,
-        pageHeight: document.documentElement.scrollHeight,
-        bottom: pagination.bottom,
-        scrollable: list.scrollHeight > list.clientHeight,
-        blankHeight: blank?.height,
-        listHeight: list.clientHeight,
-      };
-    });
-    expect(metrics.pageHeight).toBeLessThanOrEqual(metrics.height + 1);
-    expect(metrics.height - metrics.bottom).toBeLessThanOrEqual(25);
-    bottoms.push(metrics.bottom);
-    if (q === "empty")
-      expect(metrics.blankHeight).toBeGreaterThan(metrics.listHeight - 2);
-    if (q === "many") {
-      expect(metrics.scrollable).toBe(true);
-      await page
-        .locator(".list-body")
-        .evaluate((element) => (element.scrollTop = element.scrollHeight));
-      expect((await page.locator(".app-header").boundingBox())!.y).toBe(0);
-    }
-    await captureQa(page, `fixed-list-${q}-${info.project.name}`);
+  await page.route("**/api/tasks?*", route => route.fulfill({ json: {
+    items: Array.from({ length: 50 }, (_, i) => ({ ...task, id: `task-${i}`, title: `会话 ${i}` })), nextCursor: "next",
+  }}));
+  await page.goto("/tasks");
+  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
+  const history = page.locator(".conversation-history:visible");
+  await expect(history.getByRole("link", { name: "会话 49", exact: true })).toBeAttached();
+  const viewport = history.locator('[data-slot="scroll-area-viewport"]');
+  await viewport.evaluate(element => element.scrollTop = element.scrollHeight);
+  await expect(history.getByRole("button", { name: "下一页", exact: true })).toBeInViewport();
+  if (info.project.name === "mobile") {
+    await page.keyboard.press("Escape");
+    await expect(history).not.toBeVisible();
   }
-  expect(Math.max(...bottoms) - Math.min(...bottoms)).toBeLessThan(1);
+  await expect(page.getByLabel("消息", { exact: true })).toBeInViewport();
+  await captureQa(page, `conversation-history-${info.project.name}`);
 });
 
 test("empty task and observation lists fill the remaining workspace", async ({
@@ -520,8 +474,8 @@ test("task creation selects engine, provider and model with loading and failure 
 }, info) => {
   const { directory } = await (await request.get("/__test/directory")).json();
   await page.goto("/tasks");
-  await page.getByRole("button", { name: "分派任务", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
+  const dialog = page.getByRole("form", { name: "新会话" });
   const choose = async (label: string, option: string) => {
     await dialog.getByRole("combobox", { name: label, exact: true }).click();
     await page.getByRole("option", { name: option, exact: true }).click();
@@ -538,10 +492,10 @@ test("task creation selects engine, provider and model with loading and failure 
     if (mode === "empty") return route.fulfill({ json: { models: [] } });
     return route.continue();
   });
-  await choose("执行引擎", "OpenCode");
+  await choose("Agent", "OpenCode");
   await expect(dialog.getByRole("alert")).toContainText("Catalog unavailable");
   await expect(
-    dialog.getByRole("button", { name: "分派任务", exact: true }),
+    dialog.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeDisabled();
   await expect(
     dialog.getByRole("combobox", { name: "模型供应商", exact: true }),
@@ -553,19 +507,19 @@ test("task creation selects engine, provider and model with loading and failure 
   ).toBeVisible();
   await captureQa(page, `model-empty-${info.project.name}`);
   mode = "ok";
-  await choose("执行引擎", "Pi");
-  await choose("执行引擎", "OpenCode");
+  await choose("Agent", "Pi · 默认");
+  await choose("Agent", "OpenCode");
   await choose("模型供应商", "opencode-secondary");
   await choose("模型名称", "opencode secondary quality");
   await captureQa(page, `engine-model-selection-${info.project.name}`);
   await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
   await dialog
-    .getByLabel("任务要求", { exact: true })
+    .getByLabel("消息", { exact: true })
     .fill("model selection QA");
   const submitted = page.waitForRequest(
     (r) => r.method() === "POST" && r.url().endsWith("/api/tasks"),
   );
-  await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
+  await dialog.getByRole("button", { name: "发送消息", exact: true }).click();
   const payload = (await submitted).postDataJSON();
   expect(payload.engineId).toBe("opencode");
   expect(payload.model).toEqual({
@@ -928,7 +882,7 @@ test("every detail and observation subview has responsive screenshot evidence", 
   expect(notFound?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "页面不存在" })).toBeVisible();
   await captureQa(page, "not-found");
-  await page.getByRole("link", { name: "返回任务工作台" }).click();
+  await page.getByRole("link", { name: "返回会话" }).click();
   await expect(page).toHaveURL(/\/tasks$/);
 });
 
@@ -944,17 +898,17 @@ test("LAN HTTP compatibility supports submission and clipboard fallback", async 
   page.on("pageerror", (error) => errors.push(error.message));
   const { directory } = await (await request.get("/__test/directory")).json();
   await page.goto("/tasks");
-  await page.getByRole("button", { name: "分派任务", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
+  const dialog = page.getByRole("form", { name: "新会话" });
   await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
   await dialog
-    .getByLabel("任务要求", { exact: true })
+    .getByLabel("消息", { exact: true })
     .fill("HTTP compatibility check");
   const submitted = page.waitForRequest(
     (request) =>
       request.method() === "POST" && request.url().endsWith("/api/tasks"),
   );
-  await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
+  await dialog.getByRole("button", { name: "发送消息", exact: true }).click();
   expect((await submitted).postDataJSON().submissionId).toMatch(
     /^[0-9a-f]{32}$/,
   );
@@ -1001,19 +955,19 @@ test("task assignment, approval, output, observations, cancellation and deletion
   const { directory } = await (await request.get("/__test/directory")).json();
   await page.goto("/tasks");
   await expect(
-    page.getByRole("button", { name: "分派任务", exact: true }),
+    page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "分派任务", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
+  const dialog = page.getByRole("form", { name: "新会话" });
   await dialog
-    .getByLabel("任务名称", { exact: true })
+    .getByLabel("会话名称（可选）", { exact: true })
     .fill(`销售分析-${info.project.name}`);
   await dialog.getByLabel("服务器工作目录", { exact: true }).fill(directory);
   await dialog
-    .getByLabel("任务要求", { exact: true })
+    .getByLabel("消息", { exact: true })
     .fill("汇总销售数据并生成报告");
   await dialog.getByRole("switch", { name: "人工审批权限" }).check();
-  await dialog.getByRole("button", { name: "分派任务", exact: true }).click();
+  await dialog.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(page).toHaveURL(/\/tasks\/[\w-]+/);
   await expect(page.getByRole("region", { name: "待处理交互" })).toBeVisible();
   await page.screenshot({
@@ -1066,7 +1020,8 @@ test("task assignment, approval, output, observations, cancellation and deletion
   await observationTab(page, "引擎与资源");
   await expect(page.getByText("网关 RSS", { exact: true })).toBeVisible();
   await observationTab(page, "异常与调用链");
-  await navigate(page, "任务工作台");
+  await navigate(page, "会话");
+  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
   await page
     .getByRole("link", { name: `销售分析-${info.project.name}`, exact: true })
     .click();
@@ -1096,6 +1051,7 @@ test("safe Markdown, cumulative tool updates, output limits and unavailable file
   page,
   context,
 }) => {
+  await page.clock.install();
   const detail = designFixture();
   const external: string[] = [];
   page.on("request", (request) => {
@@ -1124,12 +1080,12 @@ test("safe Markdown, cumulative tool updates, output limits and unavailable file
   await tool.getByRole("button", { expanded: true }).click();
   const part = detail.messages[0].parts[1];
   part.output = "新的累计结果";
-  await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+  await page.clock.fastForward(5500);
   await expect(tool.getByRole("button", { expanded: false })).toBeVisible();
   await tool.getByRole("button", { expanded: false }).click();
   await expect(tool.getByLabel("工具输出")).toHaveText("新的累计结果");
   part.output = "日志行\n".repeat(18000);
-  await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+  await page.clock.fastForward(5500);
   await expect(tool.getByText("预览已省略")).toBeVisible();
   expect(
     (await tool.getByLabel("工具输出").innerText()).split("\n").length,
@@ -1210,9 +1166,8 @@ test("inline questions preserve input on conflict and expire without actionable 
   await page.getByRole("tab", { name: "交互", exact: true }).click();
   await expect(page.getByText("已过期", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "提交回答" })).toHaveCount(0);
-  await expect(
-    page.getByRole("checkbox", { name: "连接", exact: true }),
-  ).toBeDisabled();
+  await expect(page.getByText("检查项目", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "连接", exact: true })).toHaveCount(0);
 });
 
 test("observation filters persist and paused snapshots survive events and failures", async ({
@@ -1351,6 +1306,7 @@ test("history scroll stays put on updates and IME does not submit", async ({
     info.project.name !== "desktop",
     "Desktop scroll container behavior",
   );
+  await page.clock.install();
   const detail = designFixture();
   detail.messages[0].parts[0].content = "历史记录。\n\n".repeat(100);
   await mockTask(page, detail);
@@ -1360,7 +1316,7 @@ test("history scroll stays put on updates and IME does not submit", async ({
     element.dispatchEvent(new Event("scroll"));
   });
   detail.messages[0].parts[0].content += "新的累计输出";
-  await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+  await page.clock.fastForward(5500);
   await expect(
     page.getByRole("button", { name: "回到最新进度" }),
   ).toBeVisible();
@@ -1455,6 +1411,7 @@ test("design screenshots across viewports and themes", async ({
 test("tool states, keyboard focus, reduced motion and enlarged text", async ({
   page,
 }, info) => {
+  await page.clock.install();
   const detail = designFixture();
   const toolPart = detail.messages[0].parts[1];
   toolPart.state.status = "running";
@@ -1476,7 +1433,7 @@ test("tool states, keyboard focus, reduced motion and enlarged text", async ({
     ["interrupted", "已中断"],
   ]) {
     toolPart.state.status = state;
-    await page.getByRole("button", { name: "刷新任务", exact: true }).click();
+    await page.clock.fastForward(5500);
     await expect(tool.locator(".status")).toHaveText(label);
   }
   await expect(tool.getByRole("button", { expanded: true })).toBeVisible();
@@ -1536,7 +1493,7 @@ test("tool states, keyboard focus, reduced motion and enlarged text", async ({
   });
 });
 
-test("task updates keep the focused row in place", async ({ page }) => {
+test("task updates keep the focused row in place", async ({ page }, info) => {
   await page.clock.install();
   const first = designFixture().task;
   const second = { ...first, id: "second", title: "第二个测试任务" };
@@ -1545,16 +1502,17 @@ test("task updates keep the focused row in place", async ({ page }) => {
     route.fulfill({ json: { items, nextCursor: null } }),
   );
   await page.goto("/tasks");
+  if (info.project.name === "mobile") await page.getByRole("button", { name: "历史会话", exact: true }).click();
   await page.getByRole("link", { name: first.title, exact: true }).focus();
   first.status = "failed";
   items = [second, first];
   await page.clock.fastForward(5100);
   await expect(
-    page.locator(".task-list tbody tr").first().locator(".status"),
+    page.locator(".conversation-history:visible .conversation-link").first().locator(".status"),
   ).toHaveText("失败");
-  await expect(page.locator(".task-title").first()).toHaveText(first.title);
-  await page.getByRole("button", { name: "刷新任务列表", exact: true }).focus();
-  await expect(page.locator(".task-title").first()).toHaveText(second.title);
+  await expect(page.locator(".conversation-history:visible .conversation-link > span:first-child").first()).toHaveText(first.title);
+  await page.getByRole("textbox", { name: "搜索会话", exact: true }).focus();
+  await expect(page.locator(".conversation-history:visible .conversation-link > span:first-child").first()).toHaveText(second.title);
 });
 
 test("danger confirmation cancels, locks during submission and preserves failures", async ({
@@ -1755,7 +1713,7 @@ test("model search filters, handles no matches and selects with keyboard", async
   page,
 }) => {
   await page.goto("/tasks");
-  await page.getByRole("button", { name: "分派任务", exact: true }).click();
+  await page.getByRole("button", { name: "模型与会话设置", exact: true }).click();
   const provider = page.getByRole("combobox", {
     name: "模型供应商",
     exact: true,
@@ -1777,7 +1735,7 @@ test("model search filters, handles no matches and selects with keyboard", async
   await model.press("ArrowDown");
   await model.press("Enter");
   await expect(model).toHaveValue("pi secondary quality");
-  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("form", { name: "新会话" })).toBeVisible();
 });
 
 test("single choice keyboard navigation and custom answers remain exclusive", async ({
@@ -1816,7 +1774,7 @@ test("single choice keyboard navigation and custom answers remain exclusive", as
     });
   });
   await mockTask(page, detail);
-  const group = page.getByRole("radiogroup", { name: "输出格式", exact: true });
+  const group = page.getByRole("group", { name: "输出格式", exact: true });
   const markdown = group.getByRole("radio", { name: "Markdown", exact: true });
   const json = group.getByRole("radio", { name: "JSON", exact: true });
   await markdown.check();
@@ -1834,4 +1792,78 @@ test("single choice keyboard navigation and custom answers remain exclusive", as
   await page.getByRole("button", { name: "提交回答", exact: true }).click();
   await expect.poll(() => answers).toEqual([["Markdown"]]);
   await expect(markdown).toBeChecked();
+});
+
+
+test("reasoning folds independently of the answer", async ({ page }) => {
+  const detail = designFixture();
+  detail.messages[0].parts.unshift({ id: "reasoning", type: "reasoning", content: "先检查连接，再汇总异常。" });
+  await mockTask(page, detail);
+  const reasoning = page.getByRole("button", { name: "思考过程", exact: true });
+  await expect(page.getByText("先检查连接，再汇总异常。", { exact: true })).not.toBeVisible();
+  await reasoning.click();
+  await expect(page.getByText("先检查连接，再汇总异常。", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-slot="message"]')).toHaveCount(1);
+  await captureQa(page, `reasoning-${test.info().project.name}`);
+  await reasoning.click();
+  await expect(page.getByRole("heading", { name: "网关检查结果", exact: true })).toBeVisible();
+});
+
+test("shared field focus and heading scale remain consistent after selection", async ({ page }, info) => {
+  await page.goto("/tasks");
+  const heading = page.getByRole("heading", { name: "新会话", exact: true });
+  await expect(heading).toHaveCSS("font-size", info.project.name === "mobile" ? "20px" : "24px");
+  const agent = page.getByRole("combobox", { name: "Agent", exact: true });
+  const before = await agent.boundingBox();
+  const border = await agent.evaluate(el => getComputedStyle(el).borderColor);
+  await agent.click();
+  await page.getByRole("option", { name: "OpenCode", exact: true }).click();
+  await heading.click();
+  await expect(agent).toHaveCSS("border-color", border);
+  expect((await agent.boundingBox())!.height).toBe(before!.height);
+  await agent.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Escape");
+  await expect(agent).toBeFocused();
+  const directory = page.getByLabel("服务器工作目录", { exact: true });
+  await directory.focus();
+  await expect(directory).toHaveCSS("border-width", "0px");
+  await expect(directory.locator('xpath=..')).toHaveCSS("border-width", "1px");
+  await expect(page.getByRole("button", { name: "主题", exact: true })).toBeVisible();
+  await captureQa(page, `field-focus-${info.project.name}`);
+});
+
+test("questionnaire preserves answers across steps and shows resolved answers", async ({ page }) => {
+  const detail = designFixture();
+  const interaction = {
+    id: "multi-step", sessionID: detail.task.id, runId: detail.runs[0].id, kind: "question",
+    title: "确认需求", permission: "", patterns: [], state: "pending", policy: "manual",
+    created_at: detail.task.createdAt, resolvedAt: null as string | null, reply: null as { answers: string[][] } | null, error: null,
+    questions: [
+      { question: "选择格式", options: [{ label: "Markdown", description: "易于阅读" }], multiple: false, allowCustom: false },
+      { question: "补充要求", options: [], multiple: false, allowCustom: true },
+    ],
+  };
+  detail.interactions.push(interaction);
+  await page.route("**/question/multi-step/reply", async route => {
+    const body = route.request().postDataJSON();
+    expect(body).toEqual({ answers: [["Markdown"], ["保留数据来源"]] });
+    interaction.reply = body;
+    interaction.state = "resolved";
+    interaction.resolvedAt = new Date().toISOString();
+    await route.fulfill({ status: 204 });
+  });
+  await mockTask(page, detail);
+  await page.getByRole("radio", { name: "Markdown 易于阅读", exact: true }).check();
+  await captureQa(page, `questionnaire-${test.info().project.name}`);
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
+  await page.getByRole("textbox", { name: "补充要求 自定义回答", exact: true }).fill("保留数据来源");
+  await page.getByRole("button", { name: "上一题", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Markdown 易于阅读", exact: true })).toBeChecked();
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
+  await page.getByRole("button", { name: "提交回答", exact: true }).click();
+  await expect(page.getByRole("region", { name: "待处理交互" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "交互", exact: true }).click();
+  await expect(page.getByText(/Markdown；保留数据来源/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "提交回答", exact: true })).toHaveCount(0);
 });

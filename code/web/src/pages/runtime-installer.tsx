@@ -2,7 +2,7 @@
 import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useEffect, useRef, useState } from "react"
-import { Download, RefreshCw, Trash2, X } from "lucide-react"
+import { Download, PackageSearch, Trash2, X } from "lucide-react"
 import type { RuntimeAction, RuntimeView } from "../../../shared/runtimes"
 import type { AgentView } from "../../../shared/settings"
 import { api } from "@/lib/api"
@@ -134,7 +134,7 @@ export function RuntimeInstaller({
               disabled={busy}
               onClick={() => void perform("check")}
             >
-              <RefreshCw />
+              <PackageSearch />
             </IconButton>
           }
         </div>

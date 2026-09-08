@@ -17,9 +17,10 @@ import {
   Download,
   Eye,
   FileText,
-  RefreshCw,
+  History,
   Send,
   ShieldCheck,
+  MessageCircleQuestion,
   Square,
   Trash2,
 } from "lucide-react"
@@ -32,7 +33,23 @@ import type {
   TaskDetail,
 } from "../../../shared/contracts"
 import { promptSchema } from "../../../shared/contracts"
+import { agentNames } from "@/lib/agent-draft"
 import { useGateway } from "@/lib/gateway"
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoiceDescription,
+  QuestionnaireChoices,
+  QuestionnaireError,
+  QuestionnaireInput,
+  QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireProgress,
+  QuestionnaireSubmit,
+  QuestionnaireTitle,
+} from "@/components/ui/questionnaire"
 import { AgentMessage } from "@/components/agent-message"
 import { api, submit, useQuery } from "@/lib/api"
 import {
@@ -59,15 +76,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-  FieldLegend,
-} from "@/components/ui/field"
-import { Checkbox } from "@/components/ui/checkbox"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Field, FieldLabel } from "@/components/ui/field"
 import {
   Sheet,
   SheetContent,
@@ -80,7 +89,6 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip"
-import { Input } from "@/components/ui/input"
 import {
   InputGroup,
   InputGroupAddon,
@@ -173,7 +181,7 @@ export function Task() {
           <ArrowLeft className="size-3.5" />
           {params.get("return")?.startsWith("/observability?")
             ? "返回网关观测"
-            : "任务工作台"}
+            : "会话"}
         </Link>
         {detail && (
           <div className="page-heading">
@@ -192,9 +200,6 @@ export function Task() {
                 }}
               >
                 <PanelRight />
-              </IconButton>
-              <IconButton label="刷新任务" onClick={query.reload}>
-                <RefreshCw />
               </IconButton>
               <IconButton
                 label="停止任务"
@@ -260,6 +265,9 @@ export function Task() {
                 </div>
                 <TabsContent value="execution" data-execution>
                   <Execution
+                    agentName={
+                      agentNames[detail.task.engineId] ?? detail.task.engineId
+                    }
                     positionKey={runFilter ?? id}
                     runs={runFilter ? [] : detail.runs}
                     positions={positions}
@@ -484,6 +492,7 @@ export function Task() {
 }
 
 function Execution({
+  agentName,
   messages,
   positionKey,
   runs,
@@ -494,6 +503,7 @@ function Execution({
   onFocusChange,
 }: {
   messages: Message[]
+  agentName: string
   positionKey: string
   runs: Run[]
   run?: Run
@@ -623,7 +633,7 @@ function Execution({
                     )}
                   </>
                 )}
-                <AgentMessage message={message} />
+                <AgentMessage message={message} agentName={agentName} />
               </div>
             )
           })}
@@ -734,7 +744,7 @@ function FollowUp({
             rows={1}
             required
             disabled={disabled || busy}
-            placeholder="追加任务或补充要求"
+            placeholder="发送消息，或补充要求"
           />
           <InputGroupAddon align="inline-end">
             <IconButton
@@ -765,7 +775,7 @@ function FollowUp({
                 setText(run.inputParts.map((p) => p.text).join("\n"))
               }
             >
-              <RefreshCw data-icon="inline-start" />
+              <History data-icon="inline-start" />
               填入上轮要求
             </Button>
           )}
@@ -784,7 +794,13 @@ function InteractionRow({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error>()
-  const [answers, setAnswers] = useState<string[][]>(i.questions.map(() => []))
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({})
+  const questions = i.questions.map((q, index) => ({
+    ...q,
+    name: `question-${index}`,
+    required: true,
+    choices: q.options.map((option) => ({ value: option.label })),
+  }))
   async function reply(body: InteractionReply) {
     if (busy || i.state !== "pending") return
     setBusy(true)
@@ -809,7 +825,11 @@ function InteractionRow({
       aria-busy={busy || i.state === "replying"}
     >
       <div className="mb-3 flex items-center gap-2">
-        <ShieldCheck className="size-4 shrink-0" />
+        {i.kind === "permission" ? (
+          <ShieldCheck className="size-4 shrink-0" />
+        ) : (
+          <MessageCircleQuestion className="size-4 shrink-0" />
+        )}
         <h3 className="min-w-0 flex-1 font-medium break-words">{i.title}</h3>
         <Status state={busy ? "replying" : i.state} />
       </div>
@@ -822,7 +842,9 @@ function InteractionRow({
             {i.permission} · 始终允许的范围由当前引擎权限策略决定。
           </p>
           {i.patterns.length > 0 && (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{i.patterns.join("\n")}</pre>
+            <pre className="max-h-40 overflow-auto text-xs break-words whitespace-pre-wrap">
+              {i.patterns.join("\n")}
+            </pre>
           )}
           <div className="flex flex-wrap gap-2">
             {(["once", "always", "reject"] as const).map((decision, index) => (
@@ -838,136 +860,101 @@ function InteractionRow({
           </div>
         </div>
       )}
-      {i.kind === "question" && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
+      {i.kind === "question" && i.state === "expired" && !i.reply && (
+        <dl className="flex flex-col gap-3">
+          {i.questions.map((q, index) => (
+            <div key={index}>
+              <dt>{q.question}</dt>
+              <dd className="text-sm text-muted-foreground">未回答 · 已过期</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {i.kind === "question" && !i.reply && i.state !== "expired" && (
+        <Questionnaire
+          items={questions}
+          onSubmit={(event) => {
+            event.preventDefault()
+            const data = new FormData(event.currentTarget)
+            const answers = questions.map((q) =>
+              data
+                .getAll(q.name)
+                .map(String)
+                .filter((value) => value.trim())
+            )
+            if (answers.some((answer) => !answer.length)) return
             void reply({ answers })
           }}
         >
-          <FieldSet disabled={busy || i.state !== "pending"}>
-            <FieldGroup>
-              {i.questions.map((q, index) => (
-                <FieldSet key={index}>
-                  <FieldLegend id={`${i.id}-${index}-legend`} variant="label">
-                    {q.question}
-                  </FieldLegend>
-                  {q.options.length ? (
-                    q.multiple ? (
-                      <FieldGroup>
-                        {q.options.map((option, optionIndex) => (
-                          <Field
-                            key={option.label}
-                            orientation="horizontal"
-                            data-disabled={busy || i.state !== "pending"}
-                          >
-                            <Checkbox
-                              id={`${i.id}-${index}-${optionIndex}`}
-                              disabled={busy || i.state !== "pending"}
-                              checked={
-                                answers[index]?.includes(option.label) ?? false
-                              }
-                              onCheckedChange={(checked) =>
-                                setAnswers((previous) =>
-                                  previous.map((a, n) =>
-                                    n !== index
-                                      ? a
-                                      : checked
-                                        ? [...a, option.label]
-                                        : a.filter((v) => v !== option.label)
-                                  )
-                                )
-                              }
-                            />
-                            <FieldLabel
-                              htmlFor={`${i.id}-${index}-${optionIndex}`}
-                            >
-                              {option.label}
-                              {option.description && <span className="block text-xs text-muted-foreground">{option.description}</span>}
-                            </FieldLabel>
-                          </Field>
-                        ))}
-                      </FieldGroup>
-                    ) : (
-                      <RadioGroup
-                        aria-labelledby={`${i.id}-${index}-legend`}
-                        disabled={busy || i.state !== "pending"}
-                        value={
-                          answers[index]?.find((answer) =>
-                            q.options.some((option) => option.label === answer)
-                          ) ?? null
-                        }
-                        onValueChange={(value) => {
-                          if (typeof value === "string")
-                            setAnswers((previous) =>
-                              previous.map((a, n) =>
-                                n === index ? [value] : a
-                              )
-                            )
-                        }}
-                      >
-                        {q.options.map((option, optionIndex) => (
-                          <Field
-                            key={option.label}
-                            orientation="horizontal"
-                            data-disabled={busy || i.state !== "pending"}
-                          >
-                            <RadioGroupItem
-                              id={`${i.id}-${index}-${optionIndex}`}
-                              value={option.label}
-                            />
-                            <FieldLabel
-                              htmlFor={`${i.id}-${index}-${optionIndex}`}
-                            >
-                              {option.label}
-                              {option.description && <span className="block text-xs text-muted-foreground">{option.description}</span>}
-                            </FieldLabel>
-                          </Field>
-                        ))}
-                      </RadioGroup>
-                    )
-                  ) : null}
-                  {(q.allowCustom || !q.options.length) && (
-                    <Input
-                      id={`${i.id}-${index}`}
-                      aria-label={`${q.question} 自定义回答`}
-                      value={
-                        answers[index]
-                          ?.filter((a) => !q.options.some((option) => option.label === a))
-                          .join("\n") ?? ""
-                      }
-                      onChange={(e) =>
-                        setAnswers((previous) =>
-                          previous.map((a, n) =>
-                            n !== index
-                              ? a
-                              : e.target.value
-                                ? [
-                                    ...(q.multiple
-                                      ? a.filter((v) => q.options.some((option) => option.label === v))
-                                      : []),
-                                    e.target.value,
-                                  ]
-                                : a.filter((v) => q.options.some((option) => option.label === v))
-                          )
-                        )
-                      }
-                    />
-                  )}
-                </FieldSet>
-              ))}
-            </FieldGroup>
-            {i.state === "pending" && (
-              <Button
-                className="mt-4"
-                type="submit"
-                disabled={busy || answers.some((a) => !a.length)}
-              >
-                提交回答
-              </Button>
-            )}
-          </FieldSet>
-        </form>
+          {questions.length > 1 && (
+            <QuestionnaireProgress
+              render={(props, state) => (
+                <div {...props}>
+                  问题 {state.current} / {state.total}
+                </div>
+              )}
+            />
+          )}
+          {questions.map((q) => (
+            <QuestionnaireItem
+              key={q.name}
+              name={q.name}
+              multiple={q.multiple}
+              required
+            >
+              <QuestionnaireTitle>{q.question}</QuestionnaireTitle>
+              <QuestionnaireChoices>
+                {q.options.map((option) => (
+                  <QuestionnaireChoice
+                    key={option.label}
+                    value={option.label}
+                    disabled={busy || i.state !== "pending"}
+                    onChange={(event) => {
+                      if (event.target.checked && !q.multiple)
+                        setCustomAnswers((previous) => ({
+                          ...previous,
+                          [q.name]: "",
+                        }))
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    {option.description && (
+                      <QuestionnaireChoiceDescription>
+                        {option.description}
+                      </QuestionnaireChoiceDescription>
+                    )}
+                  </QuestionnaireChoice>
+                ))}
+                {(q.allowCustom || !q.options.length) && (
+                  <QuestionnaireInput
+                    disabled={busy || i.state !== "pending"}
+                    value={customAnswers[q.name] ?? ""}
+                    onChange={(event) =>
+                      setCustomAnswers((previous) => ({
+                        ...previous,
+                        [q.name]: event.target.value,
+                      }))
+                    }
+                    aria-label={`${q.question} 自定义回答`}
+                    placeholder="输入你的回答"
+                  />
+                )}
+              </QuestionnaireChoices>
+              <QuestionnaireError>请先选择或填写回答</QuestionnaireError>
+            </QuestionnaireItem>
+          ))}
+          {i.state === "pending" && (
+            <QuestionnaireActions>
+              <QuestionnairePrevious disabled={busy}>
+                上一题
+              </QuestionnairePrevious>
+              <QuestionnaireNext disabled={busy}>下一题</QuestionnaireNext>
+              <QuestionnaireSubmit disabled={busy}>
+                {busy ? "正在提交" : "提交回答"}
+              </QuestionnaireSubmit>
+            </QuestionnaireActions>
+          )}
+        </Questionnaire>
       )}
       {i.reply && (
         <p className="text-sm break-words">

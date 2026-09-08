@@ -12,7 +12,7 @@
 .agent-name { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-weight: 600; }
 .agent-name svg { width: 18px; height: 18px; }
 .agent-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-.agent-detail-heading h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.agent-detail-heading h2 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
 .agent-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 32px; }
 .agent-facts dt { font-size: 12px; color: var(--muted-foreground); margin-bottom: 6px; }
 .agent-facts dd { font-size: 14px; overflow-wrap: anywhere; }
@@ -148,8 +148,12 @@
   }
   html,
   body {
-    overflow: hidden;
+    overflow-x: clip;
+    overflow-y: hidden;
   }
+  h1 { @apply text-2xl leading-8 font-semibold; }
+  h2 { @apply text-base leading-6 font-semibold; }
+  h3 { @apply text-sm leading-6 font-medium; }
   h1,
   h2,
   h3,
@@ -193,12 +197,11 @@
   .workspace-nav a.active {
     @apply bg-accent text-accent-foreground;
   }
-  .workspace-nav svg,
-  .sidebar-meta svg {
+  .workspace-nav svg {
     @apply size-4 shrink-0;
   }
-  .sidebar-meta {
-    @apply mt-auto flex items-center gap-3 text-xs text-muted-foreground;
+  .sidebar-footer {
+    @apply mt-auto flex pt-4;
   }
   .app-header {
     @apply sticky top-0 z-10 col-start-2 flex min-h-14 min-w-0 flex-wrap items-center gap-4 border-b bg-background px-6 py-2;
@@ -273,9 +276,7 @@
   .page-heading {
     @apply mb-6 flex flex-wrap items-center justify-between gap-4;
   }
-  .page-heading h1 {
-    @apply text-2xl leading-snug font-semibold;
-  }
+
   .eyebrow {
     @apply mb-2 text-xs font-medium text-muted-foreground;
   }
@@ -331,24 +332,12 @@
   .message {
     @apply min-w-0 py-4;
   }
-  .message-user {
-    @apply my-4 rounded-lg bg-muted px-4;
-  }
-  .message header {
-    @apply mb-3 flex items-center gap-3 text-xs font-medium;
-  }
-  .message header time {
-    @apply text-xs font-normal text-muted-foreground;
-  }
-  .message header > :last-child {
-    @apply ml-auto;
-  }
   .message-text {
     @apply my-3 max-w-[72ch] text-[15px] leading-[26px] whitespace-pre-wrap;
     overflow-wrap: anywhere;
   }
   .tool-call {
-    @apply my-3 min-w-0 rounded-lg border bg-card text-xs;
+    @apply my-2 min-w-0 rounded-md border border-transparent text-xs;
   }
   .tool-summary {
     @apply items-center;
@@ -691,12 +680,14 @@
   .app-shell[data-collapsed="true"] .app-sidebar {
     padding: 16px 8px;
   }
+  .app-shell[data-collapsed="true"] .sidebar-footer {
+    padding-left: 8px;
+  }
   .app-shell[data-collapsed="true"] .brand {
     justify-content: center;
   }
   .app-shell[data-collapsed="true"] .brand span,
-  .app-shell[data-collapsed="true"] .workspace-nav span,
-  .app-shell[data-collapsed="true"] .sidebar-meta {
+  .app-shell[data-collapsed="true"] .workspace-nav span {
     display: none;
   }
   .app-shell[data-collapsed="true"] .workspace-nav a {
@@ -810,8 +801,9 @@
   .page {
     padding: 1.25rem 1rem;
   }
-  .page-heading h1 {
+  h1 {
     font-size: 1.25rem;
+    line-height: 1.75rem;
   }
   .task-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -991,7 +983,6 @@
   .app-header .connection { order: 0; width: auto; padding: 0; margin-left: auto; }
   .app-header .connection-label { display: none; }
   .header-runtime { margin-left: 0; }
-  .header-runtime > button:last-child { display: none; }
   .header-brand { font-size: 14px; }
   .agent-navigation [data-slot="select-trigger"] { max-width: 152px; }
   .agent-detail-heading { gap: 8px; }
@@ -1018,4 +1009,32 @@
   .agent-health-section .stacked-table td:nth-child(3)::before { margin: 0; }
   .agent-health-section .stacked-table td:nth-child(n+3) { font-size: 12px; }
   [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-checkbox-item"] { min-height: 44px; }
+}
+
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
+@layer components {
+  .conversation-workspace { @apply grid h-full min-h-0 grid-cols-[240px_minmax(0,1fr)]; }
+  .conversation-sidebar { @apply min-h-0 border-r; }
+  .conversation-history { @apply flex h-full min-h-0 flex-col gap-3 p-4; }
+  .conversation-link { @apply flex min-w-0 flex-col gap-2 rounded-md p-3 text-sm hover:bg-muted; }
+  .conversation-link.active { @apply bg-accent text-accent-foreground; }
+  .conversation-main { @apply flex min-h-0 min-w-0 flex-col; }
+  .conversation-mobile-nav { @apply hidden; }
+  .new-conversation { @apply flex min-h-0 flex-1 overflow-y-auto px-6 py-8; }
+  .new-conversation-content { @apply m-auto w-full max-w-2xl; }
+  .conversation-main .task-page { @apply min-h-0 flex-1; height: auto; }
+  .message [data-slot="message-header"] > :last-child { @apply ml-auto; }
+  .reasoning { @apply my-2 min-w-0 text-muted-foreground; }
+  .reasoning-content { @apply max-h-80 overflow-y-auto border-l-2 pl-4 text-sm; }
+  .tool-call:has([data-slot="collapsible-content"]:not([hidden])) { @apply border-border bg-card; }
+  .tool-call[data-state-status="failed"], .tool-call[data-state-status="interrupted"] { @apply border-destructive/30; }
+  .conversation-main .execution-feed { @apply mx-auto w-full max-w-3xl; }
+  .conversation-main .follow-up { @apply mx-auto w-full max-w-3xl; }
+}
+@media (max-width: 1023px) {
+  .conversation-workspace { display: flex; flex: 1; }
+  .conversation-sidebar { display: none; }
+  .conversation-main { flex: 1; }
+  .conversation-mobile-nav { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px; border-bottom: 1px solid var(--border); }
+  .new-conversation { padding: 24px 16px; }
 }

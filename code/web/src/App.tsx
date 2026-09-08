@@ -11,9 +11,8 @@ import {
 import {
   Activity,
   Bot,
-  ListTodo,
+  MessagesSquare,
   Network,
-  RefreshCw,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -40,7 +39,7 @@ import {
 } from "@/components/ui/tooltip"
 import { useEvents, useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
-import { Tasks } from "@/pages/tasks"
+import { Conversations, Tasks } from "@/pages/tasks"
 import { useTheme } from "@/components/theme-provider"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -102,36 +101,34 @@ function WorkspaceApp() {
                 <span>AgentBridge</span>
               </NavLink>
               {navigation}
-              <div className="sidebar-meta">
-                <Network aria-hidden="true" />
-                <span>企业 Agent 网关</span>
-              </div>
-            </aside>
-            <header className="app-header">
-              <IconButton
-                label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-                className="hidden lg:inline-flex"
-                aria-expanded={!sidebarCollapsed}
-                aria-controls="desktop-navigation"
-                onClick={() => {
-                  const collapsed = !sidebarCollapsed
-                  setSidebarCollapsed(collapsed)
-                  saveDesktopPreference(
-                    "agentbridge:sidebar-collapsed",
-                    String(collapsed)
-                  )
-                  try {
-                    localStorage.setItem(
+              <div className="sidebar-footer">
+                <IconButton
+                  label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                  className="sidebar-toggle"
+                  aria-expanded={!sidebarCollapsed}
+                  aria-controls="desktop-navigation"
+                  onClick={() => {
+                    const collapsed = !sidebarCollapsed
+                    setSidebarCollapsed(collapsed)
+                    saveDesktopPreference(
                       "agentbridge:sidebar-collapsed",
                       String(collapsed)
                     )
-                  } catch {
-                    /* Optional layout preference. */
-                  }
-                }}
-              >
-                {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-              </IconButton>
+                    try {
+                      localStorage.setItem(
+                        "agentbridge:sidebar-collapsed",
+                        String(collapsed)
+                      )
+                    } catch {
+                      /* Optional layout preference. */
+                    }
+                  }}
+                >
+                  {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+                </IconButton>
+              </div>
+            </aside>
+            <header className="app-header">
               <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
                 <SheetTrigger
                   render={<IconButton label="打开导航" className="lg:hidden" />}
@@ -178,9 +175,6 @@ function WorkspaceApp() {
                     </DropdownMenuRadioGroup>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <IconButton label="刷新网关状态" onClick={runtime.reload}>
-                  <RefreshCw />
-                </IconButton>
               </div>
             </header>
             {(runtime.error || events.state === "reconnecting") && (
@@ -202,8 +196,10 @@ function WorkspaceApp() {
                 }
               >
                 <Routes>
-                  <Route path="/tasks" element={<Tasks />} />
-                  <Route path="/tasks/:id" element={<Task />} />
+                  <Route path="/tasks" element={<Conversations />}>
+                    <Route index element={<Tasks />} />
+                    <Route path=":id" element={<Task />} />
+                  </Route>
                   <Route path="/observability" element={<Observability />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/agents" element={<Agents />} />
@@ -214,7 +210,7 @@ function WorkspaceApp() {
                     element={
                       <div className="page">
                         <h1>页面不存在</h1>
-                        <NavLink to="/tasks">返回任务工作台</NavLink>
+                        <NavLink to="/tasks">返回会话</NavLink>
                       </div>
                     }
                   />
@@ -234,7 +230,7 @@ function WorkspaceNavigation({ close }: { close: () => void }) {
   return (
     <nav aria-label="主导航" className="workspace-nav">
       {[
-        { to: "/tasks", label: "任务工作台", icon: ListTodo },
+        { to: "/tasks", label: "会话", icon: MessagesSquare },
         { to: "/agents", label: "Agent 管理", icon: Bot },
         { to: "/agents/resources", label: "共享资源", icon: Plug },
         { to: "/observability", label: "运行观测", icon: Activity },

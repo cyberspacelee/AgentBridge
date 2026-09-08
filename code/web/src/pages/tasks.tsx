@@ -1,26 +1,33 @@
 import { useState, type FormEvent } from "react"
-import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom"
 import {
   ArrowLeft,
   ArrowRight,
-  FolderOpen,
+  History,
   Plus,
   RefreshCw,
   Search,
   Send,
+  SlidersHorizontal,
 } from "lucide-react"
 import type { ModelOption, Page, TaskSummary } from "../../../shared/contracts"
 import { createTaskSchema } from "../../../shared/contracts"
 import { useGateway } from "@/lib/gateway"
 import { agentNames } from "@/lib/agent-draft"
 import { submit, useQuery } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { desktop } from "@/lib/desktop"
 import { DirectoryInput } from "@/components/directory-input"
 import {
   Blank,
   Choice,
-  date,
-  duration,
   Failure,
   IconButton,
   labels,
@@ -30,6 +37,7 @@ import {
 import {
   InputGroup,
   InputGroupInput,
+  InputGroupTextarea,
   InputGroupAddon,
   InputGroupButton,
 } from "@/components/ui/input-group"
@@ -38,15 +46,9 @@ import {
   PaginationContent,
   PaginationItem,
 } from "@/components/ui/pagination"
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Field,
   FieldError,
@@ -55,49 +57,80 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 
-export function Tasks() {
-  const { revision, runtime } = useGateway()
+export function Conversations() {
+  const [historyOpen, setHistoryOpen] = useState(false)
+  return (
+    <div className="conversation-workspace">
+      <aside className="conversation-sidebar" aria-label="历史会话">
+        <ConversationHistory />
+      </aside>
+      <div className="conversation-main">
+        <div className="conversation-mobile-nav">
+          <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
+            <SheetTrigger render={<Button variant="ghost" size="sm" />}>
+              <History data-icon="inline-start" />
+              历史会话
+            </SheetTrigger>
+            <SheetContent side="left">
+              <SheetHeader>
+                <SheetTitle>会话</SheetTitle>
+              </SheetHeader>
+              <ConversationHistory close={() => setHistoryOpen(false)} />
+            </SheetContent>
+          </Sheet>
+          <Button variant="ghost" size="sm" render={<Link to="/tasks" />}>
+            <Plus data-icon="inline-start" />
+            新会话
+          </Button>
+        </div>
+        <Outlet />
+      </div>
+    </div>
+  )
+}
+
+function ConversationHistory({ close }: { close?: () => void }) {
+  const { revision } = useGateway()
   const [params, setParams] = useSearchParams()
-  const [open, setOpen] = useState(false)
-  const searchQuery = params.get("q") ?? ""
-  const [searchDraft, setSearchDraft] = useState({
-    query: searchQuery,
-    text: searchQuery,
-  })
-  const search =
-    searchDraft.query === searchQuery ? searchDraft.text : searchQuery
-  if (searchDraft.query !== searchQuery)
-    setSearchDraft({ query: searchQuery, text: searchQuery })
-  const query = useQuery<Page<TaskSummary>>(`/api/tasks?${params}`, revision)
+  const { pathname } = useLocation()
+  const queryParams = new URLSearchParams()
+  for (const key of ["q", "status", "cursor"]) {
+    const value = params.get(key)
+    if (value) queryParams.set(key, value)
+  }
+  const query = useQuery<Page<TaskSummary>>(
+    `/api/tasks?${queryParams}`,
+    revision
+  )
   const [pinned, setPinned] = useState<{ key: string; items: TaskSummary[] }>()
+  const listKey = queryParams.toString()
   const items =
-    pinned?.key === params.toString()
+    pinned?.key === listKey
       ? pinned.items.map(
           (item) =>
             query.data?.items.find((next) => next.id === item.id) ?? item
         )
       : query.data?.items
-  const navigate = useNavigate()
-  const ready = runtime?.engines.some(
-    (engine) => engine.health.status === "ready"
-  )
+  const searchQuery = params.get("q") ?? ""
+  const [draft, setDraft] = useState({ query: searchQuery, text: searchQuery })
+  if (draft.query !== searchQuery)
+    setDraft({ query: searchQuery, text: searchQuery })
+  const search = draft.query === searchQuery ? draft.text : searchQuery
   const update = (key: string, value: string) =>
     setParams((previous) => {
       const next = new URLSearchParams(previous)
@@ -107,216 +140,118 @@ export function Tasks() {
       return next
     })
   return (
-    <div className="page list-page">
-      <div className="page-heading">
-        <div>
-          <h1>任务工作台</h1>
-        </div>
-        {ready ? (
-          <Button
-            onClick={() => setOpen(true)}
-            disabled={
-              !runtime?.engines.some(
-                (engine) => engine.health.status === "ready"
-              )
-            }
-          >
-            <Plus data-icon="inline-start" />
-            分派任务
-          </Button>
-        ) : (
-          <Button render={<Link to="/agents" />}>
-            <Plus data-icon="inline-start" />
-            配置 Agent
-          </Button>
-        )}
-      </div>
+    <div className="conversation-history">
+      <Button variant="outline" render={<Link to="/tasks" />} onClick={close}>
+        <Plus data-icon="inline-start" />
+        新会话
+      </Button>
       <form
-        className="toolbar"
-        onSubmit={(e) => {
-          e.preventDefault()
+        onSubmit={(event) => {
+          event.preventDefault()
           update("q", search)
         }}
       >
-        <InputGroup className="max-w-80">
+        <InputGroup>
           <InputGroupInput
-            aria-label="搜索任务"
-            placeholder="搜索任务名称或 ID"
+            aria-label="搜索会话"
+            placeholder="搜索会话"
             value={search}
-            onChange={(e) =>
-              setSearchDraft({ query: searchQuery, text: e.target.value })
+            onChange={(event) =>
+              setDraft({ query: searchQuery, text: event.target.value })
             }
           />
           <InputGroupAddon align="inline-end">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <InputGroupButton
-                    type="submit"
-                    size="icon-sm"
-                    aria-label="搜索"
-                  />
-                }
-              >
-                <Search />
-              </TooltipTrigger>
-              <TooltipContent>搜索</TooltipContent>
-            </Tooltip>
+            <InputGroupButton type="submit" size="icon-sm" aria-label="搜索">
+              <Search />
+            </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
-        <Choice
-          label="任务状态"
-          value={params.get("status") ?? ""}
-          options={[
-            { value: "", label: "全部状态" },
-            ...[
-              "running",
-              "queued",
-              "waiting_input",
-              "completed",
-              "failed",
-              "timed_out",
-              "cancelled",
-              "unavailable",
-            ].map((value) => ({ value, label: labels[value] })),
-          ]}
-          onChange={(v) => update("status", v)}
-        />
-        <IconButton label="刷新任务列表" onClick={query.reload}>
-          <RefreshCw />
-        </IconButton>
       </form>
+      <Choice
+        label="会话状态"
+        value={params.get("status") ?? ""}
+        options={[
+          { value: "", label: "全部会话" },
+          ...[
+            "waiting_input",
+            "running",
+            "queued",
+            "completed",
+            "failed",
+            "timed_out",
+            "cancelled",
+            "unavailable",
+          ].map((value) => ({ value, label: labels[value] })),
+        ]}
+        onChange={(value) => update("status", value)}
+      />
       <Failure error={query.error} />
-      {runtime && !ready && (
-        <Notice title="暂无可用 Agent">
-          <Link
-            className="text-primary underline underline-offset-4"
-            to="/agents"
-          >
-            配置模型并启用 Agent
-          </Link>
-        </Notice>
+      {query.error && (
+        <Button variant="outline" onClick={query.reload}>
+          重新加载会话
+        </Button>
       )}
-      <div className="list-body">
-        {query.loading ? (
-          <div className="flex flex-col gap-4 py-5">
-            {[0, 1, 2, 3].map((n) => (
-              <Skeleton key={n} className="h-14 w-full" />
-            ))}
-          </div>
-        ) : items?.length ? (
-          <Table
-            className="task-list"
-            onPointerEnter={() => setPinned({ key: params.toString(), items })}
-            onPointerLeave={(event) => {
-              if (!event.currentTarget.contains(document.activeElement))
-                setPinned(undefined)
-            }}
-            onFocusCapture={() =>
-              setPinned((previous) =>
-                previous?.key === params.toString()
-                  ? previous
-                  : { key: params.toString(), items }
-              )
-            }
-            onBlur={(event) => {
-              if (
-                !event.currentTarget.contains(event.relatedTarget) &&
-                !event.currentTarget.matches(":hover")
-              )
-                setPinned(undefined)
-            }}
-          >
-            <TableHeader>
-              <TableRow>
-                <TableHead>任务</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>引擎 / 模型</TableHead>
-                <TableHead>轮次</TableHead>
-                <TableHead>最近更新</TableHead>
-                <TableHead>执行耗时</TableHead>
-                <TableHead>
-                  <span className="sr-only">打开</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((task) => (
-                <TableRow key={task.id}>
-                  <TableCell className="max-w-96">
-                    <Link to={`/tasks/${task.id}`} className="task-title">
-                      {task.title}
-                    </Link>
-                    <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                      <FolderOpen className="size-3 shrink-0" />
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <span tabIndex={0} className="max-w-80 truncate" />
-                          }
-                        >
-                          {task.directory}
-                        </TooltipTrigger>
-                        <TooltipContent className="break-all">
-                          {task.directory}
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Status state={task.status} />
-                  </TableCell>
-                  <TableCell>
-                    <div>{task.engineId}</div>
-                    <div className="max-w-52 truncate text-xs text-muted-foreground">
-                      {task.lastRun?.model?.modelID ?? "引擎默认模型"}
-                    </div>
-                  </TableCell>
-                  <TableCell className="tabular-nums" data-secondary>
-                    {task.lastRun?.sequence ?? 0}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {date(task.updatedAt)}
-                  </TableCell>
-                  <TableCell
-                    className="text-xs text-muted-foreground"
-                    data-secondary
-                  >
-                    {duration(
-                      task.lastRun?.startedAt && task.lastRun.finishedAt
-                        ? Date.parse(task.lastRun.finishedAt) -
-                            Date.parse(task.lastRun.startedAt)
-                        : null
-                    )}
-                  </TableCell>
-                  <TableCell data-secondary>
-                    <IconButton
-                      label={`打开 ${task.title}`}
-                      nativeButton={false}
-                      render={<Link to={`/tasks/${task.id}`} />}
-                    >
-                      <ArrowRight />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          !query.error && (
+      <ScrollArea
+        className="min-h-0 flex-1"
+        viewportProps={{ "aria-label": "会话列表" }}
+      >
+        <nav
+          className="flex flex-col gap-1"
+          aria-label="会话列表"
+          onPointerEnter={() => items && setPinned({ key: listKey, items })}
+          onPointerLeave={(event) => {
+            if (!event.currentTarget.contains(document.activeElement))
+              setPinned(undefined)
+          }}
+          onFocusCapture={() =>
+            items &&
+            setPinned((previous) =>
+              previous?.key === listKey ? previous : { key: listKey, items }
+            )
+          }
+          onBlur={(event) => {
+            if (
+              !event.currentTarget.contains(event.relatedTarget) &&
+              !event.currentTarget.matches(":hover")
+            )
+              setPinned(undefined)
+          }}
+        >
+          {query.loading ? (
+            <Skeleton className="h-40" />
+          ) : (
+            items?.map((task) => (
+              <NavLink
+                key={task.id}
+                aria-label={task.title}
+                to={`/tasks/${task.id}`}
+                onClick={close}
+                className={cn(
+                  "conversation-link",
+                  pathname === `/tasks/${task.id}` && "active"
+                )}
+              >
+                <span className="truncate font-medium">{task.title}</span>
+                <span className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span className="truncate">
+                    {agentNames[task.engineId] ?? task.engineId}
+                  </span>
+                  <Status state={task.status} />
+                </span>
+              </NavLink>
+            ))
+          )}
+          {!query.loading && !query.error && !query.data?.items.length && (
             <Blank>
               {params.get("q") || params.get("status")
-                ? "没有符合条件的任务"
-                : "暂无任务"}
+                ? "没有符合条件的会话"
+                : "暂无会话"}
             </Blank>
-          )
-        )}
-      </div>
-      <div className="pagination">
-        <span>
-          {query.data ? `本页 ${query.data.items.length} 个任务` : ""}
-        </span>
-        <Pagination aria-label="任务分页" className="mx-0 w-auto">
+          )}
+        </nav>
+      </ScrollArea>
+      {(params.get("cursor") || query.data?.nextCursor) && (
+        <Pagination aria-label="会话分页">
           <PaginationContent>
             <PaginationItem>
               <IconButton
@@ -331,35 +266,44 @@ export function Tasks() {
               <IconButton
                 label="下一页"
                 disabled={!query.data?.nextCursor}
-                onClick={() => {
-                  if (query.data?.nextCursor)
-                    update("cursor", query.data.nextCursor)
-                }}
+                onClick={() => update("cursor", query.data?.nextCursor ?? "")}
               >
                 <ArrowRight />
               </IconButton>
             </PaginationItem>
           </PaginationContent>
         </Pagination>
+      )}
+    </div>
+  )
+}
+
+export function Tasks() {
+  const { runtime } = useGateway()
+  const navigate = useNavigate()
+  const ready = runtime?.engines.some(
+    (engine) => engine.enabled !== false && engine.health.status === "ready"
+  )
+  return (
+    <div className="new-conversation">
+      <div className="new-conversation-content">
+        <h1>新会话</h1>
+        <p className="mt-2 mb-6 text-sm text-muted-foreground">
+          选择 Agent，开始对话。
+        </p>
+        {!runtime ? (
+          <Skeleton className="h-64" />
+        ) : ready ? (
+          <CreateTask onAccepted={(id) => navigate(`/tasks/${id}`)} />
+        ) : (
+          <Blank>
+            暂无可用 Agent
+            <Button className="mt-4" render={<Link to="/agents" />}>
+              配置 Agent
+            </Button>
+          </Blank>
+        )}
       </div>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex max-h-[90svh] flex-col overflow-hidden sm:max-w-xl">
-          <DialogHeader className="shrink-0">
-            <DialogTitle>分派任务</DialogTitle>
-          </DialogHeader>
-          <ScrollArea
-            className="-m-1 flex min-h-0 flex-1 flex-col"
-            viewportProps={{ className: "min-h-0 p-1" }}
-          >
-            <CreateTask
-              onAccepted={(id) => {
-                setOpen(false)
-                navigate(`/tasks/${id}`)
-              }}
-            />
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
@@ -451,21 +395,39 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
     }
   }
   return (
-    <form onSubmit={send} className="task-create-form">
+    <form onSubmit={send} className="task-create-form" aria-label="新会话">
       <FieldSet disabled={busy}>
         <FieldGroup>
+          <Field data-invalid={!!invalid.parts}>
+            <FieldLabel htmlFor="prompt">消息</FieldLabel>
+            <InputGroup>
+              <InputGroupTextarea
+                id="prompt"
+                aria-invalid={!!invalid.parts}
+                aria-describedby={invalid.parts ? "prompt-error" : undefined}
+                name="prompt"
+                required
+                rows={4}
+                placeholder="你想完成什么？"
+              />
+            </InputGroup>
+            <FieldError id="prompt-error">{invalid.parts}</FieldError>
+          </Field>
           <Field>
-            <FieldLabel htmlFor="engine">执行引擎</FieldLabel>
+            <FieldLabel htmlFor="engine">Agent</FieldLabel>
             <Choice
               id="engine"
-              label="执行引擎"
+              label="Agent"
               value={engineId}
               disabled={busy}
               options={(runtime?.engines ?? [])
-                .filter((item) => item.enabled !== false)
+                .filter(
+                  (item) =>
+                    item.enabled !== false && item.health.status === "ready"
+                )
                 .map((item) => ({
                   value: item.id,
-                  label: agentNames[item.id] ?? item.id,
+                  label: `${agentNames[item.id] ?? item.id}${item.id === runtime?.engine ? " · 默认" : ""}`,
                 }))}
               onChange={(value) => {
                 setEngineId(value)
@@ -479,19 +441,6 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
                 setError(undefined)
               }}
             />
-          </Field>
-          <Field data-invalid={!!invalid.title}>
-            <FieldLabel htmlFor="title">任务名称</FieldLabel>
-            <Input
-              id="title"
-              aria-invalid={!!invalid.title}
-              aria-describedby={invalid.title ? "title-error" : undefined}
-              name="title"
-              maxLength={200}
-              autoFocus
-              placeholder="例如：汇总本月销售数据"
-            />
-            <FieldError id="title-error">{invalid.title}</FieldError>
           </Field>
           <Field data-invalid={!!invalid.directory}>
             <FieldLabel htmlFor="directory">
@@ -513,74 +462,115 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             />
             <FieldError id="directory-error">{invalid.directory}</FieldError>
           </Field>
-          <Field data-invalid={!!invalid.parts}>
-            <FieldLabel htmlFor="prompt">任务要求</FieldLabel>
-            <Textarea
-              id="prompt"
-              aria-invalid={!!invalid.parts}
-              aria-describedby={invalid.parts ? "prompt-error" : undefined}
-              name="prompt"
-              required
-              rows={5}
-              placeholder="分析目标、输入文件与交付要求"
-            />
-            <FieldError id="prompt-error">{invalid.parts}</FieldError>
-          </Field>
-          <FieldGroup className="sm:grid sm:grid-cols-2">
-            <Field data-invalid={!!invalid.model}>
-              <FieldLabel htmlFor="provider">模型供应商</FieldLabel>
-              <Choice
-                id="provider"
-                label="模型供应商"
-                searchable
-                aria-describedby={invalid.model ? "model-error" : undefined}
-                invalid={!!invalid.model}
-                disabled={busy || !providers.length}
-                value={provider}
-                options={
-                  providers.length
-                    ? providers.map((value) => ({ value, label: value }))
-                    : [
-                        {
-                          value: "",
-                          label: catalog.loading ? "正在加载" : "无可用供应商",
-                        },
-                      ]
-                }
-                onChange={(value) => {
-                  setSelectedProvider(value)
-                  setSelectedModel("")
-                }}
-              />
-            </Field>
-            <Field data-invalid={!!invalid.model}>
-              <FieldLabel htmlFor="model">模型名称</FieldLabel>
-              <Choice
-                id="model"
-                label="模型名称"
-                searchable
-                aria-describedby={invalid.model ? "model-error" : undefined}
-                invalid={!!invalid.model}
-                disabled={busy || !providerModels.length}
-                value={model}
-                options={
-                  providerModels.length
-                    ? providerModels.map((item) => ({
-                        value: item.modelID,
-                        label: item.name,
-                      }))
-                    : [
-                        {
-                          value: "",
-                          label: catalog.loading ? "正在加载" : "无可用模型",
-                        },
-                      ]
-                }
-                onChange={setSelectedModel}
-              />
-            </Field>
-          </FieldGroup>
-          <FieldError id="model-error">{invalid.model}</FieldError>
+          <Collapsible>
+            <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+              <SlidersHorizontal data-icon="inline-start" />
+              模型与会话设置
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <FieldGroup className="pt-4">
+                <Field data-invalid={!!invalid.title}>
+                  <FieldLabel htmlFor="title">会话名称（可选）</FieldLabel>
+                  <Input
+                    id="title"
+                    aria-invalid={!!invalid.title}
+                    aria-describedby={invalid.title ? "title-error" : undefined}
+                    name="title"
+                    maxLength={200}
+                    placeholder="例如：汇总本月销售数据"
+                  />
+                  <FieldError id="title-error">{invalid.title}</FieldError>
+                </Field>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field data-invalid={!!invalid.model}>
+                    <FieldLabel htmlFor="provider">模型供应商</FieldLabel>
+                    <Choice
+                      id="provider"
+                      label="模型供应商"
+                      searchable
+                      aria-describedby={
+                        invalid.model ? "model-error" : undefined
+                      }
+                      invalid={!!invalid.model}
+                      disabled={busy || !providers.length}
+                      value={provider}
+                      options={
+                        providers.length
+                          ? providers.map((value) => ({ value, label: value }))
+                          : [
+                              {
+                                value: "",
+                                label: catalog.loading
+                                  ? "正在加载"
+                                  : "无可用供应商",
+                              },
+                            ]
+                      }
+                      onChange={(value) => {
+                        setSelectedProvider(value)
+                        setSelectedModel("")
+                      }}
+                    />
+                  </Field>
+                  <Field data-invalid={!!invalid.model}>
+                    <FieldLabel htmlFor="model">模型名称</FieldLabel>
+                    <Choice
+                      id="model"
+                      label="模型名称"
+                      searchable
+                      aria-describedby={
+                        invalid.model ? "model-error" : undefined
+                      }
+                      invalid={!!invalid.model}
+                      disabled={busy || !providerModels.length}
+                      value={model}
+                      options={
+                        providerModels.length
+                          ? providerModels.map((item) => ({
+                              value: item.modelID,
+                              label: item.name,
+                            }))
+                          : [
+                              {
+                                value: "",
+                                label: catalog.loading
+                                  ? "正在加载"
+                                  : "无可用模型",
+                              },
+                            ]
+                      }
+                      onChange={setSelectedModel}
+                    />
+                  </Field>
+                </FieldGroup>
+                <FieldError id="model-error">{invalid.model}</FieldError>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field orientation="horizontal">
+                    <Switch
+                      id="manual-permission"
+                      disabled={engine?.capabilities?.permissions === false}
+                      checked={manualPermission}
+                      onCheckedChange={setManualPermission}
+                    />
+                    <FieldLabel htmlFor="manual-permission">
+                      人工审批权限
+                    </FieldLabel>
+                  </Field>
+                  <Field orientation="horizontal">
+                    <Switch
+                      id="manual-question"
+                      disabled={engine?.capabilities?.questions === false}
+                      checked={manualQuestion}
+                      onCheckedChange={setManualQuestion}
+                    />
+                    <FieldLabel htmlFor="manual-question">
+                      人工回答反问
+                    </FieldLabel>
+                  </Field>
+                </FieldGroup>
+              </FieldGroup>
+            </CollapsibleContent>
+          </Collapsible>
           <Failure error={catalog.error} />
           {!catalog.loading && !catalog.error && !models.length && (
             <Notice title="此引擎尚未配置可用模型或供应商凭据。">
@@ -589,7 +579,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
           )}
           {engine && engine.health.status !== "ready" && (
             <Notice title="引擎尚未就绪">
-              {engine.health.message || "等待引擎恢复后再分派任务。"}
+              {engine.health.message || "等待 Agent 恢复后再发送消息。"}
             </Notice>
           )}
           {catalog.error && (
@@ -598,32 +588,12 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
               重新加载模型
             </Button>
           )}
-          <FieldGroup className="sm:grid sm:grid-cols-2">
-            <Field orientation="horizontal">
-              <Switch
-                id="manual-permission"
-                disabled={engine?.capabilities?.permissions === false}
-                checked={manualPermission}
-                onCheckedChange={setManualPermission}
-              />
-              <FieldLabel htmlFor="manual-permission">人工审批权限</FieldLabel>
-            </Field>
-            <Field orientation="horizontal">
-              <Switch
-                id="manual-question"
-                disabled={engine?.capabilities?.questions === false}
-                checked={manualQuestion}
-                onCheckedChange={setManualQuestion}
-              />
-              <FieldLabel htmlFor="manual-question">人工回答反问</FieldLabel>
-            </Field>
-          </FieldGroup>
           <Failure error={error} />
           <Separator />
           <div className="flex justify-end">
             <Button type="submit" disabled={busy || !canSubmit}>
               <Send data-icon="inline-start" />
-              {busy ? "正在提交" : "分派任务"}
+              {busy ? "正在提交" : "发送消息"}
             </Button>
           </div>
         </FieldGroup>
