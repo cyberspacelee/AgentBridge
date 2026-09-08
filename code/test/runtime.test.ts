@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, readFile, readdir, realpath, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, symlink, rm } from "node:fs/promises";
 import pino from "pino";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +26,7 @@ import { createTaskSchema } from "../shared/contracts.js";
 import { transitionRun } from "../src/domain/transitions.js";
 import { createServer } from "../src/gateway/server.js";
 import { engineError } from "../src/errors.js";
-import { SettingsManager } from "../src/settings.js";
+import { SettingsManager, nativeSessionEnvironment } from "../src/settings.js";
 
 function configureAgents(config: ReturnType<typeof readConfig>) {
   const manager = new SettingsManager(config),
@@ -845,6 +845,45 @@ test("delete removes replayed content, keeps submission tombstone and user direc
   }
 });
 
+test("HTTP preserves directory and Grok project configuration errors", async () => {
+  const f = await fixture();
+  const server = createServer(f.runtime);
+  try {
+    const missing = await server.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: input(path.join(f.directory, "missing")),
+    });
+    assert.equal(missing.statusCode, 400);
+    assert.deepEqual(missing.json(), {
+      code: "VALIDATION_ERROR",
+      message: "Working directory does not exist or cannot be accessed",
+    });
+    const file = path.join(f.directory, ".grok", "config.toml");
+    await mkdir(path.dirname(file));
+    await writeFile(file, 'model = "project-model"\n');
+    f.adapter.createSession = async (session) => {
+      nativeSessionEnvironment(f.config, "grok", session);
+      throw new Error("Conflicting project configuration must be rejected");
+    };
+    for (const url of ["/api/tasks", "/session"]) {
+      const response = await server.inject({
+        method: "POST",
+        url,
+        payload:
+          url === "/api/tasks" ? input(f.directory) : { directory: f.directory },
+      });
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "CONFIGURATION_ERROR");
+      assert.ok(response.json().message.includes(file));
+      assert.match(response.json().message, /Import these resources into AgentBridge/);
+    }
+  } finally {
+    await server.close();
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
 test("HTTP contract, SSE completion, metrics and graceful stream shutdown", async () => {
   const f = await fixture();
   const server = createServer(f.runtime);
@@ -881,6 +920,7 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
       403,
     );
     assert.equal(invalid.json().code, "VALIDATION_ERROR");
+    assert.equal(invalid.json().message, "Invalid request body");
     const unsupported = await server.inject({
       method: "POST",
       url: "/session",

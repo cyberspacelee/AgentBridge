@@ -184,7 +184,8 @@ export function createServer(runtime: SessionRuntime) {
               .join("; "),
             400,
           )
-        : status === 400 || status === 413 || status === 415
+        : !(error instanceof GatewayError) &&
+            (status === 400 || status === 413 || status === 415)
           ? new GatewayError(
               "VALIDATION_ERROR",
               status === 413
