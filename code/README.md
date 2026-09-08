@@ -19,6 +19,8 @@ pnpm desktop:dev
 | `pnpm desktop:prepare` | 仅准备桌面构建和运行文件 |
 | `pnpm test:desktop` | 构建准备后，在图形环境运行 Electron 冒烟测试 |
 
+GitHub Actions 的 Desktop 工作流中，手动触发和推送 `v*` 版本 tag 都是发布流程：三个平台构建成功后必须创建 GitHub Release 并上传安装包及更新元数据，不提供跳过发布的开关。PR 只执行构建验证。发布 tag 必须与 `desktop/package.json` 中的版本一致。
+
 桌面基础包不包含 Pi、OpenCode、Codex、Grok CLI。在 Agent 的“安装与版本”页签按需安装官方最新版、检查更新或卸载；安装不启用，卸载保留模型配置、原生会话、任务历史和产物。最终桌面包自带 Node/npm，用户无需全局安装它们。托盘可用时关闭窗口继续后台运行；显式退出时可等待任务结束或停止任务。数据位于 Electron 用户数据目录的 `data/` 下，可通过 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
 
 源码 Web 模式：
