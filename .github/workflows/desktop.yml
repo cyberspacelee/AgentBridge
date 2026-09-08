@@ -1,0 +1,55 @@
+name: Desktop
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "code/**"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: code
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+          cache-dependency-path: code/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm --filter @agentbridge/web typecheck
+      - run: pnpm --filter @agentbridge/web lint
+      - run: pnpm test
+      - run: pnpm desktop:dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:desktop
+        env:
+          AGENT_DESKTOP_EXECUTABLE: ${{ github.workspace }}/code/desktop-release/linux-unpacked/agentbridge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgentBridge-${{ matrix.os }}
+          path: |
+            code/desktop-release/*.exe
+            code/desktop-release/*.AppImage
+            code/desktop-release/*.dmg
+            code/desktop-release/*.zip
+            code/desktop-release/*.blockmap
+            code/desktop-release/*.yml
+          if-no-files-found: error

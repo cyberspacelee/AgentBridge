@@ -1,0 +1,14 @@
+{
+  "checkedAt": "2026-09-08T01:13:00Z",
+  "platform": "linux-x64",
+  "managedInstallation": true,
+  "modelTasksSubmitted": 0,
+  "runtimes": [
+    { "id": "pi", "version": "0.85.1", "installedBytes": 215296378, "probe": "--version; RPC get_state and get_commands with AgentBridge extension", "installed": true, "uninstalled": true },
+    { "id": "opencode", "version": "1.18.29", "installedBytes": 184667503, "probe": "--version; isolated serve health endpoint", "distribution": "opencode-linux-x64-baseline", "installed": true, "uninstalled": true },
+    { "id": "codex", "version": "0.153.4", "installedBytes": 334978735, "probe": "--version; app-server initialize handshake", "installed": true, "uninstalled": true },
+    { "id": "grok", "version": "1.0.13", "installedBytes": 166079904, "probe": "--version; ACP initialize handshake", "distribution": "official GCS object generation 1787956692848119, MD5 checked", "installed": true, "uninstalled": true }
+  ],
+  "offlineChecks": "31 runtime, lifecycle, process, Pi extension and MCP checks passed",
+  "limitations": ["Windows and macOS installation not executed on this Linux host", "Protocol handshakes do not certify paid model execution or every upstream capability", "npm staging size is polled every 500 ms; strict per-write disk quotas are not provided"]
+}

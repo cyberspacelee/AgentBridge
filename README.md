@@ -1,12 +1,13 @@
 # AgentBridge
 
-AgentBridge 在同一个工作台管理 Pi、OpenCode、Codex CLI 和 Grok Build，提供统一 HTTP/SSE 接口、连续对话、工具记录、交互审批、交付物和运行观测。后端使用 TypeScript、Fastify 和 SQLite，前端使用 React、shadcn Base UI 和 Tailwind CSS 4。
+AgentBridge 在同一个工作台管理 Pi、OpenCode、Codex CLI 和 Grok Build，提供 Electron 桌面应用和 HTTP/SSE 网关，支持连续对话、工具记录、交互审批、交付物和运行观测。后端使用 TypeScript、Fastify 和 SQLite，前端使用 React、shadcn Base UI 和 Tailwind CSS 4。
 
 ![AgentBridge 任务工作台](code/artifacts/ui/qa/lan-acceptance.png)
 
 ## 功能
 
 - 四个 Agent 独立启用、停用、强停和应用配置，运行中的任务保持明确的生命周期。
+- 桌面基础包不携带四个 Agent CLI；在 Agent 管理页按需安装最新版、更新或卸载，保留配置和历史。
 - 共享 OpenAI 兼容模型连接、Skills 和 MCP，每个 Agent 独立选择引用与默认模型。
 - 模型只支持 Chat Completions 或 Responses；Codex 要求 Responses。不使用登录、OAuth 或个人 CLI 认证。
 - 一个任务保留连续会话；每次追加形成 Run，用于排队、超时、取消、诊断与用量归属。
@@ -15,7 +16,25 @@ AgentBridge 在同一个工作台管理 Pi、OpenCode、Codex CLI 和 Grok Build
 
 ## 快速启动
 
-需要 Node.js **>= 22.21.0** 和 pnpm **10.33.2**。Pi、OpenCode 和 Pi MCP 扩展由项目依赖提供；Codex、Grok 当前使用主机已有 CLI，可通过 `CODEX_COMMAND`、`GROK_COMMAND` 指定可执行文件。
+### Electron 桌面端
+
+桌面安装包自带 Node.js 与 npm，运行网关和安装受管 CLI 不需要全局 Node/npm。首次打开后，进入 Agent 的“安装与版本”页签，按需安装官方最新稳定版，再配置模型并启用；安装不会自动启用。更新和卸载由用户点击触发，不在每次启动时自动升级。
+
+从源码运行桌面端需要 Node.js **>= 22.21.0** 和 pnpm **10.33.2**：
+
+```sh
+cd code
+pnpm install --frozen-lockfile
+pnpm desktop:dev
+```
+
+`desktop:dev` 会构建前后端并准备内置运行环境。`pnpm desktop:pack` 生成当前平台的应用目录；`pnpm desktop:dist` 生成安装分发包，均输出到 `code/desktop-release/`，不会自动发布。准备好构建后，通过 `pnpm test:desktop` 运行桌面冒烟测试；详细步骤见[安装与验收](INSTRUCTION.md#electron-桌面端)。
+
+托盘可用时，关闭窗口会隐藏到托盘，后台任务继续运行；菜单或托盘中的“退出”以及 `Ctrl/Cmd+Q` 才会退出应用。有任务时可选择取消、等待完成后退出或停止任务并退出。桌面数据保存在 Electron 用户数据目录下的 `data/`，可用 `AGENT_DESKTOP_DATA_DIR` 指定用户数据根目录；应用菜单可直接打开日志目录。
+
+### 源码 Web 模式
+
+需要上述 Node.js 和 pnpm。Pi、OpenCode 和 Pi MCP 扩展仍由源码开发依赖提供；Codex、Grok 使用主机已有 CLI，可通过 `CODEX_COMMAND`、`GROK_COMMAND` 指定可执行文件。源码模式的主机 CLI 不由桌面安装管理器更新或卸载。
 
 ```sh
 cd code
@@ -31,11 +50,11 @@ pnpm start
 
 保存资源更改后，受影响 Agent 显示“待应用”；应用时取消尚未开始的排队项，等待当前执行结束后重启该 Agent，随后尝试恢复原生上下文，不重放历史执行。停用也等待当前执行结束；“立即停止”会中断执行。原生导入只读预览已支持字段，密钥需重新填写。
 
-详细配置、限制与 API 示例见 [安装与验收](INSTRUCTION.md)。运行时安装和更新的分析见 [CLI 版本管理建议](docs/design/RUNTIME_INSTALL.md)，目前尚未自动下载或更新 CLI。
+详细配置、限制与 API 示例见 [安装与验收](INSTRUCTION.md)。桌面 CLI 下载、更新和卸载流程见 [CLI 版本管理](docs/design/RUNTIME_INSTALL.md)。
 
 ## 局域网访问
 
-在 `code/` 中启动，保留需要的模型配置环境变量：
+局域网访问使用源码 Web 模式；桌面内置网关仅供本机桌面窗口使用。在 `code/` 中启动，保留需要的模型配置环境变量：
 
 ```sh
 pnpm start --host 0.0.0.0 --port 3000
@@ -51,7 +70,8 @@ pnpm start --host 0.0.0.0 --port 3000
 | --- | --- |
 | `AGENT_ENGINE` | 初始化默认 Agent，支持 `pi`、`opencode`、`codex`、`grok`；保存后由 settings.json 管理 |
 | `AGENT_HOST` / `AGENT_PORT` | 默认 `127.0.0.1` / `3000`；CLI 参数优先 |
-| `AGENT_DATA_DIR` | 默认当前目录下 `.agentbridge`，存放 SQLite、日志和引擎数据 |
+| `AGENT_DATA_DIR` | 源码模式默认当前目录下 `.agentbridge`，存放 SQLite、日志和引擎数据 |
+| `AGENT_DESKTOP_DATA_DIR` | 桌面用户数据根目录，业务数据位于其 `data/` 子目录 |
 | `ENGINE_A_COMMAND` / `ENGINE_B_COMMAND` | OpenCode / Pi 命令 |
 | `CODEX_COMMAND` / `GROK_COMMAND` | Codex / Grok 可执行命令 |
 | `ENGINE_A_PORT` | 托管 OpenCode 的内部端口，默认 0 自动分配 |
@@ -121,6 +141,7 @@ Hallmark 是可选的个人设计工具，本项目忽略其安装目录 `.agent
 | `code/src/gateway/` | HTTP、SSE 和评测接口 |
 | `code/src/storage/`、`code/src/observability/` | SQLite 持久化、指标和观测 |
 | `code/web/` | React 工作台 |
+| `code/desktop/` | Electron 窗口、托盘、目录选择与分发配置 |
 | `code/tools/` | Pi 交互扩展与源码打包脚本 |
 | `code/test/` | 运行时、原生引擎与 Playwright 测试 |
 | `code/artifacts/ui/` | UI 截图与 QA 记录 |

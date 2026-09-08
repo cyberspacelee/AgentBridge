@@ -2,6 +2,9 @@
 node_modules/
 dist/
 dist-ssr/
+.desktop-stage/
+desktop-release/
+.desktop-cache/
 *.tsbuildinfo
 .venv/
 __pycache__/

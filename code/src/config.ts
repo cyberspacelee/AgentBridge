@@ -42,10 +42,16 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     engine,
     host: values.host ?? env.AGENT_HOST ?? "127.0.0.1",
     webOrigin: z.url().parse(env.AGENT_WEB_ORIGIN ?? "http://127.0.0.1:5173"),
+    desktopToken: env.AGENT_DESKTOP_TOKEN
+      ? z.string().min(32).max(256).parse(env.AGENT_DESKTOP_TOKEN)
+      : null,
+    managedRuntimes: env.AGENT_MANAGED_RUNTIMES === "true",
+    runtimeNode: env.AGENT_RUNTIME_NODE ?? process.execPath,
+    runtimeNpm: env.AGENT_RUNTIME_NPM ?? "",
     port: z.coerce
       .number()
       .int()
-      .min(1)
+      .min(0)
       .max(65535)
       .parse(values.port ?? env.AGENT_PORT ?? 3000),
     dataDirectory: path.resolve(env.AGENT_DATA_DIR ?? ".agentbridge"),
@@ -101,6 +107,11 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
   };
   if (config.allowedDirectories.some((p) => !path.isAbsolute(p)))
     throw new Error("AGENT_ALLOWED_DIRECTORIES must contain absolute paths");
+  if (
+    config.desktopToken &&
+    !["127.0.0.1", "::1", "localhost"].includes(config.host)
+  )
+    throw new Error("Desktop gateway must bind to loopback");
   return config;
 }
 export type Config = ReturnType<typeof readConfig>;

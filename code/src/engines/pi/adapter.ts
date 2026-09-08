@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { mkdir, open, rm, writeFile } from "node:fs/promises";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { z } from "zod";
@@ -213,6 +214,7 @@ export class PiAdapter implements EngineAdapter {
         ...mcpEnvironment,
         PI_CODING_AGENT_DIR: this.configDirectory,
         PI_TELEMETRY: "0",
+        ...(this.config.managedRuntimes && settings.mcp.length ? { AGENT_BRIDGE_PI_MCP_MODULE: createRequire(path.resolve(this.config.pi.command)).resolve("pi-mcp-adapter") } : {}),
         AGENT_BRIDGE_PERMISSION_POLICY: session.interactionPolicy.permission,
         AGENT_BRIDGE_PROVIDERS: JSON.stringify(piProviders(this.config)),
       },

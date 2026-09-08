@@ -1,6 +1,7 @@
 import spawn from "cross-spawn";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import path from "node:path";
 import { engineError } from "../errors.js";
 import { within } from "../async.js";
 
@@ -17,13 +18,30 @@ export function startProcess(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): ChildProcessWithoutNullStreams {
+  const { AGENT_DESKTOP_TOKEN: _desktopToken, ...childEnvironment } = env;
+  if (env.AGENT_RUNTIME_NODE) {
+    const searchPath = env.PATH ?? env[Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH"] ?? "";
+    for (const key of Object.keys(childEnvironment)) if (key.toLowerCase() === "path") delete childEnvironment[key];
+    childEnvironment.PATH = `${path.dirname(env.AGENT_RUNTIME_NODE)}${path.delimiter}${searchPath}`;
+  }
   const child = spawn(command, args, {
     cwd,
-    env,
+    env: childEnvironment,
     stdio: "pipe",
     windowsHide: true,
     detached: process.platform !== "win32",
   }) as ChildProcessWithoutNullStreams;
+  if (env.AGENT_MANAGED_RUNTIMES === "true" && process.send) {
+    if (child.pid && process.connected) process.send({ type: "engine-started", pid: child.pid }, () => {});
+    child.once("exit", () => {
+      if (child.pid && process.platform !== "win32") {
+        try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") process.stderr.write("Engine descendant cleanup failed\n");
+        }
+      }
+      if (process.connected) process.send?.({ type: "engine-exited", pid: child.pid }, () => {});
+    });
+  }
   // Drain stderr and retain a bounded tail for startup/crash diagnostics.
   child.stderr.on("data", (chunk) => {
     stderrTails.set(

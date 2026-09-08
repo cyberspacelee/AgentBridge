@@ -1,4 +1,4 @@
-import { useContext, useState } from "react"
+import { useContext, useEffect, useRef, useState } from "react"
 import {
   NavLink,
   useParams,
@@ -32,6 +32,7 @@ import {
   type Settings,
   type AgentConfiguration,
 } from "../../../shared/settings"
+import type { RuntimeView } from "../../../shared/runtimes"
 import { api, ApiError, useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
 import { agentNames as names, useAgentDraft } from "@/lib/agent-draft"
@@ -71,6 +72,7 @@ import {
   CollapsibleContent,
 } from "@/components/ui/collapsible"
 import { EntryEditor } from "./resource-editor"
+import { RuntimeInstaller } from "./runtime-installer"
 
 const modelKey = (model: { providerID: string; modelID: string }) =>
   JSON.stringify([model.providerID, model.modelID])
@@ -82,6 +84,26 @@ export function Agents() {
   const { revision } = useContext(GatewayContext)
   const query = useQuery<SettingsView>("/api/settings")
   const agents = useQuery<{ agents: AgentView[] }>("/api/agents", revision)
+  const runtimes = useQuery<{ runtimes: RuntimeView[] }>(
+    "/api/runtimes",
+    revision
+  )
+  const operating = runtimes.data?.runtimes.some((runtime) => runtime.operation)
+  const wasOperating = useRef(false)
+  const reloadSettings = query.reload
+  const reloadAgents = agents.reload
+  useEffect(() => {
+    if (wasOperating.current && !operating) {
+      reloadSettings()
+      reloadAgents()
+    }
+    wasOperating.current = !!operating
+  }, [operating, reloadSettings, reloadAgents])
+  useEffect(() => {
+    if (!operating) return
+    const timer = setInterval(runtimes.reload, 1500)
+    return () => clearInterval(timer)
+  }, [operating, runtimes.reload])
   return (
     <div className="page agents-page">
       <div className="page-heading">
@@ -97,6 +119,7 @@ export function Agents() {
           onClick={() => {
             query.reload()
             agents.reload()
+            runtimes.reload()
           }}
         >
           <RefreshCw />
@@ -109,6 +132,9 @@ export function Agents() {
           initial={query.data}
           agents={agents.data.agents}
           refresh={agents.reload}
+          runtimes={runtimes.data?.runtimes}
+          runtimeError={runtimes.error}
+          refreshRuntimes={runtimes.reload}
         />
       ) : (
         <Skeleton className="h-72" />
@@ -121,10 +147,16 @@ function AgentsEditor({
   initial,
   agents,
   refresh,
+  runtimes,
+  runtimeError,
+  refreshRuntimes,
 }: {
   initial: SettingsView
   agents: AgentView[]
   refresh: () => void
+  runtimes?: RuntimeView[]
+  runtimeError?: Error
+  refreshRuntimes: () => void
 }) {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -158,6 +190,7 @@ function AgentsEditor({
   const settings = view.settings
   const selected = settings.agents.find((a) => a.id === id)
   const state = agents.find((a) => a.id === id)
+  const selectedRuntime = runtimes?.find((runtime) => runtime.id === id)
   async function save(next: Settings) {
     if (busy) return false
     setBusy(true)
@@ -557,6 +590,7 @@ function AgentsEditor({
               <TableRow>
                 <TableHead>Agent</TableHead>
                 <TableHead>状态</TableHead>
+                <TableHead>安装与版本</TableHead>
                 <TableHead>默认模型</TableHead>
                 <TableHead>执行 / 排队</TableHead>
                 <TableHead>配置</TableHead>
@@ -566,6 +600,9 @@ function AgentsEditor({
             <TableBody>
               {agents.map((agent) => {
                 const saved = settings.agents.find((a) => a.id === agent.id)!
+                const installed = runtimes?.find(
+                  (runtime) => runtime.id === agent.id
+                )
                 return (
                   <TableRow key={agent.id}>
                     <TableCell>
@@ -584,6 +621,19 @@ function AgentsEditor({
                           {agent.error}
                         </span>
                       )}
+                    </TableCell>
+                    <TableCell data-label="安装与版本">
+                      <NavLink
+                        to={`/agents/${agent.id}?tab=installation`}
+                        className="text-primary underline underline-offset-4"
+                      >
+                        {!installed
+                          ? "查看安装状态"
+                          : installed.operation
+                            ? "处理中"
+                            : (installed.installedVersion ??
+                              (installed.managed ? "安装最新版" : "主机 CLI"))}
+                      </NavLink>
                     </TableCell>
                     <TableCell
                       data-label="默认模型"
@@ -621,7 +671,11 @@ function AgentsEditor({
                         disabled={
                           busy ||
                           !!agent.operation ||
-                          (!agent.enabled && !saved.defaultModel)
+                          (!agent.enabled &&
+                            (!saved.defaultModel ||
+                              !installed ||
+                              (installed.managed && !installed.usable))) ||
+                          !!installed?.operation
                         }
                         onCheckedChange={(enabled) =>
                           requestAction(
@@ -693,7 +747,9 @@ function AgentsEditor({
               {state.enabled && (
                 <IconButton
                   label="立即停止"
-                  disabled={busy || !!state.operation}
+                  disabled={
+                    busy || (!!state.operation && !selectedRuntime?.operation)
+                  }
                   onClick={() =>
                     setConfirmation({
                       title: `立即停止 ${names[selected.id]}`,
@@ -712,6 +768,9 @@ function AgentsEditor({
             key={selected.id}
             agent={selected}
             state={state}
+            installed={selectedRuntime}
+            runtimeError={runtimeError}
+            refreshRuntimes={refreshRuntimes}
             settings={settings}
             busy={busy || !!state.operation}
             save={async (agent) =>
@@ -926,6 +985,9 @@ function AgentsEditor({
 function AgentEditor({
   agent,
   state,
+  installed,
+  runtimeError,
+  refreshRuntimes,
   settings,
   busy,
   save,
@@ -934,6 +996,9 @@ function AgentEditor({
 }: {
   agent: AgentConfiguration
   state: AgentView
+  installed?: RuntimeView
+  runtimeError?: Error
+  refreshRuntimes: () => void
   settings: Settings
   busy: boolean
   save: (agent: AgentConfiguration) => Promise<boolean>
@@ -945,7 +1010,7 @@ function AgentEditor({
     useAgentDraft(agent, runtime?.instanceId ?? "unknown")
   const [params, setParams] = useSearchParams()
   const tab =
-    ["models", "skills", "mcp", "runtime"].find(
+    ["models", "skills", "mcp", "runtime", "installation"].find(
       (value) => value === params.get("tab")
     ) ?? "models"
   const changeTab = (value: string) =>
@@ -1068,12 +1133,24 @@ function AgentEditor({
         </Notice>
       )}
       <Tabs value={tab} onValueChange={(value) => changeTab(String(value))}>
-        <TabsList variant="line">
+        <TabsList variant="line" className="h-auto flex-wrap">
           <TabsTrigger value="models">模型</TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
           <TabsTrigger value="mcp">MCP</TabsTrigger>
           <TabsTrigger value="runtime">运行</TabsTrigger>
+          <TabsTrigger value="installation">安装与版本</TabsTrigger>
         </TabsList>
+        <TabsContent value="installation">
+          {tab === "installation" && (
+            <RuntimeInstaller
+              key={agent.id}
+              runtime={installed}
+              agent={state}
+              error={runtimeError}
+              reload={refreshRuntimes}
+            />
+          )}
+        </TabsContent>
         <TabsContent value="runtime" className="agent-runtime">
           <Collapsible className="agent-diagnostics">
             <CollapsibleTrigger render={<Button variant="ghost" />}>
@@ -1267,7 +1344,10 @@ function AgentEditor({
         <TabsContent value="skills">{refs("skills")}</TabsContent>
         <TabsContent value="mcp">{refs("mcp")}</TabsContent>
       </Tabs>
-      <div className="config-action-bar">
+      <div
+        className="config-action-bar"
+        style={tab === "installation" ? { position: "static" } : undefined}
+      >
         <span role="status" className="config-action-status">
           {configurationStatus}
         </span>
@@ -1292,6 +1372,9 @@ function AgentEditor({
               busy ||
               conflict ||
               !configured ||
+              (!state.enabled &&
+                (!installed || (installed.managed && !installed.usable))) ||
+              !!installed?.operation ||
               (state.enabled && !dirty && !state.pendingChanges && !state.error)
             }
             onClick={() => void commit(true)}

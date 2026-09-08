@@ -1,8 +1,10 @@
 packages:
   - web
+  - desktop
 
 onlyBuiltDependencies:
   - esbuild
+  - electron
   - opencode-ai
 
 ignoredBuiltDependencies:

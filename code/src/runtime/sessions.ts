@@ -57,6 +57,7 @@ import {
   validateDirectory,
 } from "./artifacts.js";
 import { within } from "../async.js";
+import { RuntimeManager } from "./runtimes.js";
 export { within } from "../async.js";
 
 const now = () => new Date().toISOString();
@@ -68,6 +69,7 @@ interface Execution {
 
 export class SessionRuntime {
   readonly settings: SettingsManager;
+  readonly runtimes: RuntimeManager;
   private agentOperations = new Map<
     string,
     { action: AgentView["operation"]; promise: Promise<void> }
@@ -106,12 +108,21 @@ export class SessionRuntime {
     private additionalAdapters: EngineAdapter[] = [],
   ) {
     this.settings = new SettingsManager(config);
+    this.runtimes = new RuntimeManager(config, {
+      runningVersion: (id) => this.adapters.find((a) => a.id === id)?.health().status === "ready" && this.agentEnabled(id) ? this.engine(id).health().version : null,
+      snapshotBindings: (id) => this.store.db.prepare("SELECT sessionId,nativeSessionId,processGeneration,instanceId FROM engine_bindings WHERE engineId=?").all(id).map((binding) => ({ sessionId: String(binding.sessionId), nativeSessionId: String(binding.nativeSessionId), processGeneration: Number(binding.processGeneration), instanceId: String(binding.instanceId) })),
+      restoreBindings: (id, bindings) => this.store.transaction(() => { for (const binding of bindings) this.store.db.prepare("UPDATE engine_bindings SET nativeSessionId=?,processGeneration=?,instanceId=? WHERE sessionId=? AND engineId=?").run(binding.nativeSessionId, binding.processGeneration, binding.instanceId, binding.sessionId, id); }),
+      switch: (id, activate, rollback, uninstall) => this.switchRuntime(id, activate, rollback, uninstall),
+    });
   }
 
   agentEnabled(id: string) {
     return (
+      this.runtimes.installed(id) &&
+      (
       agentConfiguration(this.config, id, readSettings(this.config))?.enabled ??
       true
+      )
     );
   }
   agentHealth(id: string) {
@@ -199,6 +210,14 @@ export class SessionRuntime {
         503,
       );
     const adapter = this.engine(id);
+    if (action === "stop" && this.agentOperations.has(id) && this.runtimes.busy(id)) {
+      const view = this.settings.view(); view.settings.agents.find((a) => a.id === id)!.enabled = false;
+      this.settings.save({ settings: view.settings, revision: view.revision });
+      for (const session of this.store.list("sessions").filter((s) => s.engineId === id)) await this.cancel(session.id);
+      return this.agentViews().find((a) => a.id === id)!;
+    }
+    if ((action === "enable" || action === "apply") && (!this.runtimes.installed(id) || this.runtimes.busy(id)))
+      throw new GatewayError("CONFLICT", "Install the runtime and wait for its operation before enabling or applying", 409);
     if (this.agentOperations.has(id))
       throw new GatewayError(
         "CONFLICT",
@@ -304,6 +323,63 @@ export class SessionRuntime {
       ),
     );
     return this.agentViews().find((a) => a.id === id)!;
+  }
+
+  private async switchRuntime(id: AgentId, activate: () => Promise<void>, rollback: () => Promise<void>, uninstall: boolean) {
+    if (this.closed || this.agentOperations.has(id)) throw new GatewayError("CONFLICT", "Agent operation is already in progress", 409);
+    const adapter = this.engine(id);
+    const enabled = this.agentEnabled(id);
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    this.agentOperations.set(id, { action: uninstall ? "disable" : "apply", promise });
+    const sessions = () => this.store.list("sessions").filter((s) => s.engineId === id && s.availability !== "deleting");
+    const start = async () => {
+      if (!enabled || !agentConfiguration(this.config, id, readSettings(this.config))?.enabled || uninstall || this.closed) return;
+      this.appliedRevisions.set(id, applyAgentConfiguration(this.config, id));
+      await within(adapter.start(), this.config.limits.startupTimeoutMs);
+      const restored: { session: Session; nativeSessionId: string; processGeneration: number }[] = [];
+      for (const session of sessions()) {
+        const binding = this.store.db.prepare("SELECT * FROM engine_bindings WHERE sessionId=?").get(session.id);
+        if (!binding || !adapter.recoverSession) throw new Error("Native session cannot be recovered after runtime update");
+        const recovered = await within(adapter.recoverSession(session, { nativeSessionId: String(binding.nativeSessionId), processGeneration: Number(binding.processGeneration) }), this.config.limits.startupTimeoutMs);
+        if (!recovered) throw new Error("Native session recovery failed after runtime update");
+        restored.push({ session, ...recovered });
+      }
+      this.store.transaction(() => {
+        for (const { session, nativeSessionId, processGeneration } of restored) {
+          this.store.db.prepare("UPDATE engine_bindings SET nativeSessionId=?,processGeneration=?,instanceId=? WHERE sessionId=?").run(nativeSessionId, processGeneration, this.store.instanceId, session.id);
+          this.store.put("sessions", { ...session, availability: "ready", version: session.version + 1, updatedAt: now() });
+          this.publishSession(session.id);
+        }
+      });
+    };
+    try {
+      this.publishAgents();
+      for (const session of sessions()) for (const run of this.runs(session.id).filter((r) => r.state === "queued")) await this.stopRun(run.id, "user");
+      while (this.creating || this.recovery.get(id)?.pending || [...this.active.keys(), ...this.repairs.keys(), ...this.isolations.keys(), ...this.deleting.keys()].some((key) => this.store.get("sessions", key)?.engineId === id)) {
+        if (this.closed) throw new Error("Gateway is shutting down");
+        await delay(50);
+      }
+      await within(adapter.stop(), this.config.limits.abortTimeoutMs);
+      this.store.transaction(() => { for (const session of sessions()) { this.store.put("sessions", { ...session, availability: "unavailable", version: session.version + 1, updatedAt: now() }); this.publishSession(session.id); } });
+      this.appliedRevisions.delete(id); this.recovery.delete(id);
+      if (uninstall) {
+        const view = this.settings.view(); view.settings.agents.find((a) => a.id === id)!.enabled = false;
+        this.settings.save({ settings: view.settings, revision: view.revision });
+      }
+      try { await activate(); await start(); }
+      catch (error) {
+        await within(adapter.stop(), this.config.limits.abortTimeoutMs);
+        await rollback();
+        await start().catch((restoreError) => { this.agentErrors.set(id, errorDetail(restoreError, diagnosticSecrets(this.config))); });
+        throw error;
+      }
+      this.agentErrors.delete(id);
+      for (const session of sessions()) this.repairAttempts.delete(session.id);
+    } finally {
+      this.agentOperations.delete(id);
+      try { this.publishAgents(); } finally { resolve(); }
+    }
   }
 
   get adapters() {
@@ -698,6 +774,7 @@ export class SessionRuntime {
         ? previousModel
         : null;
     const run: Run = {
+      runtimeVersion: this.runtimes.view(agentIdSchema.safeParse(session.engineId).success ? session.engineId as AgentId : this.config.engine).runningVersion,
       configRevision: this.appliedRevisions.get(session.engineId) ?? null,
       id: randomUUID(),
       sessionId,
@@ -1531,6 +1608,7 @@ export class SessionRuntime {
     const pending = this.deleting.get(id);
     if (pending) return pending;
     const session = this.session(id);
+    if (this.agentOperations.has(session.engineId) && this.runtimes.busy(session.engineId)) throw new GatewayError("CONFLICT", "Wait for the runtime operation before deleting native sessions", 409);
     this.store.transaction(() => {
       this.store.put("sessions", { ...session, availability: "deleting" });
       this.publishSession(id);
@@ -1591,6 +1669,7 @@ export class SessionRuntime {
     this.closed = true;
     clearInterval(this.tick);
     clearInterval(this.maintenance);
+    const runtimeOperations = this.runtimes.close();
     await within(
       Promise.all(
         [...this.agentOperations.values()].map(
@@ -1625,5 +1704,6 @@ export class SessionRuntime {
       this.config.limits.abortTimeoutMs,
     );
     await Promise.all(this.isolations.values());
+    await runtimeOperations;
   }
 }

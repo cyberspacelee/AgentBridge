@@ -56,4 +56,5 @@ CREATE TABLE runtime_logs (
  stage TEXT NOT NULL, code TEXT, message TEXT NOT NULL, sessionId TEXT, runId TEXT, traceId TEXT
 ) STRICT;
 `,
+  "ALTER TABLE runs ADD COLUMN runtimeVersion TEXT;",
 ];

@@ -14,6 +14,8 @@ import { createTaskSchema } from "../../../shared/contracts"
 import { useGateway } from "@/lib/gateway"
 import { agentNames } from "@/lib/agent-draft"
 import { submit, useQuery } from "@/lib/api"
+import { desktop } from "@/lib/desktop"
+import { DirectoryInput } from "@/components/directory-input"
 import {
   Blank,
   Choice,
@@ -367,6 +369,7 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error>()
   const [invalid, setInvalid] = useState<Record<string, string>>({})
+  const [directory, setDirectory] = useState("")
   const initialEngine =
     runtime?.engines.find(
       (item) => item.id === runtime.engine && item.health.status === "ready"
@@ -491,16 +494,22 @@ function CreateTask({ onAccepted }: { onAccepted: (id: string) => void }) {
             <FieldError id="title-error">{invalid.title}</FieldError>
           </Field>
           <Field data-invalid={!!invalid.directory}>
-            <FieldLabel htmlFor="directory">服务器工作目录</FieldLabel>
-            <Input
+            <FieldLabel htmlFor="directory">
+              {desktop ? "工作目录" : "服务器工作目录"}
+            </FieldLabel>
+            <DirectoryInput
               id="directory"
+              value={directory}
+              onValueChange={setDirectory}
               aria-invalid={!!invalid.directory}
               aria-describedby={
                 invalid.directory ? "directory-error" : undefined
               }
               name="directory"
               required
-              placeholder="服务器上的绝对路径"
+              placeholder={
+                desktop ? "工作目录的绝对路径" : "服务器上的绝对路径"
+              }
             />
             <FieldError id="directory-error">{invalid.directory}</FieldError>
           </Field>

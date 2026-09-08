@@ -75,3 +75,17 @@ Agent 启用/停用、资源创建编辑删除、默认模型分配、保存/应
 设计、共享契约、后端与前端术语一致；所有本次管理操作真实闭环。类型检查、lint、构建、后端与浏览器检查通过，原生 CLI 的验证范围可追溯。发布到 Windows 或生产模型前完成对应外部验收，不把测试适配器或本地模型响应写成业务成功。
 
 交付包只包含说明、源码、锁文件与运行资源，不包含密钥、个人配置、node_modules、运行数据库或开发日志。是否提供 ZIP、发布版本或部署由具体交付任务决定，本次不自动发布。
+
+
+## Electron 桌面引入验收（2026-09-08）
+
+桌面引入基于 `731d4d7`，分支 `research/desktop-tauri-vs-electron`。实现窗口/托盘/单实例、原生目录选择、独立 Node 网关、随机端口认证、受控退出、按需 CLI 管理、应用更新入口及三平台构建配置。
+
+- 前后端类型检查、前端 lint 和生产构建通过；本次后端自动回归 46 passed / 6 skipped，包含 SQLite 升级保留数据及日志线程退出回归检查。浏览器完整回归 56 passed / 4 skipped。
+- Linux 开发模式与最终打包后的 Electron 原生 smoke 通过：sandbox 开启，renderer 无 Node 权限，使用包内 Node，API/SSE 凭据隔离，目录选择，托盘关闭与退出，主题/SQLite 重启保留。
+- 四个官方 CLI 真实按需安装、版本/协议探测及卸载通过。Pi 0.85.1、OpenCode 1.18.29、Codex 0.153.4、Grok 1.0.13；未提交模型任务，不能代替供应商和工具业务验收。
+- 自动检查覆盖下载失败/取消、完整性错误、切换失败与中断恢复、等待活动任务、取消排队、卸载保留原生状态及 Agent 崩溃后进程组清理。
+
+[最终构件与检查记录](../../code/artifacts/desktop/verification.json)、[CLI 安装证据](../../code/artifacts/desktop/runtime-install-smoke.json)、[实现与官方依据](DESKTOP_FRAMEWORK.md)。新增桌面截图保存在 `code/artifacts/desktop/`，常规浏览器测试生成的无关截图不作为本次代码改动。
+
+Windows/macOS 由新增 CI 配置构建但尚未在本环境运行；正式签名、公证和线上跨版本更新未验收。当前本地 AppImage 是可检查的测试构件，不等于已发布版本。程序构件需携带所需生产 node_modules 与许可证，源码交付仍排除开发依赖目录、个人配置、密钥和运行数据库。

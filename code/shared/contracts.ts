@@ -95,6 +95,7 @@ export interface Session {
   version: number;
 }
 export interface Run {
+  runtimeVersion?: string | null;
   configRevision: string | null;
   id: string;
   sessionId: string;

@@ -1,0 +1,72 @@
+{
+  "checkedAt": "2026-09-08T01:34:57.558886+00:00",
+  "baseCommit": "731d4d7386295abb21696a9053b7494f5da5ca55",
+  "branch": "research/desktop-tauri-vs-electron",
+  "platform": "linux-x64",
+  "versions": {
+    "application": "0.1.0",
+    "electron": "44.2.0",
+    "electronBuilder": "26.15.3",
+    "electronUpdater": "6.8.9",
+    "node": "24.20.0"
+  },
+  "artifact": {
+    "path": "desktop-release/AgentBridge-0.1.0.AppImage",
+    "bytes": 180868350,
+    "sha256": "eb4969c0759a0a6cb6825fb7685d27c0c06bbcab0ad1df0c8b1bea7955d2ae23"
+  },
+  "unpacked": {
+    "totalBytes": 463584400,
+    "nodeBytes": 140155179,
+    "backendBytes": 33881489,
+    "appAsarBytes": 2189701,
+    "measurement": "Sum regular file lengths, deduplicate inodes per measurement, do not follow symlinks. Excludes user data and CLI runtime installations."
+  },
+  "checks": {
+    "backendTypecheck": "passed",
+    "frontendTypecheck": "passed",
+    "frontendLint": "passed",
+    "productionBuild": "passed",
+    "backendRegression": {
+      "passed": 46,
+      "skipped": 6,
+      "failed": 0,
+      "scope": "Complete suite including SQLite upgrade retention and logger shutdown regression."
+    },
+    "browserRegression": {
+      "passed": 56,
+      "skipped": 4,
+      "failed": 0
+    },
+    "developmentElectronSmoke": "passed",
+    "packagedElectronSmoke": {
+      "result": "passed",
+      "relocatedOutsideSourceTree": true,
+      "allSymlinksContainedInPackage": true,
+      "cwdOutsideSourceTree": true,
+      "clearedNodePathAndNodeOptions": true,
+      "path": "/usr/bin:/bin",
+      "sandboxEnabled": true,
+      "usesBundledNode": true,
+      "bundledAgentClis": 0,
+      "checks": [
+        "page renders",
+        "renderer has no Node access",
+        "native directory IPC",
+        "HTTP and SSE authentication",
+        "untrusted navigation blocked",
+        "tray hides window without stopping backend",
+        "explicit exit stops backend",
+        "SQLite and preferences preserved on restart"
+      ]
+    },
+    "managedCliInstallation": "Four official latest versions installed, protocol-probed and uninstalled; see runtime-install-smoke.json."
+  },
+  "limitations": [
+    "Windows/macOS matrix configured, not executed on this Linux host",
+    "No signed release, notarization or live cross-version auto-update exercised",
+    "No paid model tasks submitted for desktop integration",
+    "No equivalent Tauri CPU/memory benchmark",
+    "npm installation size limit is polled rather than enforced by filesystem quota"
+  ]
+}

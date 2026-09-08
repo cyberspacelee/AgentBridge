@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, readdir, rm } from "node:fs/promises";
+import pino from "pino";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -195,6 +196,69 @@ const input = (directory: string, id = randomUUID()) =>
     directory,
     parts: [{ type: "text", text: "work" }],
   });
+
+test("gateway shutdown flushes final logs even when the transport ready flag is stale", async () => {
+  const f = await fixture();
+  const server = createServer(f.runtime);
+  const transport = (server.log as unknown as Record<symbol, { ready: boolean; closed: boolean; end(): void; [key: symbol]: { ready: boolean } }>)[pino.symbols.streamSym]!;
+  try {
+    await server.ready();
+    await until(() => transport.ready);
+    // Reproduce thread-stream's READY race after its reader has advanced past the initial write index.
+    const implementation = Object.getOwnPropertySymbols(transport).find((symbol) => String(symbol) === "Symbol(kImpl)")!;
+    transport[implementation]!.ready = false;
+    server.log.info("shutdown-final-record");
+    await within(server.close(), 3000);
+    const files = await readdir(path.join(f.directory, "logs"));
+    const logs = await Promise.all(files.map((file) => readFile(path.join(f.directory, "logs", file), "utf8")));
+    assert.ok(logs.some((log) => log.includes("shutdown-final-record")));
+    assert.equal(transport.closed, true);
+  } finally {
+    if (!transport.closed) transport.end();
+    await within(server.close(), 3000);
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("runtime switching drains the target Agent, blocks new work and restores its sessions after rollback", async () => {
+  const otherEngine = new ControlledEngine();
+  otherEngine.id = "opencode";
+  const f = await fixture(10000, [otherEngine]);
+  f.adapter.id = "pi";
+  try {
+    await f.runtime.agentAction("pi", "enable");
+    await until(() => !f.runtime.agentViews().find((agent) => agent.id === "pi")!.operation);
+    const active = await f.runtime.submit({ ...input(f.directory), engineId: "pi" });
+    await until(() => f.adapter.executions.has(active.sessionId));
+    const queued = await f.runtime.submit({ submissionId: randomUUID(), parts: [{ type: "text", text: "queued" }] }, active.sessionId);
+    const other = await f.runtime.submit({ ...input(f.directory), engineId: "opencode" });
+    await until(() => otherEngine.executions.has(other.sessionId));
+    let activated = false;
+    let rolledBack = false;
+    const switching = (f.runtime as unknown as {
+      switchRuntime(id: "pi", activate: () => Promise<void>, rollback: () => Promise<void>, uninstall: boolean): Promise<void>;
+    }).switchRuntime("pi", async () => {
+      activated = true;
+      assert.ok(!f.adapter.executions.has(active.sessionId));
+      throw new Error("candidate failed to activate");
+    }, async () => { rolledBack = true; }, false);
+    const rejected = assert.rejects(switching, /candidate failed to activate/);
+    await until(() => f.runtime.run(queued.runId).state === "cancelled");
+    assert.equal(activated, false);
+    assert.throws(() => f.runtime.submit({ ...input(f.directory), engineId: "pi" }), /disabled or applying/);
+    assert.ok(otherEngine.executions.has(other.sessionId));
+    f.adapter.complete(active.sessionId);
+    await rejected;
+    assert.equal(rolledBack, true);
+    assert.equal(f.runtime.session(active.sessionId).availability, "ready");
+    assert.ok(f.adapter.recovered.includes(active.sessionId));
+    assert.ok(otherEngine.executions.has(other.sessionId));
+    assert.equal(f.runtime.agentViews().find((agent) => agent.id === "pi")!.operation, null);
+    otherEngine.complete(other.sessionId);
+  } finally {
+    await f.close();
+  }
+});
 
 test("Agent lifecycle drains active work, cancels queues, applies revisions and preserves other agents", async () => {
   const second = new ControlledEngine();

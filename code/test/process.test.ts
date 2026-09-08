@@ -69,3 +69,12 @@ test("process failures retain a bounded stderr tail and exit code", async () => 
     await stopProcess(child, 1000);
   }
 });
+
+test("engine processes never receive the desktop control token", async () => {
+  const child = startProcess(process.execPath, ["-e", "process.stdout.write(String('AGENT_DESKTOP_TOKEN' in process.env))"], process.cwd(), { ...process.env, AGENT_DESKTOP_TOKEN: "test-only-control-token" });
+  let output = ""; child.stdout.on("data", (chunk) => { output += chunk; });
+  try {
+    await within(new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); }), 5000);
+    assert.equal(output, "false");
+  } finally { await stopProcess(child, 1000); }
+});

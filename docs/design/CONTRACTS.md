@@ -209,3 +209,10 @@ series 只接受预定义 metric key，禁止任意查询语言透传。返回 u
 errors 和 trace 查询给出实际保留窗口、截断/采样标记与关联 runId。工具 span 只能来自真实可观察工具事件；不可观察的模型内部调用不伪造。
 
 runtime.capabilities 描述模型列表、工具、费用、进程采样等实际可用能力；必需能力缺失会使对应验收失败，不能通过返回 false 把需求变成可选。
+
+
+## 桌面运行时管理
+
+受管安装契约定义在 `code/shared/runtimes.ts`，语义以 [运行时安装](RUNTIME_INSTALL.md) 为准。`GET /api/runtimes` 返回四个运行包视图；`POST /api/runtimes/:id/actions` 接受严格的 `{ action }`，动作有 `check`、`install`、`update`、`uninstall`、`cancel`，返回 202 后轮询视图。非受管 Web 模式拒绝修改主机 CLI；同一 Agent 的操作互斥，切换/卸载遵守现有生命周期准入。
+
+Run 新增可空 `runtimeVersion`，保存实际运行 CLI 版本，历史行通过追加 migration 保留为空。桌面模式所有 HTTP 路由（包括静态资源、SSE、产物、观测）要求该次启动的 Bearer token，仅桌面主进程给受管窗口注入；该 token 不属于用户模型凭据，也不改变普通 Web 模式既有契约。

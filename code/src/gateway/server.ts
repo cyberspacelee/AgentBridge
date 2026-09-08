@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import staticFiles from "@fastify/static";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import path from "node:path";
@@ -24,6 +25,7 @@ import { Telemetry } from "../observability/metrics.js";
 import { evaluationEvent, evaluationMessage } from "./serialization.js";
 import { agentConfiguration } from "../settings.js";
 import { agentIdSchema, agentActionSchema } from "../../shared/settings.js";
+import { runtimeActionSchema } from "../../shared/runtimes.js";
 
 const id = (params: unknown) =>
   z.object({ id: z.string().min(1).max(300) }).parse(params).id;
@@ -122,6 +124,16 @@ export function createServer(runtime: SessionRuntime) {
   const closeStreams = new Set<() => void>();
   server.addHook("onRequest", async (request, reply) => {
     reply.header("X-Request-ID", request.id);
+    if (config.desktopToken) {
+      const expected = Buffer.from(`Bearer ${config.desktopToken}`);
+      const supplied = Buffer.from(request.headers.authorization ?? "");
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
+        throw new GatewayError("FORBIDDEN", "Desktop authentication required", 403);
+      reply.header("Cache-Control", "no-store");
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Referrer-Policy", "no-referrer");
+      reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    }
     if (["127.0.0.1", "localhost", "::1"].includes(config.host)) {
       let hostname: string;
       try {
@@ -139,9 +151,9 @@ export function createServer(runtime: SessionRuntime) {
     const origin = request.headers.origin;
     if (
       origin &&
-      !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+      (config.desktopToken || !["GET", "HEAD", "OPTIONS"].includes(request.method)) &&
       origin !== `${request.protocol}://${request.headers.host}` &&
-      origin !== config.webOrigin
+      (config.desktopToken || origin !== config.webOrigin)
     )
       throw new GatewayError("FORBIDDEN", "Request origin is not allowed", 403);
   });
@@ -263,6 +275,10 @@ export function createServer(runtime: SessionRuntime) {
     runtime.saveSettings(request.body),
   );
   server.get("/api/agents", async () => ({ agents: runtime.agentViews() }));
+  server.get("/api/runtimes", async () => ({ runtimes: runtime.runtimes.views() }));
+  server.post("/api/runtimes/:id/actions", async (request, reply) => reply.code(202).send({
+    runtime: runtime.runtimes.action(agentIdSchema.parse(id(request.params)), runtimeActionSchema.parse(request.body).action),
+  }));
   server.post("/api/agents/:id/actions", async (request, reply) => {
     const result = await runtime.agentAction(
       agentIdSchema.parse(id(request.params)),
@@ -833,12 +849,12 @@ export function createServer(runtime: SessionRuntime) {
     await runtime.stop();
     runtime.onLog = () => {};
     store.close();
-    await new Promise<void>((resolve) =>
-      transport.flush(() => {
-        transport.end();
-        resolve();
-      }),
-    );
+    if (!("closed" in transport && transport.closed)) {
+      const closed = once(transport, "close");
+      // end() flushes buffered records without waiting for a stale worker ready flag.
+      transport.end();
+      await within(closed, config.limits.abortTimeoutMs);
+    }
   });
   return server;
 }

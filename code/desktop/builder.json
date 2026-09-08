@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/v26.15.3/packages/app-builder-lib/scheme.json",
+  "appId": "com.agentbridge.desktop",
+  "productName": "AgentBridge",
+  "executableName": "agentbridge",
+  "directories": { "app": "desktop", "output": "desktop-release" },
+  "files": [
+    "main.mjs",
+    "preload.cjs",
+    "security.mjs",
+    "icon.png",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": ".desktop-stage",
+      "to": ".",
+      "filter": ["backend/**/*", "node/**/*", "!**/*.map"]
+    }
+  ],
+  "asar": true,
+  "compression": "normal",
+  "electronLanguages": ["zh-CN", "en-US"],
+  "npmRebuild": false,
+  "publish": [
+    { "provider": "github", "owner": "cyberspacelee", "repo": "AgentBridge" }
+  ],
+  "win": { "target": ["nsis"], "icon": "desktop/icon.png" },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "category": "Development",
+    "icon": "desktop/icon.png"
+  },
+  "mac": {
+    "target": ["dmg", "zip"],
+    "category": "public.app-category.developer-tools",
+    "icon": "desktop/icon.png"
+  }
+}

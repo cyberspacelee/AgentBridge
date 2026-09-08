@@ -1,6 +1,6 @@
 # AgentBridge 架构设计
 
-状态：完整版本设计待审阅；前端工程已通过 CLI 初始化，业务尚未实现或通过 Windows 验证。设计入口见 [设计基线](docs/design/README.md)，术语、领域、契约、页面和完整验收分别在其专属文档维护。开发约束见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+状态：网关、前端工作台与 Electron 桌面引入已实现；Linux 验证范围见交付记录，Windows 完整验收尚待执行。设计入口见 [设计基线](docs/design/README.md)，术语、领域、契约、页面和完整验收分别在其专属文档维护。开发约束见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
 受管引擎包括 OpenCode、Pi、Codex CLI 和 Grok Build，可独立动态启停。任务在创建时固定引擎；默认 Agent 只影响新任务。配置与生命周期以 [统一 Agent 设计](docs/design/AGENTS.md) 为准。本文以当前提供的需求清单为设计输入，赛题原文和两版协议的完整 schema 尚待核对。
 
@@ -13,6 +13,14 @@
 - 默认使用本地 SQLite 保存会话、执行、消息、交互、产物元数据和事件；内存模式仅用于测试或显式评测配置。完整版本覆盖恢复、幂等和事件回放，不建设消息中间件、插件市场或跨引擎上下文迁移。
 - Agent 负责规划和调用工具。网关负责执行控制、协议转换、轨迹记录，不再实现一套模型推理循环。
 - 工具代码共用，实际运行在对应引擎的工具执行环境中；HTTP 路由不直接承担文档处理。
+
+### 桌面部署
+
+Electron 主进程管理窗口、托盘和受管 Node 子进程；现有 Fastify/SQLite/SessionRuntime 在该子进程运行，React 继续使用同源 HTTP/SSE。桌面仅监听随机 loopback 端口，窗口请求使用每次启动独立的访问凭据，renderer 不获得 Node 或任意 IPC 权限。关闭窗口继续后台运行，显式退出复用任务等待/取消和引擎清理。
+
+默认桌面包含 Node/npm 和网关，不含四个 Agent CLI；管理页按需安装官方最新版、更新和卸载，程序与用户状态分目录保存。安装切换在 Agent 生命周期入口串行执行，停止原生进程并备份原生目录/会话绑定后切换，失败恢复旧版，卸载保留历史与配置。应用构建依赖固定，CLI 版本独立更新。源码 Web 模式继续使用主机 CLI。
+
+文件边界、资源与平台验收见 [桌面引入](docs/design/DESKTOP_FRAMEWORK.md)，安装状态与接口见 [运行时安装](docs/design/RUNTIME_INSTALL.md)。
 
 ## 2. 分层与依赖
 

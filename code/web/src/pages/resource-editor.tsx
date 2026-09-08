@@ -8,6 +8,8 @@ import {
   type Settings as Configuration,
 } from "../../../shared/settings"
 import { Choice, Failure, IconButton } from "@/components/workspace-ui"
+import { desktop } from "@/lib/desktop"
+import { DirectoryInput } from "@/components/directory-input"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -346,13 +348,16 @@ export function EntryEditor({
           {kind === "skills" && (
             <>
               <Field>
-                <FieldLabel htmlFor="skill-path">服务器 Skill 目录</FieldLabel>
-                <Input
+                <FieldLabel htmlFor="skill-path">
+                  {desktop ? "Skill 目录" : "服务器 Skill 目录"}
+                </FieldLabel>
+                <DirectoryInput
                   id="skill-path"
                   {...fieldProps("path")}
                   required
                   value={path}
-                  onChange={(e) => setPath(e.target.value)}
+                  onValueChange={setPath}
+                  disabled={busy}
                   placeholder="/path/to/skills"
                 />
                 {fieldError("path")}

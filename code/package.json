@@ -7,6 +7,7 @@
   "engines": {
     "node": ">=22.21.0"
   },
+  "files": ["dist", "web/dist", "tools/pi-extension.mjs", "tools/pi-mcp.mjs"],
   "scripts": {
     "dev": "node tools/start.mjs --import tsx --watch src/main.ts",
     "start": "node tools/start.mjs dist/src/main.js",
@@ -15,16 +16,18 @@
     "test": "tsx --test test/*.test.ts",
     "test:browser": "pnpm exec playwright test",
     "web:dev": "pnpm --filter @agentbridge/web dev",
-    "web:build": "pnpm --filter @agentbridge/web build"
+    "web:build": "pnpm --filter @agentbridge/web build",
+    "desktop:prepare": "pnpm build && pnpm web:build && node tools/desktop-prepare.mjs",
+    "desktop:dev": "pnpm desktop:prepare && electron desktop",
+    "desktop:pack": "pnpm desktop:prepare && electron-builder --config desktop/builder.json --dir --publish never",
+    "desktop:dist": "pnpm desktop:prepare && electron-builder --config desktop/builder.json --publish never",
+    "test:desktop": "node test/desktop-smoke.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
     "@fastify/static": "10.1.3",
     "cross-spawn": "7.0.6",
     "eventsource-parser": "4.1.0",
     "fastify": "5.12.3",
-    "opencode-ai": "1.18.29",
-    "pi-mcp-adapter": "2.32.1",
     "pino": "10.3.1",
     "pino-roll": "4.0.0",
     "prom-client": "15.1.3",
@@ -33,9 +36,14 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@playwright/test": "1.63.0",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "^24.13.3",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
+    "opencode-ai": "1.18.29",
+    "pi-mcp-adapter": "2.32.1",
     "tsx": "4.23.13",
     "typescript": "6.0.3"
   }
