@@ -51,6 +51,19 @@ Remove-Item Env:AGENT_OPENAI_API_KEY
 
 示例安装并启用 Codex；`agents` 可仅列出需要初始化的 `pi`、`opencode`、`codex`、`grok`，其余保持停用。`enabled: false` 表示只安装、配置；`runtime: {"mode":"external","command":"C:\\工具\\codex.cmd"}` 表示检测并绑定已有 CLI。受管安装复用现有安装器，仅下载尚未安装或文件已丢失的 CLI，不自动更新已安装版本。
 
+**复制已有 runtimes，免去重新下载**：源机器先退出 AgentBridge，将其 `%APPDATA%\AgentBridge\data\runtimes` 整个目录复制到 U 盘或本机备份目录。在目标机器执行同一脚本，增加 `-RuntimesPath`：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
+  -ExePath "$env:LOCALAPPDATA\Programs\AgentBridge\agentbridge.exe" `
+  -ConfigPath .\initialize.json `
+  -RuntimesPath 'D:\AgentBridge-backup\runtimes'
+```
+
+该路径下应直接包含 `codex\manifest.json`、`codex\versions\<UUID>\...` 等 Agent 目录，不能只提供 CLI 的单个 exe 或全局 npm 目录。脚本按配置中的受管 Agent 复制当前版本（含 node_modules）和版本清单，在目标机检查 `--version` 成功后登记；源文件保持原样。目标已登记的 runtime 保留，未登记的新副本先写临时目录，验证失败会清理，重试不会覆盖已有安装。源、目标应使用相同操作系统和 CPU 架构；脚本会检查系统对应的入口形式和实际可执行性。引用版本目录以外文件的链接、未完成的安装/回滚状态会被拒绝。
+
+提供 `-RuntimesPath` 后，受管 runtime 缺失或不可用会报错，**不会回退到联网安装**。只复制 runtime，不复制个人认证、历史任务或会话；模型、Skill/MCP 配置仍由 `initialize.json` 提供。Skill 文件和本地 MCP 程序需另行准备，模型与远程 MCP 的使用仍可能需要网络。
+
 在配置中填写资源，并在对应 Agent 的 `skillIds` / `mcpIds` 中填写其 ID，例如：
 
 ```json

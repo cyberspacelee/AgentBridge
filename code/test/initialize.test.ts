@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, symlink, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { settingsSchema, agentIds } from "../shared/settings.js";
-import { readProfile, assertCompatible, initializeRuntimes } from "../tools/initialize.mjs";
+import { readProfile, assertCompatible, copyRuntimes, initializeRuntimes } from "../tools/initialize.mjs";
 
 test("initialization expands secrets safely, resolves skill paths, rejects conflicts, and resumes failed installs", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-initialize-"));
@@ -55,8 +55,67 @@ test("initialization expands secrets safely, resolves skill paths, rejects confl
     installed = false; fail = true; actions.length = 0;
     await assert.rejects(initializeRuntimes(request, selected, () => {}), /installation interrupted/);
     assert.deepEqual(actions, ["install"]); // Never enable after a failed installation.
+    actions.length = 0;
+    await assert.rejects(initializeRuntimes(request, selected, () => {}, true), /no download was attempted/);
+    assert.deepEqual(actions, []);
   } finally {
     if (previousEnv === undefined) delete process.env[envKey]; else process.env[envKey] = previousEnv;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("local runtimes copy their active version and manifest without replacing existing installations", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-copy-runtime-"));
+  const source = path.join(directory, "snapshot/runtimes");
+  const target = path.join(directory, "target");
+  const uuid = "11111111-1111-4111-8111-111111111111";
+  const command = process.platform === "win32" ? "codex.cmd" : "codex";
+  const version = path.join(source, "codex/versions", uuid);
+  const sourceFile = path.join(source, "codex/manifest.json");
+  const manifest = { schemaVersion: 1, current: { version: "1.2.3", directory: uuid, command, size: 100, source: "fixture", integrity: "fixture" } };
+  const agents = [{ id: "codex", runtime: { mode: "managed" } }];
+  const quiet = () => {};
+  try {
+    await mkdir(path.join(version, "node_modules/dependency"), { recursive: true });
+    await writeFile(path.join(version, command), "fixture executable");
+    await writeFile(path.join(version, "node_modules/dependency/index.js"), "fixture dependency");
+    await writeFile(sourceFile, JSON.stringify(manifest));
+    await mkdir(path.join(source, "codex/versions/unused"));
+    let checks = 0;
+    const verify = async (file: string, expected: string) => {
+      checks++;
+      assert.equal(await readFile(file, "utf8"), "fixture executable");
+      assert.equal(expected, "1.2.3");
+    };
+    await copyRuntimes(source, target, agents, verify, quiet);
+    const destinationFile = path.join(target, "runtimes/codex/manifest.json");
+    const copied = JSON.parse(await readFile(destinationFile, "utf8"));
+    assert.notEqual(copied.current.directory, uuid);
+    const destination = path.join(target, "runtimes/codex/versions", copied.current.directory);
+    assert.equal(await readFile(path.join(destination, "node_modules/dependency/index.js"), "utf8"), "fixture dependency");
+    assert.deepEqual(await readdir(path.dirname(destination)), [copied.current.directory]);
+    assert.equal(await readFile(sourceFile, "utf8"), JSON.stringify(manifest));
+    await copyRuntimes(source, target, agents, verify, quiet);
+    assert.equal(checks, 1);
+    assert.equal(await readFile(destinationFile, "utf8"), JSON.stringify(copied));
+
+    const rejected = path.join(directory, "rejected");
+    await assert.rejects(copyRuntimes(source, rejected, agents, async () => { throw new Error("Wrong architecture"); }, quiet), /Wrong architecture/);
+    await assert.rejects(readFile(path.join(rejected, "runtimes/codex/manifest.json")), { code: "ENOENT" });
+    assert.deepEqual(await readdir(path.join(rejected, "runtimes/codex")), ["versions"]);
+    assert.deepEqual(await readdir(path.join(rejected, "runtimes/codex/versions")), []);
+
+    await writeFile(sourceFile, JSON.stringify({ ...manifest, operation: "install" }));
+    await assert.rejects(copyRuntimes(source, rejected, agents, verify, quiet), /complete, idle/);
+    await writeFile(sourceFile, JSON.stringify({ ...manifest, current: { ...manifest.current, command: "../outside" } }));
+    await assert.rejects(copyRuntimes(source, rejected, agents, verify, quiet), /complete, idle/);
+    await writeFile(sourceFile, JSON.stringify(manifest));
+    await writeFile(path.join(source, "../.host.lock"), "active");
+    await assert.rejects(copyRuntimes(source, rejected, agents, verify, quiet), /Exit the source/);
+    await rm(path.join(source, "../.host.lock"));
+    if (process.platform !== "win32") {
+      await symlink("../../../..", path.join(version, "escape"));
+      await assert.rejects(copyRuntimes(source, rejected, agents, verify, quiet), /outside its version/);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

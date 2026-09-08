@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory = $true)] [string] $ExePath,
     [string] $ConfigPath = (Join-Path $PSScriptRoot 'initialize.example.json'),
+    [string] $RuntimesPath,
     [string] $DataDirectory = $(if ($env:AGENT_DESKTOP_DATA_DIR) { $env:AGENT_DESKTOP_DATA_DIR } else { Join-Path $env:APPDATA 'AgentBridge' })
 )
 
@@ -23,7 +24,9 @@ try {
     $data = Join-Path ([System.IO.Path]::GetFullPath($DataDirectory)) 'data'
     Write-Host "Initializing AgentBridge data: $data"
     Write-Host 'Exit AgentBridge from its tray/menu before running this script.'
-    & $node $helper $backend $data $profileFile $npm
+    $initializeArgs = @($helper, $backend, $data, $profileFile, $npm)
+    if ($RuntimesPath) { $initializeArgs += (Resolve-Path -LiteralPath $RuntimesPath).Path }
+    & $node @initializeArgs
     if ($LASTEXITCODE -ne 0) { throw "Initialization failed (exit $LASTEXITCODE). Saved configuration and completed installations are retained." }
 } catch {
     Write-Error $_ -ErrorAction Continue
