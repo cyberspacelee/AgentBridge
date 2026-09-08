@@ -104,7 +104,19 @@ export function readJsonLines(
     if (buffer) parse(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
   });
 }
-export async function stopProcess(
+const stopping = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
+export function stopProcess(child: ChildProcessWithoutNullStreams, timeoutMs: number) {
+  const pending = stopping.get(child);
+  if (pending) return pending;
+  // A second signal can race with a dying process group before Node delivers exit.
+  const result = terminateProcess(child, timeoutMs).catch((error) => {
+    stopping.delete(child);
+    throw error;
+  });
+  stopping.set(child, result);
+  return result;
+}
+async function terminateProcess(
   child: ChildProcessWithoutNullStreams,
   timeoutMs: number,
 ) {

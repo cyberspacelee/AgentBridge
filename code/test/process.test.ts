@@ -87,3 +87,18 @@ test("JSONL enforces the byte limit with and without a newline", async () => {
     }
   }
 });
+
+test("concurrent process stops share termination and remain safe after exit", async () => {
+  const child = startProcess(process.execPath, ["-e", "console.log('ready'); setInterval(()=>{},1000)"], process.cwd());
+  try {
+    await within(new Promise<void>((resolve, reject) => {
+      child.stdout.once("data", () => resolve());
+      child.once("error", reject);
+    }), 5000);
+    const first = stopProcess(child, 5000);
+    assert.equal(stopProcess(child, 5000), first);
+    await first;
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    await stopProcess(child, 5000);
+  } finally { await stopProcess(child, 5000); }
+});
