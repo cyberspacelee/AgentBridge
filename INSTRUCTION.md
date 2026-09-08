@@ -27,7 +27,7 @@ pnpm desktop:prepare
 pnpm test:desktop
 ```
 
-应用目录和分发包输出到 `code/desktop-release/`；命令不自动发布。桌面冒烟测试需要图形环境，Linux 无显示器环境可使用 `xvfb-run -a pnpm test:desktop`。分发配置包含三个平台，不代表 Windows/macOS 已完成实机验收或安装包已经签名、公证和发布。
+应用目录和分发包输出到 `code/desktop-release/`；命令不自动发布。 GitHub Actions 的 Desktop 工作流默认只上传 Artifacts；手动运行时勾选 `publish`，或推送与 `code/desktop/package.json` 版本一致的 `v*` 标签，才会在三平台全部成功后创建 GitHub Release，附带安装包和更新元数据。已有 Release 不覆盖，发布下一版本前需更新桌面版本号。桌面冒烟测试需要图形环境，Linux 无显示器环境可使用 `xvfb-run -a pnpm test:desktop`。分发配置包含三个平台，不代表 Windows/macOS 已完成实机验收或安装包已经签名、公证和发布。
 
 #### 安装、更新和卸载 Agent
 

@@ -106,7 +106,7 @@ Tauri 的可行替代架构是“Rust 窗口壳 + 固定版本 Node sidecar + �
 | `code/desktop/builder.json` | ASAR 桌面壳；真实目录中的 Node/npm、网关、静态前端与 Pi 扩展；只保留中英文 locale |
 | `code/src/runtime/runtimes.ts` | 官方运行包解析、安装、取消、校验、探测、切换、回滚与卸载 |
 | `code/web/src/pages/runtime-installer.tsx` | Agent 详情“安装与版本”页签，版本、容量、错误和进度 |
-| `.github/workflows/desktop.yml` | Windows NSIS、Linux AppImage、macOS DMG/ZIP；检查后上传构件，不自动发布 |
+| `.github/workflows/desktop.yml` | Windows NSIS、Linux AppImage、macOS DMG/ZIP；上传构件，版本标签或手动 publish 触发 Release |
 
 桌面应用 manifest 仅声明 electron-updater。后端通过 `pnpm deploy --prod` 生成可搬移依赖闭包；Pi/OpenCode/pi-mcp-adapter 已从根包生产依赖移到源码开发依赖，基础包不含四个 CLI、测试、截图或构建工具。Node/npm 与后端放在 `extraResources`，不依赖系统全局 Node/npm，也不让外部 CLI 读取 ASAR 内的脚本。[E3][B1]
 
@@ -132,7 +132,7 @@ npm 安装禁用生命周期脚本，限定官方 registry，核验 package-lock
 
 菜单“检查应用更新”使用 electron-updater，用户确认下载后再确认重启，重启前复用任务退出策略。GitHub 更新源来自 builder 配置，生产发布必须同时提供对应安装包和 latest*.yml/blockmap。macOS 还需要 ZIP 更新负载及有效签名；只有 DMG 无法完成 Squirrel.Mac 更新。[B7]
 
-当前 workflow 产出测试构件，不发布 GitHub Release、不注入签名证书。Windows/macOS 构建、安装、中文/空格路径、Git Bash、权限和进程清理尚须在目标系统验收；Linux AppImage 构建及解包程序实测通过。已配置更新入口不等于已验证跨版本线上更新。若需正式分发，补齐平台签名/公证和两个版本之间的更新保留数据检查。
+默认 workflow 上传构件；推送匹配桌面版本的 `v*` 标签，或手动勾选 `publish`，在三平台全部成功后发布 GitHub Release。发布 job 单独获得 contents:write，构建和 PR 检查保持只读；已有 Release 不覆盖。流程不注入签名证书。Windows/macOS 构建、安装、中文/空格路径、Git Bash、权限和进程清理尚须在目标系统验收；Linux AppImage 构建及解包程序实测通过。已配置更新入口不等于已验证跨版本线上更新。若需正式分发，补齐平台签名/公证和两个版本之间的更新保留数据检查。
 
 ## 实测与边界
 

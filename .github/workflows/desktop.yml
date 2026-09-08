@@ -2,6 +2,13 @@ name: Desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the desktop version to GitHub Releases after all builds pass
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
   pull_request:
     paths:
       - "code/**"
@@ -63,5 +70,42 @@ jobs:
             code/desktop-release/*.dmg
             code/desktop-release/*.zip
             code/desktop-release/*.blockmap
-            code/desktop-release/*.yml
+            code/desktop-release/latest*.yml
           if-no-files-found: error
+
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: AgentBridge-*
+          merge-multiple: true
+          path: release-assets
+      - name: Publish installers and update metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./code/desktop/package.json').version")
+          tag="v$version"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "Tag must match desktop/package.json version: $tag" >&2
+            exit 1
+          fi
+          if git rev-parse --verify "refs/tags/$tag" > /dev/null 2>&1; then
+            test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          fi
+          # Match electron-builder's GitHub-safe names in latest*.yml.
+          for asset in release-assets/*; do
+            if [[ "$asset" == *" "* ]]; then mv -- "$asset" "${asset// /-}"; fi
+          done
+          gh release create "$tag" release-assets/* \
+            --target "$GITHUB_SHA" --title "AgentBridge $version" \
+            --generate-notes \
+            --notes "Desktop installers for Windows x64, Linux x64 and macOS arm64. Agent CLIs install on demand from the management page. These builds are not signed or notarized."
