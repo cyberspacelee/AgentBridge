@@ -20,6 +20,8 @@ AgentBridge 在同一个工作台管理 Pi、OpenCode、Codex CLI 和 Grok Build
 
 桌面安装包自带 Node.js 与 npm，运行网关和安装受管 CLI 不需要全局 Node/npm。首次打开后，进入 Agent 的“安装与版本”页签，按需安装官方最新稳定版，再配置模型并启用；安装不会自动启用。更新和卸载由用户点击触发，不在每次启动时自动升级。
 
+Windows 安装后也可使用 [PowerShell 初始化脚本](INSTRUCTION.md#powershell-初始化安装-exe-后)，通过 JSON 配置模型、Skill/MCP 引用、CLI 安装与 Agent 启用。
+
 从源码运行桌面端需要 Node.js **>= 22.21.0** 和 pnpm **10.33.2**：
 
 ```sh

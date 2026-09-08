@@ -29,6 +29,48 @@ pnpm test:desktop
 
 应用目录和分发包输出到 `code/desktop-release/`；命令不自动发布。 GitHub Actions 的 Desktop 工作流默认只上传 Artifacts；手动运行时勾选 `publish`，或推送与 `code/desktop/package.json` 版本一致的 `v*` 标签，才会在三平台全部成功后创建 GitHub Release，附带安装包和更新元数据。已有 Release 不覆盖，发布下一版本前需更新桌面版本号。桌面冒烟测试需要图形环境，Linux 无显示器环境可使用 `xvfb-run -a pnpm test:desktop`。分发配置包含三个平台，不代表 Windows/macOS 已完成实机验收或安装包已经签名、公证和发布。
 
+#### PowerShell 初始化（安装 exe 后）
+
+将 [Initialize-AgentBridge.ps1](code/tools/Initialize-AgentBridge.ps1)、[initialize.mjs](code/tools/initialize.mjs) 和 [initialize.example.json](code/tools/initialize.example.json) 放在同一目录。脚本支持 Windows PowerShell 5.1 / PowerShell 7，使用安装目录自带的 Node/npm，无需额外安装它们，也无需重新打包桌面程序。`-ExePath` 指向安装后的 `agentbridge.exe`，不是下载的安装器。
+
+先通过菜单或托盘退出 AgentBridge，复制示例为自己的配置文件，再运行：
+
+```powershell
+Copy-Item .\initialize.example.json .\initialize.json
+$env:AGENT_OPENAI_BASE_URL = 'https://你的服务地址/v1'
+$env:AGENT_OPENAI_MODELS = '你的模型ID' # 此示例只填一个模型 ID
+$key = Read-Host 'API Key' -AsSecureString
+$env:AGENT_OPENAI_API_KEY = [System.Net.NetworkCredential]::new('', $key).Password
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
+  -ExePath "$env:LOCALAPPDATA\Programs\AgentBridge\agentbridge.exe" `
+  -ConfigPath .\initialize.json
+Remove-Item Env:AGENT_OPENAI_API_KEY
+```
+
+安装路径按实际位置修改。默认写入 `%APPDATA%\AgentBridge\data`；`-DataDirectory` 指定的是其父目录，默认也读取 `AGENT_DESKTOP_DATA_DIR`。指定自定义目录后，桌面启动也需要设置同一 `AGENT_DESKTOP_DATA_DIR`。
+
+示例安装并启用 Codex；`agents` 可仅列出需要初始化的 `pi`、`opencode`、`codex`、`grok`，其余保持停用。`enabled: false` 表示只安装、配置；`runtime: {"mode":"external","command":"C:\\工具\\codex.cmd"}` 表示检测并绑定已有 CLI。受管安装复用现有安装器，仅下载尚未安装或文件已丢失的 CLI，不自动更新已安装版本。
+
+在配置中填写资源，并在对应 Agent 的 `skillIds` / `mcpIds` 中填写其 ID，例如：
+
+```json
+{
+  "skills": [{ "id": "office", "path": "./skills/office" }],
+  "mcp": [{
+    "id": "office-tools",
+    "config": {
+      "type": "remote",
+      "url": "${OFFICE_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${OFFICE_MCP_TOKEN}" }
+    }
+  }]
+}
+```
+
+以上字段合并进示例配置，不是独立配置。Skill 路径相对于配置文件所在目录，必须已有 `SKILL.md`；脚本登记目录，不下载技能。MCP 也支持 `{"type":"local","command":["C:\\Python\\python.exe","C:\\tools\\server.py"],"environment":{}}`，所需程序与依赖须已安装。字符串中的 `${变量名}` 从环境变量读取，缺失时在保存前失败；密钥最终按应用现有方式保存到数据目录。
+
+脚本校验配置、保存资源、逐个安装/绑定 runtime，再启用指定 Agent，完成后关闭临时网关。初始化成功表示配置和 Agent 启动检查完成，不代表已经验证真实模型请求或所有 MCP 工具。错误返回非零退出码，保留已保存配置和已完成安装；修复环境或网络后可用相同配置重试。已有不同资源配置时拒绝覆盖，应在应用内编辑。实例运行时由数据目录锁拒绝初始化。已有系统代理密码若使用桌面密钥加密，独立脚本无法解密，会停止并保留原文件；这种实例请使用桌面管理页面。
+
 #### 安装、更新和卸载 Agent
 
 1. 在 Agent 管理中打开需要的 Agent，进入“安装与版本”。进入页签会检查官方最新稳定版，也可手动检查；页面分别显示已安装版本、当前运行版本、最新版本、查询时间、占用和操作进度。

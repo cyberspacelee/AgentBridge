@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 3,
+  "defaultAgent": "codex",
+  "providers": [
+    {
+      "id": "compatible",
+      "baseUrl": "${AGENT_OPENAI_BASE_URL}",
+      "apiKey": "${AGENT_OPENAI_API_KEY}",
+      "api": "openai-responses",
+      "models": [{ "id": "${AGENT_OPENAI_MODELS}" }]
+    }
+  ],
+  "skills": [],
+  "mcp": [],
+  "agents": [
+    {
+      "id": "codex",
+      "enabled": true,
+      "runtime": { "mode": "managed" },
+      "models": [{ "providerID": "compatible", "modelID": "${AGENT_OPENAI_MODELS}" }],
+      "defaultModel": { "providerID": "compatible", "modelID": "${AGENT_OPENAI_MODELS}" },
+      "skillIds": [],
+      "mcpIds": []
+    }
+  ]
+}
