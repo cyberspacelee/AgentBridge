@@ -327,7 +327,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(await realpath(process.argv[1])).href) {
   main().catch((error) => {
     // Schema errors can contain user input; never print raw validation objects or secrets.
     console.error(["ZodError", "SyntaxError"].includes(error.name) ? "Invalid initialization configuration. Check the example and settings schema." : error.message);

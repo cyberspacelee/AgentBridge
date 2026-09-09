@@ -9,7 +9,7 @@ import { CodexAdapter } from "./engines/codex/adapter.js";
 import { GrokAdapter } from "./engines/grok/adapter.js";
 import { createServer } from "./gateway/server.js";
 import { pathToFileURL } from "node:url";
-import path from "node:path";
+import { realpathSync } from "node:fs";
 export async function startGateway(config = readConfig()) {
   const adapters = [
     new OpenCodeAdapter(config),
@@ -51,7 +51,7 @@ export async function startGateway(config = readConfig()) {
 
 if (
   process.argv[1] &&
-  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
   if (!process.connected || process.env.AGENT_SUPERVISED !== "true") throw new Error("请通过 pnpm start 或 pnpm dev 启动网关");
   let interrupted = false;

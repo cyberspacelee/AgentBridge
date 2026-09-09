@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('AgentBridge-zip-test-' + [guid]::NewGuid().ToString('N'))
 $temporaryDirectories = [System.Collections.Generic.List[string]]::new()
 [System.IO.Directory]::CreateDirectory($root) | Out-Null

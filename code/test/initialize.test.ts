@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, symlink, writeFile, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, realpath, symlink, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
@@ -38,20 +38,26 @@ test("the shipped initialization example matches current settings and defaults o
   }
 });
 
-test("initialization CLI uses the packaged backend, preserves network/listener settings and releases its lock", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge initialize "));
+test("initialization CLI starts through linked paths, preserves network/listener settings and releases its lock", async () => {
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "bridge initialize ")));
   const resources = path.join(directory, "installed app/resources");
   const backend = path.join(resources, "backend");
   const data = path.join(directory, "user data/data");
   const filename = path.join(directory, "profile.json");
   const execute = promisify(execFile);
   try {
-    await mkdir(backend, { recursive: true });
+    // macOS /var and Windows short paths can alias the installed directory.
+    const packaged = path.join(directory, "packaged backend");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    await mkdir(packaged);
+    await mkdir(resources, { recursive: true });
+    await symlink(packaged, backend, linkType);
+    await symlink(path.resolve("tools"), path.join(directory, "tools"), linkType);
     await writeFile(path.join(backend, "package.json"), '{"type":"module"}');
     await symlink(path.resolve("node_modules"), path.join(backend, "node_modules"), process.platform === "win32" ? "junction" : "dir");
     await execute(process.execPath, [path.resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.json", "--outDir", path.join(backend, "dist")], { timeout: 60000 });
     const npm = await findNpm(process.execPath);
-    const args = [path.resolve("tools/initialize.mjs"), backend, data, filename, npm];
+    const args = [path.join(directory, "tools/initialize.mjs"), backend, data, filename, npm];
     const options = { timeout: 30000, env: { ...process.env, AGENT_HOST: "invalid-host", AGENT_PORT: "invalid-port", AGENT_ENGINE: "invalid-engine" } };
     await writeFile(filename, JSON.stringify({ schemaVersion: 1, defaultAgent: "codex" }));
     for (const saved of [false, true]) {
