@@ -132,13 +132,15 @@ export async function initializeRuntimes(request, agents, log = console.log, loc
         log(`${id}: installing runtime...`);
         await request(`/api/runtimes/${id}/actions`, { action: "install" });
         const installed = await wait("/api/runtimes", "runtimes", id);
-        if (!installed.managedVersion) throw new Error(`${id}: runtime installation did not complete`);
+        if (!installed.managedVersion || (installed.managed && !installed.usable)) throw new Error(`${id}: runtime installation did not complete`);
       } else log(`${id}: runtime already installed; skipping download`);
     }
     if (agent.runtime.mode === "external" || !current.managed) {
       log(`${id}: checking runtime source...`);
       await request(`/api/runtimes/${id}/source`, agent.runtime, "PUT");
-      await wait("/api/runtimes", "runtimes", id);
+      const bound = await wait("/api/runtimes", "runtimes", id);
+      if (bound.managed !== (agent.runtime.mode === "managed") || !bound.usable)
+        throw new Error(`${id}: runtime source is not usable`);
     }
     if (agent.enabled) {
       log(`${id}: enabling...`);
@@ -160,7 +162,7 @@ async function main() {
   const { SettingsManager, readSettings } = await moduleAt("dist/src/settings.js");
   const supervisor = new Supervisor({
     node: process.execPath, args: [path.join(backendRoot, "dist/src/main.js")], directory,
-    env: { AGENT_HOST: "127.0.0.1", AGENT_PORT: "0", AGENT_RUNTIME_NPM: npm, AGENT_MANAGED_RUNTIMES: "true" },
+    env: { AGENT_HOST: undefined, AGENT_PORT: undefined, AGENT_ENGINE: undefined, AGENT_RUNTIME_NPM: npm, AGENT_MANAGED_RUNTIMES: "true" },
   });
   const cancellation = new AbortController();
   const interrupted = () => { cancellation.abort(new Error("Initialization cancelled")); process.exitCode = 1; };
@@ -197,6 +199,8 @@ async function main() {
       });
     }
     console.log("Configuration saved. Starting temporary local gateway...");
+    // initialize() persists gateway settings; override only this temporary listener afterward.
+    supervisor.appliedGateway = { host: "127.0.0.1", port: 0 };
     const origin = await supervisor.start();
     cancellation.signal.throwIfAborted();
     const request = async (route, body, method = body ? "POST" : "GET") => {
@@ -219,7 +223,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().catch((error) => {
     // Schema errors can contain user input; never print raw validation objects or secrets.
-    console.error(error.name === "ZodError" ? "Invalid initialization configuration. Check the example and settings schema." : error.message);
+    console.error(["ZodError", "SyntaxError"].includes(error.name) ? "Invalid initialization configuration. Check the example and settings schema." : error.message);
     process.exitCode = 1;
   });
 }
