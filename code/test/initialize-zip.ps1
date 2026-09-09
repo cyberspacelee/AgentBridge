@@ -37,6 +37,15 @@ try {
     $zip = New-TestZip @('runtimes/codex/manifest.json', 'runtimes/codex/versions/version/node_modules/cli.js')
     $expanded = Expand-InputDirectory $zip 'runtimes'
     if (-not (Test-Path -LiteralPath (Join-Path $expanded 'codex/manifest.json'))) { throw 'Runtime wrapper was not removed.' }
+    foreach ($agent in @('pi', 'opencode')) {
+        $entry = "runtimes/$agent/versions/11111111-1111-4111-8111-111111111111/" + ('node_modules/dependency/' * 12) + 'dist/index.js'
+        $zip = New-TestZip @($entry)
+        $expanded = Expand-InputDirectory $zip 'runtimes'
+        $target = Join-Path $expanded $entry.Substring('runtimes/'.Length)
+        if ($target.Length -le 260) { throw 'Fixture must exercise a path longer than MAX_PATH.' }
+        if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $target = '\\?\' + $target }
+        if ([System.IO.File]::ReadAllText($target) -ne 'test content') { throw 'Long runtime path was not extracted.' }
+    }
     foreach ($names in @(
         @('../escape.txt'), @('C:/escape.txt'), @('/escape.txt'), @('office/../../escape.txt'),
         @('office/file:stream'), @('office/NUL.txt'), @('office./SKILL.md'),
