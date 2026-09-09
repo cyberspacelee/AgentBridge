@@ -62,7 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
-  -InstallerPath '.\AgentBridge Setup 0.1.15.exe' `
+  -InstallerPath '.\AgentBridge Setup 0.1.16.exe' `
   -InstallDirectory 'D:\Apps\AgentBridge' `
   -SettingsPath .\settings.json -Start
 ```

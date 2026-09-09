@@ -185,12 +185,11 @@ async function fixture(
   };
 }
 async function until(check: () => boolean) {
-  await within(
-    (async () => {
-      while (!check()) await delay(10);
-    })(),
-    3000,
-  );
+  const deadline = Date.now() + 3000;
+  while (!check()) {
+    assert.ok(Date.now() < deadline, "Condition did not become true within 3 seconds");
+    await delay(10);
+  }
 }
 const input = (directory: string, id = randomUUID()) =>
   createTaskSchema.parse({
@@ -1487,7 +1486,7 @@ test("native success remains completed when artifact work runs beyond the execut
   try {
     const accepted = await f.runtime.submit(input(f.directory));
     await until(() => f.adapter.executions.has(accepted.sessionId));
-    const file = path.join(f.directory, "result.md");
+    const file = path.join(f.runtime.session(accepted.sessionId).directory, "result.md");
     await writeFile(file, "finished output");
     t.mock.method(fs, "stat", async (...args: Parameters<typeof fs.stat>) => {
       if (String(args[0]) === file) { scanning = true; await blocked; }

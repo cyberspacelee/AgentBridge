@@ -1,6 +1,6 @@
 # AgentBridge API — API Reference
 
-版本：0.1.15 · OpenAPI 3.1.0
+版本：0.1.16 · OpenAPI 3.1.0
 Base URL 为当前网关地址。无需 Authorization/Cookie；仅供受信任客户端，同源与目录访问约束仍生效。JSON 请求使用 Content-Type: application/json，默认最大 1 MiB。响应头 X-Request-ID 用于追踪。字段标记 required 为必填；null 与省略不同。[Markdown 文档（供 Agent 使用）](/api/docs.md) · [完整会话示例](/api/examples/session.md)。
 获取地址：`GET /api/docs.md`（本文）、`GET /api/openapi.json`（机器定义）、`GET /api/docs`（网页）、`GET /api/examples/session.md`（完整会话示例）。
 Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参数的操作明确标注“无”，不要构造额外请求体。请求表的“必填”针对所在对象；父对象可选不代表其内部必填字段可省略。响应表的“必返”表示字段存在，null 表示值可能为空。命名类型在文末数据模型中展开。
