@@ -4,7 +4,7 @@ param(
     [string] $ExePath,
     [string] $InstallerPath,
     [string] $InstallDirectory,
-    [Alias('ConfigPath')] [string] $SettingsPath = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'settings.json')) { Join-Path $PSScriptRoot 'settings.json' } else { Join-Path $PSScriptRoot 'initialize.example.json' }),
+    [Alias('ConfigPath')] [string] $SettingsPath,
     [string] $SystemPath,
     [string] $RuntimesPath,
     [string] $SkillsPath,
@@ -106,6 +106,9 @@ function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
 
 try {
     if ($ExePath -and ($InstallerPath -or $InstallDirectory)) { throw 'Use -ExePath for an installed app, or -InstallerPath/-InstallDirectory for automatic installation, not both.' }
+    # Windows PowerShell 5.1 has no PSScriptRoot while binding parameter defaults.
+    if (-not $SettingsPath) { $SettingsPath = Find-BundleInput 'settings.json' }
+    if (-not $SettingsPath) { $SettingsPath = Join-Path $PSScriptRoot 'initialize.example.json' }
     $profileFile = (Resolve-Path -LiteralPath $SettingsPath).Path
     if (-not $SystemPath) { $SystemPath = Find-BundleInput 'system.json' }
     if (-not $RuntimesPath) { $RuntimesPath = Find-BundleInput 'runtimes' -Archive }
