@@ -169,6 +169,10 @@ for (const id of ["codex", "grok"] as const)
       }
       const settings = new SettingsManager(config),
         view = settings.view();
+      view.settings.providers[0]!.models[0]!.thinking = "off";
+      view.settings.providers[0]!.models.push({ ...view.settings.providers[0]!.models[0]!, id: "fixture-default", thinking: "default" });
+      view.settings.agents.find((a) => a.id === id)!.models.push({ providerID: view.settings.providers[0]!.id, modelID: "fixture-default" });
+      view.settings.agents.find((a) => a.id === id)!.contextCompaction = "enabled";
       view.settings.skills.push({
         id: "selected",
         path: selected,
@@ -231,6 +235,11 @@ for (const id of ["codex", "grok"] as const)
           requests.every((body) => body.model === "fixture-model"),
           JSON.stringify(requests.map((body) => body.model)),
         );
+        assert.ok(requests.length > 0);
+        const inference = requests.filter(body => Array.isArray(body.tools) && !JSON.stringify(body.tools).includes('"session_title"'));
+        assert.ok(inference.length > 0);
+        for (const body of inference)
+          assert.equal(id === "codex" ? (body.reasoning as { effort?: string })?.effort : body.reasoning_effort, "none", JSON.stringify(body));
         assert.ok(
           requests
             .slice(1)
@@ -249,6 +258,16 @@ for (const id of ["codex", "grok"] as const)
           !prompts.includes("bridge-unselected-marker"),
           "An unselected project skill must not reach the model",
         );
+        const switched = await runtime.submit({
+          submissionId: randomUUID(),
+          parts: [{ type: "text", text: "Use the model default thinking." }],
+          model: { providerID: view.settings.providers[0]!.id, modelID: "fixture-default" },
+        }, first.sessionId);
+        assert.equal((await within(runtime.wait(switched.runId), 40000)).state, "completed");
+        const defaults = requests.filter(body => body.model === "fixture-default");
+        assert.ok(defaults.length > 0);
+        for (const body of defaults)
+          assert.notEqual(id === "codex" ? (body.reasoning as { effort?: string })?.effort : body.reasoning_effort, "none", "Switching models must not retain the previous thinking override");
       } finally {
         await runtime.stop();
         store.close();

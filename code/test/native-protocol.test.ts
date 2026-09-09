@@ -7,6 +7,36 @@ import { GrokAdapter } from "../src/engines/grok/adapter.js";
 import type { EngineUpdate } from "../src/engines/adapter.js";
 import type { Session, Run } from "../shared/contracts.js";
 
+test("Codex renders only tool items and retains final inputs, errors and streamed file output", () => {
+  const adapter = new CodexAdapter(readConfig([], {}));
+  const parts: any[] = [];
+  const native = { nativeId: "thread", active: { turnId: "turn", message: { parts }, emit() {} } };
+  const event = (method: string, params: object) => Reflect.get(adapter, "event").call(adapter, native, method, { threadId: "thread", turnId: "turn", ...params });
+  for (const type of ["contextCompaction", "plan", "enteredReviewMode", "exitedReviewMode", "hookPrompt", "subAgentActivity"])
+    event("item/completed", { item: { id: type, type } });
+  assert.equal(parts.length, 0);
+  event("item/started", { item: { id: "command", type: "commandExecution", command: "echo starting", cwd: "/workspace" } });
+  event("item/commandExecution/outputDelta", { itemId: "command", delta: "partial" });
+  event("item/completed", { item: { id: "command", type: "commandExecution", command: "echo final", cwd: "/workspace", aggregatedOutput: "", status: "completed", exitCode: 1, durationMs: 120 } });
+  assert.deepEqual(parts[0].input, { command: "echo final", cwd: "/workspace" });
+  assert.equal(parts[0].output, "");
+  assert.equal(parts[0].state.status, "failed");
+  assert.equal(Date.parse(parts[0].finishedAt) - Date.parse(parts[0].startedAt), 120);
+  event("item/started", { item: { id: "mcp", type: "mcpToolCall", tool: "search", arguments: {} } });
+  event("item/completed", { item: { id: "mcp", type: "mcpToolCall", tool: "search", arguments: { query: "docs" }, status: "failed", error: { message: "Connection refused" } } });
+  assert.deepEqual(parts[1].input, { query: "docs" });
+  assert.match(parts[1].output, /Connection refused/);
+  event("item/completed", { item: { id: "dynamic", type: "dynamicToolCall", tool: "lookup", arguments: {}, success: false, contentItems: [{ type: "inputText", text: "Lookup failed" }] } });
+  assert.equal(parts[2].state.status, "failed");
+  assert.match(parts[2].output, /Lookup failed/);
+  event("item/started", { item: { id: "file", type: "fileChange", changes: [] } });
+  event("item/fileChange/outputDelta", { itemId: "file", delta: "Patch failed" });
+  assert.equal(parts[3].output, "Patch failed");
+  event("item/completed", { item: { id: "file", type: "fileChange", status: "failed", changes: [] } });
+  assert.equal(parts[3].output, "Patch failed");
+  assert.equal(parts.length, 4);
+});
+
 // Exercise the wire translations independently of the installed CLI and model output.
 for (const id of ["codex", "grok"] as const)
   test(`${id} translates tools, approvals, questions, usage and cancellation`, async () => {

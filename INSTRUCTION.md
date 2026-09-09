@@ -6,7 +6,7 @@
 
 桌面基础包包括 Electron、工作台、网关和独立 Node/npm，不默认携带 Pi、OpenCode、Codex CLI 或 Grok Build。安装后的应用无需全局 Node/npm 即可启动网关、下载和运行受管 CLI。Windows 的 Pi bash 工具仍需要 Git for Windows；用户配置的其他 MCP 命令按其要求准备。
 
-已下载 Windows 安装包时，先运行安装器完成应用安装，再打开 AgentBridge，按下文“安装、更新和卸载 Agent”配置所需 CLI 和模型；批量初始化可使用 PowerShell 脚本。以下 pnpm 命令用于从源码构建。
+Windows 可下载 `AgentBridge-<版本>-windows-x64-deploy.zip`，解压后由 PowerShell 一次完成安装 EXE、导入 JSON/Skill、安装或复制 CLI 和启用 Agent。也可单独运行 EXE 手动安装，再在应用中配置。以下 pnpm 命令用于从源码构建。
 
 源码构建需要 Node.js >= 22.21.0 和 pnpm 10.33.2，在 `code/` 执行：
 
@@ -31,41 +31,53 @@ pnpm test:desktop
 
 应用目录和分发包输出到 `code/desktop-release/`；本地命令不自动发布。GitHub Actions 的 Desktop 工作流在 PR 中只上传 Artifacts；手动运行或推送与 `code/desktop/package.json` 版本一致的 `v*` 标签，会在三平台全部成功后创建 GitHub Release，附带安装包和更新元数据。已有 Release 不覆盖，发布下一版本前需同步更新 `code/package.json` 和桌面版本号。桌面冒烟测试需要图形环境，Linux 无显示器环境可使用 `xvfb-run -a pnpm test:desktop`。分发配置包含三个平台，不代表 Windows/macOS 已完成实机验收或安装包已经签名、公证和发布。
 
-#### PowerShell 初始化（安装 exe 后）
+#### PowerShell 一键安装与初始化
 
-脚本支持 Windows PowerShell 5.1 / PowerShell 7，使用安装目录自带的 Node/npm。先安装 AgentBridge，再通过菜单或托盘退出应用。将 [Initialize-AgentBridge.ps1](code/tools/Initialize-AgentBridge.ps1) 和 [initialize.mjs](code/tools/initialize.mjs) 放在同一目录，准备以下文件即可初始化：
+脚本支持 Windows PowerShell 5.1 / PowerShell 7。部署 ZIP 已包含安装 EXE、[Initialize-AgentBridge.ps1](code/tools/Initialize-AgentBridge.ps1)、[initialize.mjs](code/tools/initialize.mjs)、配置示例和本说明；初始化工具也随 EXE 安装到 `resources/initialization/`。目标机不必提前安装 AgentBridge、Node、npm 或 pnpm。将自己的配置和资源放在解压目录：
 
 ```text
 deploy/
+  AgentBridge Setup <版本>.exe
   Initialize-AgentBridge.ps1
   initialize.mjs
+  initialize.example.json
+  INSTRUCTION.md
   settings.json       # 已配置好的业务配置，schemaVersion: 1
-  system.json         # 已配置好的系统配置，schemaVersion: 1
-  runtimes.zip        # 同操作系统、同 CPU 架构的 AgentBridge runtimes
-  skills.zip          # Skill 目录及附件
+  system.json         # 可选：系统配置，schemaVersion: 1
+  runtimes.zip        # 可选：同操作系统、同 CPU 架构的 AgentBridge runtimes
+  skills.zip          # 可选：Skill 目录及附件；也支持 skills/ 目录
 ```
 
-在该目录执行（安装路径按实际位置修改）：
+在该目录执行一条命令：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 -Start
+```
+
+脚本自动识别同目录唯一的 `AgentBridge*.exe` 安装器（不包括 `agentbridge.exe`），以当前用户静默安装到 `%LOCALAPPDATA%\Programs\AgentBridge`，等待安装成功，再使用内置 Node/npm 初始化。安装期间不启动工作台；指定目录已有 `agentbridge.exe` 时复用，不重装或升级。自动导入同目录 `settings.json`、可选 `system.json`、`skills.zip`/`skills/`、`runtimes.zip`/`runtimes/`；同类 ZIP 和目录同时存在时需显式指定。缺少 runtime 包时联网安装配置中指定的受管 CLI；提供 runtime 包时只使用本地包，不回退下载。
+
+脚本将已登记的 Skill 及附件复制到业务数据目录并改写引用，再按 `settings.json` 的 `enabled` 值启用 Agent。`-Start` 只在全部成功后启动桌面应用；不加此参数时，完成后自行打开应用即可。部署 ZIP 不包含真实凭据、用户配置或办公 Skill，需要自行提供。已有应用必须先通过菜单/托盘退出；安装器失败、JSON/资源校验失败或初始化失败均返回非零退出码，不执行 `-Start`。
+
+自定义安装位置或存在多个安装器时：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
-  -ExePath "$env:LOCALAPPDATA\Programs\AgentBridge\agentbridge.exe" `
-  -SettingsPath .\settings.json `
-  -SystemPath .\system.json `
-  -RuntimesPath .\runtimes.zip `
-  -SkillsPath .\skills.zip `
-  -Start
+  -InstallerPath '.\AgentBridge Setup 0.1.13.exe' `
+  -InstallDirectory 'D:\Apps\AgentBridge' `
+  -SettingsPath .\settings.json -Start
 ```
 
-脚本将 Skill 复制到业务数据目录并改写引用，导入系统设置、复制受管 CLI，再按 `settings.json` 的 `enabled` 值启用 Agent。`-Start` 在全部初始化成功后启动桌面应用；不加此参数时，完成后自行打开应用即可。使用默认目录时，无需额外设置桌面启动环境。
+已安装应用只需初始化时使用 `-ExePath 'D:\Apps\AgentBridge\agentbridge.exe'`，不同时传 `-InstallerPath`/`-InstallDirectory`。`initialize.mjs` 优先从脚本目录读取，没有时使用安装目录的 `resources/initialization/initialize.mjs`。静默参数遵循 [NSIS 文档](https://nsis.sourceforge.io/Which_command_line_parameters_can_be_used_to_configure_installers)：`/S /currentuser /D=安装目录`，`/D` 必须放最后，路径含空格也不加内层引号。
 
 | 参数 | 用途 |
 | --- | --- |
-| `-ExePath` | 必填，安装后的 `agentbridge.exe`，不能填写下载的安装器 |
+| `-InstallerPath` | 可选，AgentBridge NSIS 安装器 EXE；未指定时自动寻找脚本同目录唯一的安装器 |
+| `-InstallDirectory` | 可选，应用安装绝对路径；默认 `%LOCALAPPDATA%\Programs\AgentBridge`，与业务数据目录分开 |
+| `-ExePath` | 可选，跳过安装并使用已有 `agentbridge.exe`；不能填写下载的安装器 |
 | `-SettingsPath` | 业务配置 JSON；默认优先使用脚本同目录的 `settings.json`，没有时使用 `initialize.example.json`。原参数 `-ConfigPath` 仍可用 |
-| `-SystemPath` | 可选，导入系统配置 JSON；不提供时沿用目标实例的系统配置，新实例使用默认值 |
-| `-RuntimesPath` | 可选，runtimes ZIP 或目录；提供后不回退到联网安装 |
-| `-SkillsPath` | 可选，Skill ZIP 或目录；提供后统一存入 `data/skills/<资源ID>/` |
+| `-SystemPath` | 可选，默认自动读取同目录 `system.json`；没有时沿用目标系统配置，新实例使用默认值 |
+| `-RuntimesPath` | 可选，默认自动读取同目录 runtimes ZIP 或目录；有本地包时不回退到联网安装 |
+| `-SkillsPath` | 可选，默认自动读取同目录 Skill ZIP 或目录；统一存入 `data/skills/<资源ID>/` |
 | `-DataDirectory` | 桌面用户数据根目录，默认 `AGENT_DESKTOP_DATA_DIR` 或 `%APPDATA%\AgentBridge`；业务数据位于其 `data/` 子目录 |
 | `-Start` | 初始化成功后用本次数据目录启动应用 |
 
@@ -85,23 +97,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
       versions/<UUID>/...
 ```
 
-**准备 settings.json**：使用数据目录中的真实配置文件，不要把 `GET /api/settings` 返回的带掩码视图当作部署文件。保留需要启用 Agent 的 `enabled: true`、模型和 Skill/MCP 引用；停用且未提供 runtime 的 Agent 会跳过，不会因为完整配置包含四个 Agent 就额外下载 CLI。停用但 ZIP 内有已安装版本的受管 Agent 仍会复制，保持停用。Codex 的模型连接必须使用 `openai-responses`。外部来源保留 `runtime: {"mode":"external","command":"目标机上的命令或绝对路径"}`，启用前检测并绑定，不能把源机器路径当作可搬运程序。
+**准备 settings.json**：使用数据目录中的真实配置文件，不要把 `GET /api/settings` 返回的带掩码视图当作部署文件。保留需要启用 Agent 的 `enabled: true`、模型和 Skill/MCP 引用。联网模式会为文件中列出的受管 Agent 安装 CLI，即使该 Agent 停用；不需要安装的 Agent 可从部署文件的 `agents` 中移除。提供本地 runtime 包时，停用且源包和目标目录均无 runtime 的 Agent 会跳过；停用但已有 runtime 的受管 Agent 仍会复制或复用，保持停用。Codex 的模型连接必须使用 `openai-responses`。外部来源保留 `runtime: {"mode":"external","command":"目标机上的命令或绝对路径"}`，启用前检测并绑定，不能把源机器路径当作可搬运程序。
 
 **准备 runtimes.zip**：退出源实例后压缩其 `data/runtimes/`。ZIP 可以包含顶层 `runtimes/`，也可以直接包含 `pi/`、`opencode/`、`codex/`、`grok/`。受管 Agent 目录必须包含完整 `manifest.json` 和 `versions/<UUID>/`（含 node_modules）；仅提供单个 CLI exe 或全局 npm 目录不可用。脚本只复制当前已登记版本，在目标机检查 `--version`；源文件保持原样。已启用的 Agent 缺少可用 runtime 时初始化失败，不回退到下载。
 
 **准备 skills.zip**：ZIP 可以包含顶层 `skills/`，也可以直接包含多个 Skill 目录。每个目录需有 `SKILL.md`，附件、模板和脚本一并保留。推荐目录名与 settings 中的 Skill `id` 一致，也支持使用原 `path` 的末级目录名；两者匹配到不同目录时会报错，避免绑定错资源。例如 `id: "office"`、`path: "C:\\source\\skills\\office"` 配合 `skills/office/SKILL.md`，安装后自动改为 `%APPDATA%\AgentBridge\data\skills\office`。未在 settings 中登记的 Skill 不会自动添加。脚本只改写 Skill 的目录引用，不改写 Skill 文件正文或 MCP 命令中的源机器绝对路径。
 
+例如，把 `skills/office/SKILL.md` 和附件放在脚本旁，在 settings 的 `skills` 中加入 `{"id":"office","path":"skills/office","enabled":true}`，并在所需 Agent 的 `skillIds` 中加入 `"office"`。模型可设置 `"thinking":"off"`（需要模型支持），Agent 可设置 `"contextCompaction":"enabled"`；省略时均使用默认行为。配置里的 `${变量名}` 由初始化程序读取环境变量展开，不需在脚本中硬编码密钥。
+
 **准备 system.json**：使用当前数据目录的系统配置文件，要求 `schemaVersion: 1`、`applying: false`。导入采用保存的 `gateway`、`network`，并将它们设为下次启动生效值，不沿用源实例的运行错误或旧生效状态。npm 源、代理和证书按当前项目规则校验。桌面加密的 `encryptedPassword` 不能跨机器导入；部署文件需移除 `network` 和 `appliedNetwork` 中的该字段，必要时在 `network.proxyPassword` 填写密码或 `${变量名}`。CA 文件和本地 MCP 程序需在目标机提前准备，路径必须适用于目标机。
 
 ZIP 先解压到临时目录，支持普通文件和目录；绝对路径、`..` 越界、重复路径、符号链接、Windows 特殊设备名等会被拒绝。每个 ZIP 最多 200,000 个条目、展开大小最多 8 GiB，处理结束后清理临时目录。Windows 的普通 runtimes ZIP 不依赖 Unix 符号链接；如果来源是其他平台的含链接目录，请使用对应平台运行环境，不能直接搬到 Windows。
 
-相同文件可重复执行：已登记 runtime 保留，同内容 Skill 复用；已有不同业务配置或同 ID 的不同 Skill 内容会拒绝覆盖，改用新数据目录或在应用中管理。显式提供 `-SystemPath` 会应用所提供的系统设置。错误返回非零退出码，保留已保存配置和已完成安装，且不执行 `-Start`；修复后可以重试。原生模型真实请求、额外 MCP 依赖及外部办公服务仍需在目标环境验证。
+相同文件可重复执行：已登记 runtime 保留，同内容 Skill 复用；已有不同业务配置或同 ID 的不同 Skill 内容会拒绝覆盖，改用新数据目录或在应用中管理。显式提供 `-SystemPath` 或自动发现同目录 `system.json` 时会应用所提供的系统设置。错误返回非零退出码，保留已保存配置和已完成安装，且不执行 `-Start`；修复后可以重试。原生模型真实请求、额外 MCP 依赖及外部办公服务仍需在目标环境验证。
 
 临时校验网关仅监听 `127.0.0.1` 的自动分配端口，不覆盖导入的监听地址和端口，也不采用当前终端的 `AGENT_HOST`、`AGENT_PORT`、`AGENT_ENGINE`。正常启动 Desktop 仍遵循下文环境变量优先级。实例运行时由数据目录锁拒绝初始化；目标实例已保存的加密代理密码无法由独立脚本解密时，请用新数据目录，或通过桌面页面操作。
 
 若指定 `-DataDirectory 'D:\AgentBridge-profile'`，业务数据写入 `D:\AgentBridge-profile\data`；`-Start` 会给此次启动传入同一根目录。以后从其他终端或快捷方式打开时，也需设置相同的 `AGENT_DESKTOP_DATA_DIR`；脚本不会修改系统级环境变量。
 
-**仍可使用在线初始化**：不提供 `-RuntimesPath` 时，按原流程安装配置中列出的受管 Agent；不提供 `-SkillsPath` 时，只登记 settings 中已有的 Skill 路径（相对路径以配置文件所在目录为基准）。可复制 [initialize.example.json](code/tools/initialize.example.json) 为自己的配置，按示例设置 `AGENT_OPENAI_BASE_URL`、`AGENT_OPENAI_API_KEY`、`AGENT_OPENAI_MODELS`，再用 `-SettingsPath` 指定。示例中的模型变量只填一个模型 ID；字符串中的 `${变量名}` 从环境变量读取，缺失时失败。MCP 资源仍在 settings 的 `mcp` 中配置，并通过 Agent 的 `mcpIds` 引用。脚本不下载 Skill，也不安装本地 MCP 的依赖。
+**在线初始化**：没有指定 `-RuntimesPath` 且脚本旁没有 runtimes 包时，联网安装配置中列出的受管 Agent；没有指定 `-SkillsPath` 且脚本旁没有 skills 包时，只登记 settings 中已有的 Skill 路径（相对路径以配置文件所在目录为基准）。可复制 [initialize.example.json](code/tools/initialize.example.json) 为 `settings.json`，设置 `AGENT_OPENAI_BASE_URL`、`AGENT_OPENAI_API_KEY`、`AGENT_OPENAI_MODELS` 后执行上述一键命令。模型变量只填一个模型 ID；变量缺失时失败。MCP 资源仍在 settings 的 `mcp` 中配置，并通过 Agent 的 `mcpIds` 引用。脚本不下载 Skill，也不安装本地 MCP 的依赖。
 
 #### 安装、更新和卸载 Agent
 
@@ -162,8 +176,8 @@ pnpm start
 ## 管理配置
 
 1. 在“共享资源”中添加 OpenAI 兼容连接：供应商 ID、Base URL、API Key、协议及模型列表。Base URL 填 API 根路径，例如 `https://api.example.com/v1`，不填具体请求端点。
-2. 每个模型可配置名称、上下文长度和最大输出长度。只支持 Chat Completions 与 Responses；Codex 只接受 Responses。
-3. 在 Agent 详情选择允许使用的模型、默认模型、Skills、MCP 和默认交互策略，保存后启用。默认权限审批和提问均为 `auto`：权限自动批准，提问按首个选项或默认文本回答；需要人工处理时改为 `manual`。创建会话时可覆盖该策略，已创建会话的策略保持固定。
+2. 每个模型可配置名称、上下文长度、最大输出长度及默认/关闭思考。关闭思考需要供应商和模型支持。只支持 Chat Completions 与 Responses；Codex 只接受 Responses。
+3. 在 Agent 详情选择上下文压缩（默认/启用）、允许使用的模型、默认模型、Skills、MCP 和默认交互策略，保存后启用。默认权限审批和提问均为 `auto`：权限自动批准，提问按首个选项或默认文本回答；需要人工处理时改为 `manual`。创建会话时可覆盖该策略，已创建会话的策略保持固定。
 4. 修改已启用 Agent 的配置后，点击应用。页面分别显示保存修订与已应用修订；保存不会改变正在执行的进程配置。
 5. 连接测试会向已保存的供应商发送一次最多 64 个输出 token 的请求，超时 30 秒。它可能产生模型费用。
 
@@ -273,7 +287,7 @@ pnpm test:browser
 
 浏览器测试自动启动独立测试网关，覆盖桌面和手机视口；默认端口 3010，可用 `AGENT_BROWSER_PORT` 调整。它与 Electron 冒烟测试 `pnpm test:desktop` 分开运行。
 
-仅验证初始化脚本时运行 `pnpm exec tsx --test test/initialize.test.ts`。该测试校验示例配置、system 导入、Skill 搬运和冲突保护、runtime 复制、初始化重试及重启后 Agent 就绪；使用本地 CLI 协议替身，不下载官方 CLI，也不请求真实模型。Windows 下还会运行 PowerShell ZIP 和完整导入测试；其他平台可设置 `AGENT_TEST_POWERSHELL` 为 `pwsh` 路径启用相同检查。仅检查 ZIP 可执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/initialize-zip.ps1`。最终安装包、真实 CLI 和桌面启动仍需在目标 Windows 环境验收。
+仅验证初始化脚本时运行 `pnpm exec tsx --test test/initialize.test.ts`。该测试校验示例配置、system 导入、Skill 搬运和冲突保护、runtime 复制、初始化重试及重启后 Agent 就绪；使用本地 CLI 协议替身，不下载官方 CLI，也不请求真实模型。Windows 下还会运行 PowerShell ZIP、安装器命令模拟、同目录资源发现和完整导入测试；其他平台可设置 `AGENT_TEST_POWERSHELL` 为 `pwsh` 路径启用相同检查。仅检查 ZIP 可执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/initialize-zip.ps1`；安装器命令模拟使用 `test/initialize-install.ps1`。桌面发布 CI 在 Windows 下使用 PowerShell 5.1 执行最终 EXE 安装、JSON/Skill 导入和桌面启动检查；真实 CLI 与业务配置仍需在目标环境验收。
 
 原生 CLI 验证通过环境变量单独运行；先确保对应 CLI 可执行，Pi/OpenCode 可使用项目开发依赖，Codex/Grok 需另行准备。生命周期检查不发送模型请求，模型协议检查使用本地测试服务，不调用收费模型：
 

@@ -18,6 +18,8 @@ test("Agent resources, assignment, configuration apply and enable state persist"
     .fill("http://127.0.0.1:8888/v1");
   await editor.getByLabel("API Key", { exact: true }).fill("browser-secret");
   await editor.getByLabel("模型 ID", { exact: true }).fill("model-one");
+  await editor.getByRole("combobox", { name: "模型 1 思考", exact: true }).click();
+  await page.getByRole("option", { name: "关闭思考", exact: true }).click();
   await editor.getByRole("button", { name: "添加模型", exact: true }).click();
   await editor
     .getByRole("group", { name: "模型 2", exact: true })
@@ -43,6 +45,7 @@ test("Agent resources, assignment, configuration apply and enable state persist"
   await expect(editor.getByLabel("API Key", { exact: true })).toHaveValue(
     "********",
   );
+  await expect(editor.getByRole("combobox", { name: "模型 1 思考", exact: true })).toContainText("关闭思考");
   await editor.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("tab", { name: "Skills", exact: true }).click();
   await page.getByRole("button", { name: "添加", exact: true }).click();
@@ -65,6 +68,8 @@ test("Agent resources, assignment, configuration apply and enable state persist"
   await navigate(page, "Agent 管理");
   await page.getByRole("link", { name: "Grok Build", exact: true }).click();
   await page.getByRole("tab", { name: "模型", exact: true }).click();
+  await page.getByRole("combobox", { name: "上下文压缩", exact: true }).click();
+  await page.getByRole("option", { name: "启用自动压缩", exact: true }).click();
   await page
     .getByRole("checkbox", { name: `${provider} model-one`, exact: true })
     .check();
@@ -92,6 +97,9 @@ test("Agent resources, assignment, configuration apply and enable state persist"
   ).toBeEnabled();
   await page.reload();
   await expect(page.getByText("已停用", { exact: true }).first()).toBeVisible();
+  const savedControls = (await (await request.get("/api/settings")).json()).settings;
+  expect(savedControls.agents.find((a: { id: string }) => a.id === "grok").contextCompaction).toBe("enabled");
+  expect(savedControls.providers.find((p: { id: string }) => p.id === provider).models[0].thinking).toBe("off");
   await page.getByRole("button", { name: "启用", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "停用", exact: true }),
@@ -194,6 +202,36 @@ async function mockTask(page: Page, detail: ReturnType<typeof designFixture>) {
     page.getByRole("heading", { name: detail.task.title }),
   ).toBeVisible();
 }
+
+test("Codex tool calls show command summaries, full output and failure details", async ({ page }, info) => {
+  const detail = designFixture();
+  detail.task.engineId = "codex";
+  const failed = detail.messages[0].parts.find(p => p.type === "tool")!;
+  Object.assign(failed, { tool: "lookup", output: JSON.stringify({ message: "MCP connection refused" }) });
+  const command = structuredClone(failed);
+  Object.assign(command, {
+    id: "codex-command", tool: "commandExecution", toolCallId: "cmd-1",
+    input: "printf 'legacy command'",
+    output: Array.from({ length: 100 }, (_, i) => `输出 ${i}: ${"中文".repeat(80)}`).join("\n"),
+    state: { status: "completed", title: "commandExecution" },
+  });
+  detail.messages[0].parts.push(command);
+  await mockTask(page, detail);
+  const error = page.getByRole("region", { name: "工具 lookup", exact: true });
+  await expect(error.getByText("错误详情", { exact: true })).toBeVisible();
+  await expect(error.getByLabel("工具输出", { exact: true })).toContainText("MCP connection refused");
+  const tool = page.getByRole("region", { name: "工具 commandExecution", exact: true });
+  await expect(tool.getByText("printf 'legacy command'", { exact: true })).toBeVisible();
+  await tool.getByRole("button").first().click();
+  await expect(tool.getByText("预览已省略", { exact: true })).toBeVisible();
+  await tool.getByRole("button", { name: "显示更多", exact: true }).click();
+  await expect(tool.getByLabel("工具输出", { exact: true })).toContainText("输出 99:");
+  await tool.getByRole("button", { name: "输入", exact: true }).click();
+  await expect(tool.getByLabel("工具输入", { exact: true })).toContainText("legacy command");
+  await captureQa(page, `codex-tools-${info.project.name}`);
+  await theme(page, "浅色");
+  await captureQa(page, `codex-tools-light-${info.project.name}`);
+});
 
 async function observationTab(page: Page, name: string) {
   const select = page.getByRole("combobox", { name: "观测视图" });

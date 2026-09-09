@@ -27,6 +27,44 @@ import {
 } from "../src/settings.js";
 import { hiddenSecret, settingsSchema } from "../shared/settings.js";
 
+test("compaction and model thinking persist, apply per agent, and restore native defaults", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-controls-"));
+  try {
+    const config = readConfig([], { AGENT_DATA_DIR: directory });
+    const manager = new SettingsManager(config);
+    let view = manager.view();
+    const ref = { providerID: "bridge", modelID: "model" };
+    view = manager.save({ revision: view.revision, settings: {
+      ...view.settings,
+      providers: [{ id: "bridge", baseUrl: "http://localhost:9999/v1", api: "openai-responses", models: [{ id: "model", thinking: "off", contextWindow: 32000 }] }],
+      agents: view.settings.agents.map(a => ({ ...a, models: [ref], defaultModel: ref, contextCompaction: "enabled" })),
+    } });
+    for (const enabled of [true, false]) {
+      if (!enabled) view = manager.save({ revision: view.revision, settings: {
+        ...view.settings,
+        providers: view.settings.providers.map(p => ({ ...p, models: p.models.map(m => ({ ...m, thinking: "default" })) })),
+        agents: view.settings.agents.map(a => ({ ...a, contextCompaction: "default" })),
+      } });
+      for (const agent of view.settings.agents) applyAgentConfiguration(config, agent.id);
+      const pi = JSON.parse(await readFile(agentConfigFile(config, "pi"), "utf8"));
+      const oc = JSON.parse(await readFile(agentConfigFile(config, "opencode"), "utf8"));
+      const grok = parse(await readFile(agentConfigFile(config, "grok"), "utf8")) as Record<string, any>;
+      const codex = parse(await readFile(agentConfigFile(config, "codex"), "utf8"));
+      assert.deepEqual(pi.compaction, enabled ? { enabled: true } : undefined);
+      assert.deepEqual(pi.modelThinkingLevels, enabled ? { "bridge/model": "off" } : {});
+      assert.equal(piProviders(config).bridge!.models[0]!.reasoning, enabled);
+      assert.deepEqual(oc.compaction, enabled ? { auto: true } : undefined);
+      assert.deepEqual(oc.provider.bridge.models.model.options, enabled ? { reasoningEffort: "none" } : undefined);
+      assert.deepEqual(grok.session, enabled ? { auto_compact_threshold_percent: 85 } : undefined);
+      assert.deepEqual(grok.model["bridge/model"].reasoning_efforts, enabled ? [{ id: "none", value: "none", label: "Off", default: true }] : undefined);
+      assert.equal(codex.model_auto_compact_token_limit, enabled ? 27200 : undefined);
+      assert.equal(readSettings(config).providers[0]!.models[0]!.thinking, enabled ? "off" : "default");
+    }
+    assert.equal(settingsSchema.parse({}).agents[0]!.contextCompaction, "default");
+    assert.throws(() => settingsSchema.parse({ ...view.settings, agents: view.settings.agents.map(a => ({ ...a, contextCompaction: "invalid" })) }));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("unified configuration isolates four native directories, snapshots applied resources and preserves secrets", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-settings-"));
   try {
@@ -217,10 +255,11 @@ test("native import is preview-only and excludes credentials; saved settings ove
 test("connection testing uses the selected protocol and reports provider failures without credentials", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-connection-"));
   const requests: string[] = [];
+  const bodies: Record<string, unknown>[] = [];
   const server = createServer(async (req, res) => {
-    for await (const _ of req) {
-      void _;
-    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
     requests.push(req.url!);
     res.setHeader("Content-Type", "application/json");
     res.end(
@@ -253,7 +292,7 @@ test("connection testing uses the selected protocol and reports provider failure
           id: "p" + i,
           api,
           baseUrl: `http://127.0.0.1:${address.port}/v1`,
-          models: [{ id: "custom" }],
+          models: [{ id: "custom", thinking: "off" }, { id: "default" }],
         })),
       },
     });
@@ -266,6 +305,13 @@ test("connection testing uses the selected protocol and reports provider failure
       true,
     );
     assert.deepEqual(requests, ["/v1/chat/completions", "/v1/responses"]);
+    assert.equal(bodies[0]!.reasoning_effort, "none");
+    assert.deepEqual(bodies[1]!.reasoning, { effort: "none" });
+    for (const id of ["p0", "p1"]) await manager.testProvider(id, { modelID: "default" });
+    for (const body of bodies.slice(2)) {
+      assert.equal(body.reasoning_effort, undefined);
+      assert.equal(body.reasoning, undefined);
+    }
     await assert.rejects(
       manager.testProvider("p0", { modelID: "missing" }),
       /Unknown/,

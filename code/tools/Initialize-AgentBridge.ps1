@@ -1,7 +1,9 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)] [string] $ExePath,
+    [string] $ExePath,
+    [string] $InstallerPath,
+    [string] $InstallDirectory,
     [Alias('ConfigPath')] [string] $SettingsPath = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'settings.json')) { Join-Path $PSScriptRoot 'settings.json' } else { Join-Path $PSScriptRoot 'initialize.example.json' }),
     [string] $SystemPath,
     [string] $RuntimesPath,
@@ -12,6 +14,38 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $temporaryDirectories = [System.Collections.Generic.List[string]]::new()
+
+function Find-BundleInput([string] $Name, [switch] $Archive) {
+    $names = @($Name)
+    if ($Archive) { $names += "$Name.zip" }
+    $found = @($names | ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path -LiteralPath $_ })
+    if ($found.Count -gt 1) { throw "Both $Name and $Name.zip exist; specify the input path explicitly." }
+    if ($found.Count -eq 1) { return $found[0] }
+    return ''
+}
+
+function Install-Application([string] $Installer, [string] $Destination) {
+    $destinationPath = [System.IO.Path]::GetFullPath($Destination)
+    if ($destinationPath -match '["\r\n]' -or -not [System.IO.Path]::IsPathRooted($Destination)) { throw 'InstallDirectory must be an absolute path without quotes or newlines.' }
+    $application = Join-Path $destinationPath 'agentbridge.exe'
+    if (Test-Path -LiteralPath $application -PathType Leaf) {
+        Write-Host "Using installed application: $application"
+        return $application
+    }
+    if (-not $Installer) {
+        $installers = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'AgentBridge*.exe' -File | Where-Object { $_.Name -ine 'agentbridge.exe' })
+        if ($installers.Count -ne 1) { throw 'Expected one AgentBridge installer beside the script; specify -InstallerPath or -ExePath.' }
+        $Installer = $installers[0].FullName
+    }
+    $installerFile = (Resolve-Path -LiteralPath $Installer).Path
+    if ([System.IO.Path]::GetExtension($installerFile) -ine '.exe' -or -not (Test-Path -LiteralPath $installerFile -PathType Leaf)) { throw 'InstallerPath must point to an AgentBridge NSIS installer EXE.' }
+    Write-Host "Installing AgentBridge to: $destinationPath"
+    # NSIS requires /D last, without quoting even when the directory contains spaces.
+    $process = Start-Process -FilePath $installerFile -ArgumentList "/S /currentuser /D=$destinationPath" -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "AgentBridge installation failed (exit $($process.ExitCode)). Initialization was not started." }
+    if (-not (Test-Path -LiteralPath $application -PathType Leaf)) { throw "Installer finished but agentbridge.exe is missing: $destinationPath" }
+    return $application
+}
 
 # Extract only regular files into a fresh directory; never trust ZIP entry paths.
 function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
@@ -71,13 +105,29 @@ function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
 }
 
 try {
-    $exe = (Resolve-Path -LiteralPath $ExePath).Path
+    if ($ExePath -and ($InstallerPath -or $InstallDirectory)) { throw 'Use -ExePath for an installed app, or -InstallerPath/-InstallDirectory for automatic installation, not both.' }
     $profileFile = (Resolve-Path -LiteralPath $SettingsPath).Path
+    if (-not $SystemPath) { $SystemPath = Find-BundleInput 'system.json' }
+    if (-not $RuntimesPath) { $RuntimesPath = Find-BundleInput 'runtimes' -Archive }
+    if (-not $SkillsPath) { $SkillsPath = Find-BundleInput 'skills' -Archive }
+    $systemFile = if ($SystemPath) { (Resolve-Path -LiteralPath $SystemPath).Path } else { '' }
+    foreach ($jsonFile in @($profileFile, $systemFile) | Where-Object { $_ }) {
+        try { Get-Content -LiteralPath $jsonFile -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null }
+        catch { throw "Invalid JSON file: $jsonFile" }
+    }
+    $runtimeDirectory = Expand-InputDirectory $RuntimesPath 'runtimes'
+    $skillDirectory = Expand-InputDirectory $SkillsPath 'skills'
+    if ($ExePath) { $exe = (Resolve-Path -LiteralPath $ExePath).Path }
+    else {
+        if (-not $InstallDirectory) { $InstallDirectory = Join-Path $env:LOCALAPPDATA 'Programs\AgentBridge' }
+        $exe = Install-Application $InstallerPath $InstallDirectory
+    }
     $resources = Join-Path (Split-Path -Parent $exe) 'resources'
     $node = Join-Path $resources 'node\node.exe'
     $npm = Join-Path $resources 'node\node_modules\npm\bin\npm-cli.js'
     $backend = Join-Path $resources 'backend'
     $helper = Join-Path $PSScriptRoot 'initialize.mjs'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { $helper = Join-Path $resources 'initialization\initialize.mjs' }
     foreach ($required in @($node, $npm, $helper, (Join-Path $backend 'dist\src\main.js'))) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "Missing file: $required. ExePath must point to the installed application, not the installer."
@@ -86,9 +136,6 @@ try {
     $data = Join-Path ([System.IO.Path]::GetFullPath($DataDirectory)) 'data'
     Write-Host "Initializing AgentBridge data: $data"
     Write-Host 'Exit AgentBridge from its tray/menu before running this script.'
-    $runtimeDirectory = Expand-InputDirectory $RuntimesPath 'runtimes'
-    $skillDirectory = Expand-InputDirectory $SkillsPath 'skills'
-    $systemFile = if ($SystemPath) { (Resolve-Path -LiteralPath $SystemPath).Path } else { '' }
     # Named optional arguments survive empty-value handling in Windows PowerShell 5.1.
     $initializeArgs = @($helper, $backend, $data, $profileFile, $npm)
     if ($runtimeDirectory) { $initializeArgs += @('--runtimes', $runtimeDirectory) }

@@ -140,6 +140,17 @@ export function configuredModels(config: Config, id: string) {
     })),
   );
 }
+export function configuredModel(config: Config, id: string, ref = agentConfiguration(config, id)?.defaultModel) {
+  ref ??= agentConfiguration(config, id)?.defaultModel;
+  return engineSettings(config, id).providers
+    .find((p) => p.id === ref?.providerID)?.models.find((m) => m.id === ref?.modelID);
+}
+export function codexCompactionConfig(config: Config, ref = agentConfiguration(config, "codex")?.defaultModel) {
+  const model = configuredModel(config, "codex", ref);
+  return model && agentConfiguration(config, "codex")?.contextCompaction === "enabled"
+    ? { model_context_window: model.contextWindow, model_auto_compact_token_limit: Math.floor(model.contextWindow * 0.85) }
+    : {};
+}
 export function diagnosticSecrets(config: Config): string[] {
   const values = [
     config.opencode.password,
@@ -174,9 +185,12 @@ export function piProviders(config: Config) {
           .replaceAll("$", () => "$$")
           .replace(/^!/, "$!"),
         models: p.models.map((m) => ({
-          ...m,
+          id: m.id,
+          contextWindow: m.contextWindow,
+          maxTokens: m.maxTokens,
           name: m.name || m.id,
-          reasoning: false,
+          reasoning: m.thinking === "off",
+          ...(m.thinking === "off" ? { thinkingLevelMap: { off: "none" } } : {}),
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         })),
@@ -232,6 +246,8 @@ export function opencodeEnvironment(config: Config) {
   const settings = engineSettings(config, "opencode");
   const native = {
     autoupdate: false,
+    ...(agentConfiguration(config, "opencode")?.contextCompaction === "enabled"
+      ? { compaction: { auto: true } } : {}),
     plugin: [],
     enabled_providers: settings.providers.map((p) => p.id),
     provider: Object.fromEntries(
@@ -250,6 +266,7 @@ export function opencodeEnvironment(config: Config) {
               {
                 name: m.name || m.id,
                 limit: { context: m.contextWindow, output: m.maxTokens },
+                ...(m.thinking === "off" ? { options: { reasoningEffort: "none" } } : {}),
               },
             ]),
           ),
@@ -448,6 +465,10 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
             packages: [],
             skills: [],
             extensions: [],
+            ...(agent.contextCompaction === "enabled" ? { compaction: { enabled: true } } : {}),
+            modelThinkingLevels: Object.fromEntries(scoped.providers.flatMap((p) =>
+              p.models.filter((m) => m.thinking === "off").map((m) => [`${p.id}/${m.id}`, "off"]),
+            )),
           },
           null,
           2,
@@ -488,6 +509,7 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
       const native =
         id === "codex"
           ? {
+              ...codexCompactionConfig(config),
               ...(agent.defaultModel
                 ? {
                     model: agent.defaultModel.modelID,
@@ -518,6 +540,7 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
               web_search: "disabled",
             }
           : {
+              ...(agent.contextCompaction === "enabled" ? { session: { auto_compact_threshold_percent: 85 } } : {}),
               models: {
                 ...(agent.defaultModel
                   ? Object.fromEntries(
@@ -553,6 +576,9 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
                       context_window: m.contextWindow,
                       max_completion_tokens: m.maxTokens,
                       supports_backend_search: false,
+                      ...(m.thinking === "off" ? {
+                        reasoning_efforts: [{ id: "none", value: "none", label: "Off", default: true }],
+                      } : {}),
                     },
                   ]),
                 ),
@@ -666,7 +692,8 @@ export class SettingsManager {
     const provider = readSettings(this.config).providers.find(
       (p) => p.id === id,
     );
-    if (!provider?.models.some((m) => m.id === modelID))
+    const model = provider?.models.find((m) => m.id === modelID);
+    if (!provider || !model)
       throw new GatewayError("VALIDATION_ERROR", "Unknown provider/model", 400);
     const started = Date.now();
     try {
@@ -689,12 +716,14 @@ export class SettingsManager {
                   model: modelID,
                   input: "Reply OK.",
                   max_output_tokens: 64,
+                  ...(model.thinking === "off" ? { reasoning: { effort: "none" } } : {}),
                   store: false,
                 }
               : {
                   model: modelID,
                   messages: [{ role: "user", content: "Reply OK." }],
                   max_tokens: 64,
+                  ...(model.thinking === "off" ? { reasoning_effort: "none" } : {}),
                   stream: false,
                 },
           ),

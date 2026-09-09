@@ -11,6 +11,7 @@ export const agentNames: Record<string, string> = {
 const editable = [
   "models",
   "defaultModel",
+  "contextCompaction",
   "skillIds",
   "mcpIds",
   "interactionPolicy",

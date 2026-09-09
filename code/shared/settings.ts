@@ -22,6 +22,7 @@ export const agentSchema = z
     runtime: runtimeSourceSchema,
     models: z.array(modelRefSchema).max(200).default([]),
     defaultModel: modelRefSchema.nullable().default(null),
+    contextCompaction: z.enum(["default", "enabled"]).default("default"),
     skillIds: z.array(z.string()).max(200).default([]),
     mcpIds: z.array(z.string()).max(100).default([]),
     interactionPolicy: z
@@ -69,6 +70,7 @@ export const providerSchema = z
           .object({
             id: z.string().min(1).max(200),
             name: z.string().max(200).default(""),
+            thinking: z.enum(["default", "off"]).default("default"),
             contextWindow: z
               .number()
               .int()

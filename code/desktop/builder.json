@@ -16,6 +16,15 @@
       "from": ".desktop-stage",
       "to": ".",
       "filter": ["backend/**/*", "node/**/*", "!**/*.map"]
+    },
+    {
+      "from": "tools",
+      "to": "initialization",
+      "filter": ["Initialize-AgentBridge.ps1", "initialize.mjs", "initialize.example.json"]
+    },
+    {
+      "from": "../INSTRUCTION.md",
+      "to": "initialization/INSTRUCTION.md"
     }
   ],
   "asar": true,

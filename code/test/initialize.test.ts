@@ -16,6 +16,10 @@ test("PowerShell ZIP extraction rejects unsafe paths and preserves asset layouts
   const { stdout } = await promisify(execFile)(powershell!, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve("test/initialize-zip.ps1")]);
   assert.match(stdout, /ZIP extraction checks passed/);
 });
+test("PowerShell installs the adjacent EXE silently and stops on installer failures", { skip: !powershell }, async () => {
+  const { stdout } = await promisify(execFile)(powershell!, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve("test/initialize-install.ps1")]);
+  assert.match(stdout, /Installer checks passed/);
+});
 
 test("the shipped initialization example matches current settings and defaults other Agents to disabled", async () => {
   const env = { AGENT_OPENAI_BASE_URL: "https://example.invalid/v1", AGENT_OPENAI_API_KEY: 'secret-"\\$value', AGENT_OPENAI_MODELS: "example-model" };
@@ -113,6 +117,28 @@ test("initialization CLI uses the packaged backend, preserves network/listener s
       assert.equal(saved.skills[0]!.path, path.join(root, "data/skills/office"));
       assert.equal(await readFile(path.join(saved.skills[0]!.path, "assets/template.txt"), "utf8"), "template");
       assert.deepEqual(JSON.parse(await readFile(path.join(root, "data/system.json"), "utf8")).gateway, system.gateway);
+
+      // Automatic sidecar discovery and the helper shipped inside the installed application.
+      const bundle = path.join(directory, "deployment bundle");
+      await mkdir(bundle);
+      await copyFile(path.resolve("tools/Initialize-AgentBridge.ps1"), path.join(bundle, "Initialize-AgentBridge.ps1"));
+      await mkdir(path.join(resources, "initialization"));
+      await copyFile(path.resolve("tools/initialize.mjs"), path.join(resources, "initialization/initialize.mjs"));
+      await copyFile(filename, path.join(bundle, "settings.json"));
+      await copyFile(systemFile, path.join(bundle, "system.json"));
+      await copyFile(skills + ".zip", path.join(bundle, "skills.zip"));
+      await copyFile(runtimes + ".zip", path.join(bundle, "runtimes.zip"));
+      const automatic = path.join(directory, "automatic profile");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { stdout } = await execute(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(bundle, "Initialize-AgentBridge.ps1"),
+          "-InstallDirectory", path.dirname(exe), "-DataDirectory", automatic], options);
+        assert.match(stdout, /Using installed application/);
+        assert.match(stdout, /Initialization complete/);
+        const saved = settingsSchema.parse(JSON.parse(await readFile(path.join(automatic, "data/settings.json"), "utf8")));
+        assert.equal(saved.skills[0]!.path, path.join(automatic, "data/skills/office"));
+        assert.equal(await readFile(path.join(saved.skills[0]!.path, "assets/template.txt"), "utf8"), "template");
+        assert.deepEqual(JSON.parse(await readFile(path.join(automatic, "data/system.json"), "utf8")).gateway, system.gateway);
+      }
     }
 
     const uuid = "11111111-1111-4111-8111-111111111111";

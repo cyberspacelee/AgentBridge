@@ -56,16 +56,33 @@ jobs:
         env:
           AGENT_DESKTOP_EXECUTABLE: ${{ github.workspace }}/code/desktop-release/linux-unpacked/agentbridge
           DEBUG: pw:browser
-      - name: Install and launch the final Windows installer
+      - name: Bundle, install and initialize the final Windows installer
         if: runner.os == 'Windows'
         timeout-minutes: 5
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem desktop-release -Filter '*.exe')
           if ($installers.Count -ne 1) { throw "Expected one NSIS installer" }
-          $installDirectory = Join-Path $env:RUNNER_TEMP 'AgentBridge-installed-smoke'
-          $installer = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$installDirectory" -Wait -PassThru
-          if ($installer.ExitCode -ne 0) { throw "NSIS installation failed: $($installer.ExitCode)" }
+          $bundle = Join-Path $env:RUNNER_TEMP 'AgentBridge deployment'
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          Copy-Item $installers[0].FullName, tools/Initialize-AgentBridge.ps1, tools/initialize.mjs, tools/initialize.example.json, ../INSTRUCTION.md -Destination $bundle
+          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          Compress-Archive -Path "$bundle/*" -DestinationPath "desktop-release/AgentBridge-$version-windows-x64-deploy.zip"
+          # Test adjacent JSON/Skill discovery without publishing fixture data or credentials.
+          $skill = Join-Path $bundle 'skills/office'
+          New-Item -ItemType Directory -Path $skill -Force | Out-Null
+          Set-Content -Path "$skill/SKILL.md" -Value "---`nname: office`ndescription: Deployment smoke fixture`n---`nFixture instructions."
+          @{ schemaVersion = 1; skills = @(@{ id = 'office'; path = 'skills/office' }) } | ConvertTo-Json -Depth 10 | Set-Content "$bundle/settings.json"
+          @{ schemaVersion = 1; applying = $false; gateway = @{ host = '127.0.0.1'; port = 0 }; network = @{ mode = 'direct' } } | ConvertTo-Json -Depth 10 | Set-Content "$bundle/system.json"
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'AgentBridge installed smoke'
+          $profile = Join-Path $env:RUNNER_TEMP 'AgentBridge initialized smoke'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$bundle/Initialize-AgentBridge.ps1" -InstallDirectory $installDirectory -DataDirectory $profile
+          if ($LASTEXITCODE -ne 0) { throw "Deployment initialization failed: $LASTEXITCODE" }
+          $settings = Get-Content "$profile/data/settings.json" -Raw | ConvertFrom-Json
+          if ($settings.skills[0].path -ne (Join-Path $profile 'data/skills/office')) { throw 'Skill path was not rewritten' }
+          if (!(Test-Path "$profile/data/skills/office/SKILL.md")) { throw 'Skill was not installed' }
+          $system = Get-Content "$profile/data/system.json" -Raw | ConvertFrom-Json
+          if ($system.gateway.port -ne 0) { throw 'System configuration was not imported' }
           $env:AGENT_DESKTOP_EXECUTABLE = Join-Path $installDirectory 'agentbridge.exe'
           if (!(Test-Path $env:AGENT_DESKTOP_EXECUTABLE)) { throw "Installed executable is missing" }
           pnpm test:desktop

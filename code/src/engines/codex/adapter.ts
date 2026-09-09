@@ -22,6 +22,8 @@ import {
   agentConfiguration,
   agentDirectory,
   configuredModels,
+  configuredModel,
+  codexCompactionConfig,
   nativeEnvironment,
   nativeSessionEnvironment,
   restrictNativeSkills,
@@ -37,6 +39,7 @@ interface NativeSession {
   nativeId: string;
   generation: number;
   provider: string;
+  model?: string;
   active?: {
     run: Run;
     turnId: string;
@@ -198,6 +201,7 @@ export class CodexAdapter implements EngineAdapter {
         nativeId,
         generation: ++this.generation,
         provider: model.providerID,
+        model: model.modelID,
       };
       rpc.onMessage = (method, params, id) =>
         this.event(native, method, params, id);
@@ -230,13 +234,15 @@ export class CodexAdapter implements EngineAdapter {
     const native = this.sessions.get(session.id);
     if (!native || native.rpc.closed || native.active)
       throw engineError("Codex session cannot start execution");
-    if (run.model && native.provider !== run.model.providerID) {
+    if (run.model && (native.provider !== run.model.providerID || native.model !== run.model.modelID)) {
       await native.rpc.request("thread/resume", {
         threadId: native.nativeId,
         modelProvider: run.model.providerID,
         model: run.model.modelID,
+        config: codexCompactionConfig(this.config, run.model),
       });
       native.provider = run.model.providerID;
+      native.model = run.model.modelID;
     }
     let resolve!: (result: EngineResult) => void,
       reject!: (error: Error) => void;
@@ -271,6 +277,17 @@ export class CodexAdapter implements EngineAdapter {
         {
           threadId: native.nativeId,
           model: run.model?.modelID,
+          // A null turn effort retains the previous override; mode settings can reset it to the model default.
+          ...(run.model || native.model ? {
+            collaborationMode: {
+              mode: "default",
+              settings: {
+                model: run.model?.modelID ?? native.model,
+                reasoning_effort: configuredModel(this.config, this.id, run.model)?.thinking === "off" ? "none" : null,
+                developer_instructions: null,
+              },
+            },
+          } : {}),
           input: run.inputParts.map((p) => ({ type: "text", text: p.text })),
         },
         this.config.limits.startupTimeoutMs,
@@ -385,15 +402,22 @@ export class CodexAdapter implements EngineAdapter {
           part.content = item.text;
         else if (!part)
           message.parts.push({ id, type: "text", content: string(item.text) });
-      } else {
+      } else if ([
+        "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
+        "collabAgentToolCall", "webSearch", "imageView", "imageGeneration",
+        "sleep", "functionCallOutput",
+      ].includes(type)) {
+        const input = item.arguments ?? (typeof item.command === "string"
+          ? { command: item.command, cwd: item.cwd }
+          : item.changes ?? item);
         let part = message.parts.find((p) => p.id === id);
         if (!part) {
           part = {
             id,
             type: "tool",
             toolCallId: id,
-            tool: string(item.tool) || type,
-            input: item.arguments ?? item.command ?? item.changes ?? item,
+            tool: string(item.tool) || string(item.name) || type,
+            input,
             output: "",
             state: { status: "running", title: string(item.tool) || type },
             startedAt: new Date().toISOString(),
@@ -402,22 +426,24 @@ export class CodexAdapter implements EngineAdapter {
           message.parts.push(part);
         }
         if (part.type === "tool") {
-          part.output =
-            string(item.aggregatedOutput) ||
-            (item.result
-              ? JSON.stringify(item.result)
-              : item.changes
-                ? JSON.stringify(item.changes)
-                : part.output);
+          if (item.arguments !== undefined || item.command !== undefined || item.changes !== undefined) part.input = input;
+          const output = item.error ?? item.failure ?? item.aggregatedOutput ?? item.result ?? item.contentItems ?? item.output ??
+            (method === "item/completed" ? (part.output || (item.changes ?? item.agentsStates ?? item.results)) : undefined);
+          if (output !== undefined && output !== null)
+            part.output = typeof output === "string" ? output : JSON.stringify(output);
           if (method === "item/completed") {
-            part.state.status = ["failed", "declined"].includes(string(item.status))
+            part.state.status = ["failed", "declined"].includes(string(item.status)) ||
+              item.success === false || !!item.error || !!item.failure ||
+              (typeof item.exitCode === "number" && item.exitCode !== 0)
               ? "failed"
               : "completed";
             part.finishedAt = new Date().toISOString();
+            if (typeof item.durationMs === "number" && item.durationMs >= 0)
+              part.startedAt = new Date(Date.parse(part.finishedAt) - item.durationMs).toISOString();
           }
         }
       }
-    } else if (method === "item/commandExecution/outputDelta") {
+    } else if (method === "item/commandExecution/outputDelta" || method === "item/fileChange/outputDelta") {
       const part = message.parts.find((p) => p.id === params.itemId);
       if (part?.type === "tool") part.output += string(params.delta);
     } else if (method === "thread/tokenUsage/updated") {

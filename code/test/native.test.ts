@@ -309,7 +309,7 @@ for (const engine of ["pi", "opencode"] as const)
               baseUrl,
               apiKey: "native-test-secret",
               models: [
-                { id: "bridge-test", contextWindow: 32000, maxTokens: 4000 },
+                { id: "bridge-test", contextWindow: 32000, maxTokens: 4000, thinking: "off" },
               ],
             },
           ],
@@ -359,6 +359,9 @@ for (const engine of ["pi", "opencode"] as const)
         assert.equal(result.state, "completed", JSON.stringify(result.error));
         assert.equal(await readFile(output, "utf8"), "native tool verified\n");
         assert.equal(toolRequests, 1);
+        assert.ok(modelRequests.length > 0);
+        for (const request of modelRequests)
+          assert.equal(JSON.parse(request).reasoning_effort, "none");
         assert.ok(
           modelRequests.some((request) =>
             request.includes("bridge-selected-marker"),

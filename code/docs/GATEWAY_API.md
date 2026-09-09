@@ -22,6 +22,12 @@ Desktop 从 `settings.json` 的 `defaultAgent` 读取默认引擎，不读取启
 
 交互策略的唯一优先级是创建会话的 `interactionPolicy` > 所选 Agent 的已应用配置。初值为 `{permission:"auto",question:"auto"}`；auto 权限自动批准，auto 问题按首个选项或配置的默认文本回答。manual 会等待 HTTP 回复。所有入口遵循同一规则，不按评测/页面设置不同默认值。
 
+`PUT /api/settings` 的 `settings.agents[].contextCompaction` 支持 `"default"`（缺省，跟随原生 Agent）与 `"enabled"`（显式启用自动压缩）。页面入口为 Agent 的“模型 → 上下文压缩”。Pi 写入 `compaction.enabled=true`，OpenCode 写入 `compaction.auto=true`，Grok 写入 `session.auto_compact_threshold_percent=85`，Codex 按默认模型配置的上下文长度设置 85% token 阈值。默认模式不写这些覆盖项，并不表示关闭压缩。
+
+`settings.providers[].models[].thinking` 支持 `"default"`（缺省）与 `"off"`。页面入口为“共享资源 → 模型连接 → 模型思考”。`off` 请求模型关闭推理，需要供应商及该模型支持；不支持时原生错误照常返回，不降级成低强度思考或仅隐藏内容。保存后在引用此模型的 Agent 中应用配置。Pi 使用原生 `off` 和 `none` 映射，OpenCode 使用模型选项 `reasoningEffort:"none"`，Grok 使用模型的默认 `none` effort，Codex 在每轮设置 effort，并在切换回默认时清除此前覆盖。
+
+原生参数依据：[Pi 设置](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md)、[OpenCode 压缩配置](https://opencode.ai/docs/config/#compaction)、[Grok 配置参考](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/26-config-reference.md)、[Codex 配置参考](https://developers.openai.com/codex/config-reference)。Codex 工具事件按本机 app-server schema 与 [App Server 文档](https://developers.openai.com/codex/app-server) 转换：压缩和计划不是工具调用；命令、MCP、动态工具、文件修改的输入、输出和失败状态分别保留。
+
 `title` 可选，未填写先显示 Untitled task，接收第一条消息时自动更新为该消息的前 80 个字符（合并空白）；显式标题保持用户输入。消息请求的 `agent` 是助手角色，目前支持省略或 `"assistant"`，使用所选引擎的默认助手，不是引擎 ID。标准评测请求传入 `model:{providerID,modelID}`；所有提交入口还允许省略 model 并继承本会话模型或 Agent 默认模型。显式 model 必须属于所选 Agent，不会静默换成其他模型。
 
 配置、运行时清单、事件的 `schemaVersion` 和 SQLite 数据库版本均为 **1**。不兼容历史配置、历史请求字段或旧数据库，不提供迁移；使用全新的业务数据目录。当前契约定义在 `shared/contracts.ts`，引擎适配器是唯一的原生协议转换边界。

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import {
   Field,
   FieldError,
+  FieldDescription,
   FieldGroup,
   FieldLabel,
   FieldSet,
@@ -50,7 +51,13 @@ export function EntryEditor({
   )
   const [models, setModels] = useState(
     provider?.models ?? [
-      { id: "", name: "", contextWindow: 128000, maxTokens: 16384 },
+      {
+        id: "",
+        name: "",
+        thinking: "default" as const,
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
     ]
   )
   const [path, setPath] = useState(skill?.path ?? "")
@@ -261,6 +268,7 @@ export function EntryEditor({
                       {
                         id: "",
                         name: "",
+                        thinking: "default",
                         contextWindow: 128000,
                         maxTokens: 16384,
                       },
@@ -298,6 +306,32 @@ export function EntryEditor({
                       }
                     />
                     {fieldError(`models.${index}.id`)}
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`model-${index}-thinking`}>
+                      模型思考
+                    </FieldLabel>
+                    <Choice
+                      id={`model-${index}-thinking`}
+                      label={`模型 ${index + 1} 思考`}
+                      value={model.thinking}
+                      onChange={(value) =>
+                        setModels(
+                          models.map((item, i) =>
+                            i === index
+                              ? {
+                                  ...item,
+                                  thinking: value as typeof item.thinking,
+                                }
+                              : item
+                          )
+                        )
+                      }
+                      options={[
+                        { value: "default", label: "默认" },
+                        { value: "off", label: "关闭思考" },
+                      ]}
+                    />
                   </Field>
                   {(
                     [
@@ -343,6 +377,10 @@ export function EntryEditor({
                   </IconButton>
                 </div>
               ))}
+              <FieldDescription>
+                关闭思考会请求模型禁用推理，需要模型服务支持；不会仅隐藏思考内容。保存后需在使用此模型的
+                Agent 中应用配置。
+              </FieldDescription>
             </>
           )}
           {kind === "skills" && (

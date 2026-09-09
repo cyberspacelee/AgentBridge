@@ -49,9 +49,13 @@ export function ToolCall({ part }: { part: ToolPart }) {
     part.input && typeof part.input === "object"
       ? (part.input as Record<string, unknown>)
       : {}
-  const target = [input.filePath, input.path, input.file, input.command].find(
-    (v) => typeof v === "string"
-  ) as string | undefined
+  const target = [
+    input.filePath,
+    input.path,
+    input.file,
+    input.command,
+    typeof part.input === "string" ? part.input : undefined,
+  ].find((v) => typeof v === "string") as string | undefined
   const ToolIcon =
     (
       {

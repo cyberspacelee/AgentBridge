@@ -7,7 +7,7 @@
       "baseUrl": "${AGENT_OPENAI_BASE_URL}",
       "apiKey": "${AGENT_OPENAI_API_KEY}",
       "api": "openai-responses",
-      "models": [{ "id": "${AGENT_OPENAI_MODELS}" }]
+      "models": [{ "id": "${AGENT_OPENAI_MODELS}", "thinking": "default" }]
     }
   ],
   "skills": [],
@@ -17,6 +17,7 @@
       "id": "codex",
       "enabled": true,
       "runtime": { "mode": "managed" },
+      "contextCompaction": "enabled",
       "models": [{ "providerID": "compatible", "modelID": "${AGENT_OPENAI_MODELS}" }],
       "defaultModel": { "providerID": "compatible", "modelID": "${AGENT_OPENAI_MODELS}" },
       "skillIds": [],

@@ -1255,6 +1255,32 @@ function AgentEditor({
           </section>
         </TabsContent>
         <TabsContent value="models">
+          <Field className="mb-6 max-w-xl">
+            <FieldLabel htmlFor="context-compaction">上下文压缩</FieldLabel>
+            <Choice
+              id="context-compaction"
+              label="上下文压缩"
+              value={draft.contextCompaction}
+              disabled={busy}
+              onChange={(value) =>
+                setDraft({
+                  ...draft,
+                  contextCompaction:
+                    value as AgentConfiguration["contextCompaction"],
+                })
+              }
+              options={[
+                { value: "default", label: "默认（跟随 Agent）" },
+                { value: "enabled", label: "启用自动压缩" },
+              ]}
+            />
+            <p className="text-sm text-muted-foreground">
+              默认使用 Agent 原生策略；启用后在上下文接近上限时自动压缩。
+              {agent.id === "grok" || agent.id === "codex"
+                ? "启用阈值为所配置上下文长度的 85%。"
+                : ""}
+            </p>
+          </Field>
           <section className="settings-section">
             <div className="settings-section-heading">
               <h2>可用模型{agent.id === "codex" ? " · Responses" : ""}</h2>

@@ -104,6 +104,8 @@ try {
   assert.ok(runtime.runtimes.every((item) => item.managed && item.installedVersion === null));
   if (executable) {
     const resources = await realpath(path.resolve(path.dirname(executable), process.platform === "darwin" ? "../Resources" : "resources"));
+    for (const name of ["Initialize-AgentBridge.ps1", "initialize.mjs", "initialize.example.json", "INSTRUCTION.md"])
+      assert.ok((await readFile(path.join(resources, "initialization", name))).length, `Packaged initialization file is missing: ${name}`);
     const node = path.join(resources, process.platform === "win32" ? "node/node.exe" : "node/bin/node");
     if (process.platform === "linux") {
       const parentPid = application.process().pid;
