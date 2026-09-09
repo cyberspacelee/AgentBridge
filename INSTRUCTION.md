@@ -113,6 +113,8 @@ Windows ZIP 解压和清理使用扩展长度路径，支持临时目录、版�
 
 相同文件可重复执行：已登记 runtime 保留，同内容 Skill 复用；已有不同业务配置或同 ID 的不同 Skill 内容会拒绝覆盖，改用新数据目录或在应用中管理。显式提供 `-SystemPath` 或自动发现同目录 `system.json` 时会应用所提供的系统设置。错误返回非零退出码，保留已保存配置和已完成安装，且不执行 `-Start`；修复后可以重试。原生模型真实请求、额外 MCP 依赖及外部办公服务仍需在目标环境验证。
 
+离线 runtime 在未登记的 `versions/<UUID>/` 中复制并执行版本检查，验证完成后才写入清单；检查后不再移动可执行文件目录，避免 Windows 的文件占用导致 `rename copy-... -> versions/...` 报 `EPERM`。旧部署包遇到该错误时，替换脚本旁的 `initialize.mjs` 后用原命令重试即可，已成功导入的 Agent 会跳过，无需删除数据目录。
+
 临时校验网关仅监听 `127.0.0.1` 的自动分配端口，不覆盖导入的监听地址和端口，也不采用当前终端的 `AGENT_HOST`、`AGENT_PORT`、`AGENT_ENGINE`。正常启动 Desktop 仍遵循下文环境变量优先级。实例运行时由数据目录锁拒绝初始化；目标实例已保存的加密代理密码无法由独立脚本解密时，请用新数据目录，或通过桌面页面操作。
 
 若指定 `-DataDirectory 'D:\AgentBridge-profile'`，业务数据写入 `D:\AgentBridge-profile\data`；`-Start` 会给此次启动传入同一根目录。以后从其他终端或快捷方式打开时，也需设置相同的 `AGENT_DESKTOP_DATA_DIR`；脚本不会修改系统级环境变量。

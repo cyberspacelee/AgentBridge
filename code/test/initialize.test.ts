@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, realpath, symlink, writeFile, rm } from "node:fs/promises";
+import fs, { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, realpath, symlink, writeFile, rm } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
@@ -184,6 +185,19 @@ test("initialization CLI starts through linked paths, preserves network/listener
       const { agents } = await (await fetch(url + "/api/agents")).json();
       assert.equal(agents.find((agent: { id: string }) => agent.id === "codex").health.status, "ready");
     } finally { await restarted.stop(); }
+    if (process.platform === "win32") {
+      // Exercise the native executable that triggered EPERM after --version on Windows.
+      const opencodeVersion = path.join(runtimes, "opencode/versions", uuid);
+      await mkdir(opencodeVersion, { recursive: true });
+      await copyFile(path.resolve("node_modules/opencode-ai/bin/opencode.exe"), path.join(opencodeVersion, "opencode.exe"));
+      const { version } = JSON.parse(await readFile(path.resolve("node_modules/opencode-ai/package.json"), "utf8"));
+      await writeFile(path.join(runtimes, "opencode/manifest.json"), JSON.stringify({ schemaVersion: 1, current: { version, directory: uuid, command: "opencode.exe", size: 100, source: "fixture", integrity: "fixture" } }));
+      const { stdout } = await execute(process.execPath, offlineArgs, options);
+      assert.match(stdout, /opencode: copied runtime/);
+      const installed = JSON.parse(await readFile(path.join(offline, "runtimes/opencode/manifest.json"), "utf8"));
+      assert.equal(installed.current.version, version);
+      assert.match((await execute(process.execPath, offlineArgs, options)).stdout, /opencode: target runtime already registered/);
+    }
     await writeFile(path.join(skills, "office/assets/template.txt"), "changed");
     await assert.rejects(execute(process.execPath, offlineArgs, options), /existing Skill files differ/);
     assert.equal(await readFile(path.join(offline, "skills/office/assets/template.txt"), "utf8"), "template");
@@ -289,7 +303,7 @@ test("initialization expands secrets safely, resolves skill paths, rejects confl
   }
 });
 
-test("local runtimes copy their active version and manifest without replacing existing installations", async () => {
+test("local runtimes retain their checked path under Windows locks and publish only verified versions", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-copy-runtime-"));
   const source = path.join(directory, "snapshot/runtimes");
   const target = path.join(directory, "target");
@@ -300,6 +314,14 @@ test("local runtimes copy their active version and manifest without replacing ex
   const manifest = { schemaVersion: 1, current: { version: "1.2.3", directory: uuid, command, size: 100, source: "fixture", integrity: "fixture" } };
   const agents = [{ id: "codex", runtime: { mode: "managed" } }];
   const quiet = () => {};
+  const checkedDirectories = new Set<string>();
+  const rename = fs.rename;
+  t.mock.method(fs, "rename", async (...args: Parameters<typeof rename>) => {
+    if (checkedDirectories.has(String(args[0]))) throw Object.assign(new Error("EPERM: checked executable directory is still locked"), { code: "EPERM" });
+    return rename(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   try {
     await mkdir(path.join(version, "node_modules/dependency"), { recursive: true });
     await writeFile(path.join(version, command), "fixture executable");
@@ -309,6 +331,8 @@ test("local runtimes copy their active version and manifest without replacing ex
     let checks = 0;
     const verify = async (file: string, expected: string) => {
       checks++;
+      checkedDirectories.add(path.dirname(file));
+      await assert.rejects(readFile(path.join(target, "runtimes/codex/manifest.json")), { code: "ENOENT" });
       assert.equal(await readFile(file, "utf8"), "fixture executable");
       assert.equal(expected, "1.2.3");
     };
@@ -317,6 +341,7 @@ test("local runtimes copy their active version and manifest without replacing ex
     const copied = JSON.parse(await readFile(destinationFile, "utf8"));
     assert.notEqual(copied.current.directory, uuid);
     const destination = path.join(target, "runtimes/codex/versions", copied.current.directory);
+    assert.ok(checkedDirectories.has(destination), "Verified executables must keep the same directory after activation");
     assert.equal(await readFile(path.join(destination, "node_modules/dependency/index.js"), "utf8"), "fixture dependency");
     assert.deepEqual(await readdir(path.dirname(destination)), [copied.current.directory]);
     assert.equal(await readFile(sourceFile, "utf8"), JSON.stringify(manifest));

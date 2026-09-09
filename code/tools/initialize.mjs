@@ -158,18 +158,18 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
     if (!inside(sourceRoot, version)) throw new Error(`${id}: version directory escapes the runtime source`);
     await checkTree(version);
     const uuid = randomUUID();
-    const staging = path.join(target, `copy-${uuid}`);
     const destination = path.join(target, "versions", uuid);
     let committed = false;
     try {
       await mkdir(path.dirname(destination), { recursive: true });
-      await cp(version, staging, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true });
-      const command = path.join(staging, current.command);
+      // Keep the executable at its final path before probing: Windows may retain file locks afterward.
+      // The new UUID is not active until the verified manifest is committed below.
+      await cp(version, destination, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true });
+      const command = path.join(destination, current.command);
       if (!(await lstat(await realpath(command))).isFile()) throw new Error(`${id}: runtime executable is missing`);
       log(`${id}: checking copied runtime ${current.version}...`);
       await verify(command, current.version);
       if (await readFile(sourceFile, "utf8") !== raw) throw new Error(`${id}: source changed during copying; retry with the source app closed`);
-      await rename(staging, destination);
       const temporary = path.join(target, `manifest-${uuid}.tmp`);
       try {
         await writeFile(temporary, JSON.stringify({ schemaVersion: 1, current: { ...current, directory: uuid } }), { flag: "wx", mode: 0o600 });
@@ -178,8 +178,7 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
       } finally { await rm(temporary, { force: true }); }
       log(`${id}: copied runtime ${current.version}`);
     } finally {
-      await rm(staging, { recursive: true, force: true });
-      if (!committed) await rm(destination, { recursive: true, force: true });
+      if (!committed) await rm(destination, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }
 }
