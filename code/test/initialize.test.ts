@@ -1,13 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, symlink, writeFile, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, symlink, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { findNpm } from "../host/supervisor.mjs";
+import { findNpm, Supervisor } from "../host/supervisor.mjs";
+import { defaultNetworkSettings, validateNetworkSettings } from "../host/network.mjs";
+import { gatewaySchema, defaultGateway } from "../host/gateway.mjs";
 import { settingsSchema, agentIds } from "../shared/settings.js";
-import { readProfile, assertCompatible, copyRuntimes, initializeRuntimes } from "../tools/initialize.mjs";
+import { readProfile, readSystem, assertCompatible, copySkills, copyRuntimes, initializeRuntimes } from "../tools/initialize.mjs";
+
+const powershell = process.env.AGENT_TEST_POWERSHELL ?? (process.platform === "win32" ? "powershell.exe" : undefined);
+test("PowerShell ZIP extraction rejects unsafe paths and preserves asset layouts", { skip: !powershell }, async () => {
+  const { stdout } = await promisify(execFile)(powershell!, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve("test/initialize-zip.ps1")]);
+  assert.match(stdout, /ZIP extraction checks passed/);
+});
 
 test("the shipped initialization example matches current settings and defaults other Agents to disabled", async () => {
   const env = { AGENT_OPENAI_BASE_URL: "https://example.invalid/v1", AGENT_OPENAI_API_KEY: 'secret-"\\$value', AGENT_OPENAI_MODELS: "example-model" };
@@ -28,7 +36,8 @@ test("the shipped initialization example matches current settings and defaults o
 
 test("initialization CLI uses the packaged backend, preserves network/listener settings and releases its lock", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge initialize "));
-  const backend = path.join(directory, "installed app/backend");
+  const resources = path.join(directory, "installed app/resources");
+  const backend = path.join(resources, "backend");
   const data = path.join(directory, "user data/data");
   const filename = path.join(directory, "profile.json");
   const execute = promisify(execFile);
@@ -67,6 +76,107 @@ test("initialization CLI uses the packaged backend, preserves network/listener s
       return true;
     });
     assert.equal(await readFile(path.join(data, "settings.json"), "utf8"), original);
+
+    const assets = path.join(directory, "assets");
+    const runtimes = path.join(assets, "runtimes");
+    const skills = path.join(assets, "skills");
+    await mkdir(path.join(skills, "office/assets"), { recursive: true });
+    await writeFile(path.join(skills, "office/SKILL.md"), "---\nname: office\ndescription: Fixture skill\n---\nOffice instructions.");
+    await writeFile(path.join(skills, "office/assets/template.txt"), "template");
+    for (const id of agentIds) {
+      await mkdir(path.join(runtimes, id), { recursive: true });
+      await writeFile(path.join(runtimes, id, "manifest.json"), JSON.stringify({ schemaVersion: 1, current: null }));
+    }
+    const systemFile = path.join(assets, "system.json");
+    const network = { ...defaultNetworkSettings, mode: "direct", npmRegistry: "https://registry.npmmirror.com/" };
+    const system = { schemaVersion: 1, gateway: { host: "localhost", port: 0 }, network, appliedNetwork: defaultNetworkSettings, applying: false, error: null };
+    await writeFile(systemFile, "\uFEFF" + JSON.stringify(system));
+    const profile = settingsSchema.parse({ defaultAgent: "codex", skills: [{ id: "office", path: "C:\\source machine\\skills\\office" }] });
+    await writeFile(filename, JSON.stringify(profile));
+
+    // Exercise the complete PowerShell wrapper, including both ZIP inputs and space-containing paths.
+    if (powershell) {
+      const exe = path.join(directory, "installed app/agentbridge.exe");
+      await writeFile(exe, "fixture");
+      await mkdir(path.join(resources, "node/node_modules"), { recursive: true });
+      const node = path.join(resources, "node/node.exe");
+      await copyFile(process.execPath, node); await chmod(node, 0o755);
+      await symlink(path.dirname(path.dirname(npm)), path.join(resources, "node/node_modules/npm"), process.platform === "win32" ? "junction" : "dir");
+      await execute(powershell, ["-NoProfile", "-Command", "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:BRIDGE_TEST_RUNTIMES, $env:BRIDGE_TEST_RUNTIMES + '.zip'); [System.IO.Compression.ZipFile]::CreateFromDirectory($env:BRIDGE_TEST_SKILLS, $env:BRIDGE_TEST_SKILLS + '.zip')"], {
+        env: { ...process.env, BRIDGE_TEST_RUNTIMES: runtimes, BRIDGE_TEST_SKILLS: skills },
+      });
+      const root = path.join(directory, "PowerShell data");
+      const { stdout } = await execute(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve("tools/Initialize-AgentBridge.ps1"), "-ExePath", exe,
+        "-SettingsPath", filename, "-SystemPath", systemFile, "-RuntimesPath", runtimes + ".zip", "-SkillsPath", skills + ".zip", "-DataDirectory", root], options);
+      assert.match(stdout, /Initialization complete/);
+      const saved = settingsSchema.parse(JSON.parse(await readFile(path.join(root, "data/settings.json"), "utf8")));
+      assert.equal(saved.skills[0]!.path, path.join(root, "data/skills/office"));
+      assert.equal(await readFile(path.join(saved.skills[0]!.path, "assets/template.txt"), "utf8"), "template");
+      assert.deepEqual(JSON.parse(await readFile(path.join(root, "data/system.json"), "utf8")).gateway, system.gateway);
+    }
+
+    const uuid = "11111111-1111-4111-8111-111111111111";
+    const version = path.join(runtimes, "codex/versions", uuid);
+    await mkdir(version, { recursive: true });
+    const program = `if (process.argv.includes('--version')) { console.log('1.2.3'); } else {
+      require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+        const {id} = JSON.parse(line); if (id !== undefined) console.log(JSON.stringify({id, result:{userAgent:'1.2.3'}}));
+      });
+    }`;
+    const command = process.platform === "win32" ? "codex.cmd" : "codex";
+    await writeFile(path.join(version, "cli.cjs"), program);
+    await writeFile(path.join(version, command), process.platform === "win32" ? '@echo off\r\n"%AGENT_RUNTIME_NODE%" "%~dp0cli.cjs" %*\r\n' : "#!/usr/bin/env node\n" + program);
+    await chmod(path.join(version, command), 0o755);
+    await writeFile(path.join(runtimes, "codex/manifest.json"), JSON.stringify({ schemaVersion: 1, current: { version: "1.2.3", directory: uuid, command, size: 100, source: "fixture", integrity: "fixture" } }));
+    profile.providers.push({ id: "local", baseUrl: "https://example.invalid/v1", apiKey: "fixture-key", api: "openai-responses", enabled: true, models: [{ id: "example", name: "", contextWindow: 128000, maxTokens: 16384 }] });
+    Object.assign(profile.agents.find((agent) => agent.id === "codex")!, { enabled: true, models: [{ providerID: "local", modelID: "example" }], defaultModel: { providerID: "local", modelID: "example" }, skillIds: ["office"] });
+    await writeFile(filename, JSON.stringify(profile));
+    const offline = path.join(directory, "offline data");
+    const offlineArgs = [args[0]!, backend, offline, filename, npm, "--runtimes", runtimes, "--skills", skills, "--system", systemFile];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { stdout } = await execute(process.execPath, offlineArgs, options);
+      assert.match(stdout, /Initialization complete/);
+      assert.ok(!stdout.includes("installing runtime"));
+      const saved = settingsSchema.parse(JSON.parse(await readFile(path.join(offline, "settings.json"), "utf8")));
+      assert.equal(saved.skills[0]!.path, path.join(offline, "skills/office"));
+      assert.deepEqual(saved.agents.filter((agent) => agent.enabled).map((agent) => agent.id), ["codex"]);
+      const imported = JSON.parse(await readFile(path.join(offline, "system.json"), "utf8"));
+      assert.deepEqual(imported.gateway, system.gateway);
+      assert.deepEqual(imported.network, imported.appliedNetwork);
+      assert.equal(imported.network.npmRegistry, network.npmRegistry);
+    }
+    const restarted = new Supervisor({ directory: offline, args: [path.join(backend, "dist/src/main.js")], env: { AGENT_HOST: undefined, AGENT_PORT: undefined, AGENT_ENGINE: undefined, AGENT_RUNTIME_NPM: npm } });
+    try {
+      await restarted.initialize();
+      const url = await restarted.start();
+      const { agents } = await (await fetch(url + "/api/agents")).json();
+      assert.equal(agents.find((agent: { id: string }) => agent.id === "codex").health.status, "ready");
+    } finally { await restarted.stop(); }
+    await writeFile(path.join(skills, "office/assets/template.txt"), "changed");
+    await assert.rejects(execute(process.execPath, offlineArgs, options), /existing Skill files differ/);
+    assert.equal(await readFile(path.join(offline, "skills/office/assets/template.txt"), "utf8"), "template");
+    assert.equal(JSON.parse(await readFile(filename, "utf8")).skills[0].path, profile.skills[0]!.path);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("deployment system files reject old, interrupted and machine-encrypted settings before import", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-system-import-"));
+  const filename = path.join(directory, "system.json");
+  try {
+    for (const input of [
+      { schemaVersion: 3, network: defaultNetworkSettings, applying: false },
+      { schemaVersion: 1, network: defaultNetworkSettings, applying: true },
+      { schemaVersion: 1, network: { ...defaultNetworkSettings, encryptedPassword: "machine-bound" }, applying: false },
+      { schemaVersion: 1, network: { ...defaultNetworkSettings, npmRegistry: "http://example.invalid" }, applying: false },
+    ]) {
+      await writeFile(filename, JSON.stringify(input));
+      await assert.rejects(readSystem(filename, gatewaySchema, defaultGateway, validateNetworkSettings));
+    }
+    await mkdir(path.join(directory, "skills/office"), { recursive: true });
+    await writeFile(path.join(directory, "skills/office/SKILL.md"), "skill");
+    await symlink(directory, path.join(directory, "skills/office/escape"), process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(copySkills(path.join(directory, "skills"), path.join(directory, "data"), [{ id: "office", path: "office" }]), /outside its version directory/);
+    await assert.rejects(readFile(path.join(directory, "data/skills/office/SKILL.md")), { code: "ENOENT" });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

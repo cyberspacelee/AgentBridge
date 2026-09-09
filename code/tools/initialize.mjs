@@ -1,15 +1,21 @@
 import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { parseArgs } from "node:util";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
-export async function readProfile(filename, settingsSchema, agentIds) {
-  const input = JSON.parse((await readFile(filename, "utf8")).replace(/^\uFEFF/, ""), (_key, value) =>
+async function readInput(filename) {
+  return JSON.parse((await readFile(filename, "utf8")).replace(/^\uFEFF/, ""), (_key, value) =>
     typeof value === "string" ? value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => {
       if (!process.env[name]) throw new Error(`Missing environment variable: ${name}`);
       return process.env[name];
     }) : value);
+}
+
+export async function readProfile(filename, settingsSchema, agentIds) {
+  const input = await readInput(filename);
   const selected = input.agents ?? [];
   if (!Array.isArray(selected) || selected.some((agent) => !agentIds.includes(agent?.id)) || new Set(selected.map((agent) => agent.id)).size !== selected.length)
     throw new Error("agents must contain unique supported Agent IDs");
@@ -19,6 +25,91 @@ export async function readProfile(filename, settingsSchema, agentIds) {
   });
   for (const skill of settings.skills) skill.path = path.resolve(path.dirname(filename), skill.path);
   return { settings, selected: settings.agents.filter((agent) => selected.some((item) => item.id === agent.id)) };
+}
+
+const optionalStat = (file) => lstat(file).catch((error) => { if (error.code !== "ENOENT") throw error; return null; });
+const inside = (root, target) => {
+  const relative = path.relative(root, target);
+  return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+};
+
+// Preserve relative links inside an asset; reject dependencies on the source machine.
+async function checkTree(root, folder = root) {
+  for (const entry of await readdir(folder, { withFileTypes: true })) {
+    const file = path.join(folder, entry.name);
+    if (entry.isSymbolicLink()) {
+      if (path.isAbsolute(await readlink(file)) || !inside(root, await realpath(file)))
+        throw new Error("Asset contains a link outside its version directory");
+    } else if (entry.isDirectory()) await checkTree(root, file);
+    else if (!entry.isFile()) throw new Error("Asset contains an unsupported filesystem entry");
+  }
+}
+
+export async function copySkills(source, directory, skills) {
+  const root = await realpath(source);
+  const targetRoot = path.join(directory, "skills");
+  const digest = async (folder) => {
+    const hash = createHash("sha256");
+    const visit = async (folder) => {
+      for (const entry of (await readdir(folder, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+        const file = path.join(folder, entry.name);
+        hash.update(JSON.stringify([entry.name, entry.isDirectory(), entry.isSymbolicLink()]));
+        if (entry.isDirectory()) await visit(file);
+        else if (entry.isSymbolicLink()) hash.update(JSON.stringify(await readlink(file)));
+        else {
+          const content = createHash("sha256");
+          for await (const chunk of createReadStream(file)) content.update(chunk);
+          hash.update(content.digest());
+        }
+      }
+      hash.update("end-directory");
+    };
+    await visit(folder);
+    return hash.digest("hex");
+  };
+  const plans = [];
+  for (const skill of skills) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(skill.id)) throw new Error("Invalid Skill ID");
+    const candidates = [...new Set([skill.id, path.win32.basename(skill.path)])];
+    const matches = [];
+    for (const name of candidates) {
+      if (!name || [".", ".."].includes(name)) continue;
+      const folder = path.join(root, name);
+      if ((await optionalStat(path.join(folder, "SKILL.md")))?.isFile()) matches.push(folder);
+    }
+    if (matches.length !== 1) throw new Error(`${skill.id}: expected one Skill directory named by ID or original folder name, containing SKILL.md`);
+    const from = await realpath(matches[0]);
+    if (!inside(root, from)) throw new Error("Skill directory escapes its source");
+    await checkTree(from);
+    const to = path.join(targetRoot, skill.id);
+    const existing = await optionalStat(to);
+    if (existing) {
+      if (!existing.isDirectory() || existing.isSymbolicLink()) throw new Error(`${skill.id}: existing Skill path is not a regular directory`);
+      await checkTree(to);
+      if (await digest(from) !== await digest(to)) throw new Error(`${skill.id}: existing Skill files differ; use a new data directory`);
+    } else plans.push({ from, to });
+  }
+  await mkdir(targetRoot, { recursive: true, mode: 0o700 });
+  if (!inside(await realpath(directory), await realpath(targetRoot))) throw new Error("Skill destination escapes the data directory");
+  for (const { from, to } of plans) {
+    const staging = path.join(targetRoot, `.copy-${randomUUID()}`);
+    try {
+      await cp(from, staging, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true });
+      await checkTree(staging);
+      await rename(staging, to);
+    } finally { await rm(staging, { recursive: true, force: true }); }
+  }
+}
+
+export async function readSystem(filename, gatewaySchema, defaultGateway, validateNetworkSettings) {
+  const input = await readInput(filename);
+  if (input?.schemaVersion !== 1 || !input.network || input.applying !== false)
+    throw new Error("Expected a current, idle system.json with schemaVersion 1");
+  if (input.network.encryptedPassword || input.appliedNetwork?.encryptedPassword)
+    throw new Error("System proxy password is encrypted for the source machine; provide network.proxyPassword in the deployment file instead");
+  const gateway = gatewaySchema.parse(input.gateway ?? defaultGateway);
+  const network = validateNetworkSettings(input.network);
+  return { gateway, network };
 }
 
 export function assertCompatible(previous, next) {
@@ -39,22 +130,6 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
   });
   if (await readOptional(path.join(sourceRoot, "../.host.lock")))
     throw new Error("Exit the source AgentBridge instance before copying runtimes");
-  const inside = (root, target) => {
-    const relative = path.relative(root, target);
-    return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
-  };
-  // Preserve npm's relative .bin links, but reject links back to the source machine.
-  const checkTree = async (root, folder = root) => {
-    for (const entry of await readdir(folder, { withFileTypes: true })) {
-      const file = path.join(folder, entry.name);
-      if (entry.isSymbolicLink()) {
-        const link = await readlink(file);
-        if (path.isAbsolute(link) || !inside(root, await realpath(file)))
-          throw new Error("Runtime contains a link outside its version directory");
-      } else if (entry.isDirectory()) await checkTree(root, file);
-      else if (!entry.isFile()) throw new Error("Runtime contains an unsupported filesystem entry");
-    }
-  };
   for (const agent of agents.filter((item) => item.runtime.mode === "managed")) {
     const id = agent.id;
     if (!["pi", "opencode", "codex", "grok"].includes(id)) throw new Error("Unsupported runtime ID");
@@ -152,14 +227,38 @@ export async function initializeRuntimes(request, agents, log = console.log, loc
 }
 
 async function main() {
-  const [backendRoot, directory, filename, npm, runtimesPath] = process.argv.slice(2);
+  const { positionals, values } = parseArgs({ allowPositionals: true, options: { runtimes: { type: "string" }, skills: { type: "string" }, system: { type: "string" } } });
+  const [backendRoot, directory, filename, npm, legacyRuntimesPath] = positionals;
+  const runtimesPath = values.runtimes ?? legacyRuntimesPath;
   if (!backendRoot || !directory || !filename || !npm) throw new Error("Run Initialize-AgentBridge.ps1 with -ExePath and -ConfigPath");
   const moduleAt = (relative) => import(pathToFileURL(path.join(backendRoot, relative)).href);
   const { settingsSchema, agentIds } = await moduleAt("dist/shared/settings.js");
-  const { settings, selected } = await readProfile(path.resolve(filename), settingsSchema, agentIds);
+  const { settings, selected: requested } = await readProfile(path.resolve(filename), settingsSchema, agentIds);
+  const skills = structuredClone(settings.skills);
+  if (values.skills) for (const skill of settings.skills) skill.path = path.join(directory, "skills", skill.id);
+  const selected = [];
+  const hasRuntime = async (root, id) => {
+    const manifest = await readInput(path.join(root, id, "manifest.json")).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+      return null;
+    });
+    if (manifest && manifest.schemaVersion !== 1) throw new Error(`${id}: unsupported runtime manifest`);
+    return !!manifest?.current;
+  };
+  for (const agent of requested) {
+    // A saved settings.json includes all four Agents, even those never installed.
+    if (!runtimesPath || agent.enabled || (agent.runtime.mode === "managed" &&
+        (await hasRuntime(runtimesPath, agent.id) || await hasRuntime(path.join(directory, "runtimes"), agent.id)))) selected.push(agent);
+  }
   const { Supervisor } = await moduleAt("dist/host/supervisor.mjs");
   const { readConfig } = await moduleAt("dist/src/config.js");
   const { SettingsManager, readSettings } = await moduleAt("dist/src/settings.js");
+  let system;
+  if (values.system) {
+    const { gatewaySchema, defaultGateway } = await moduleAt("dist/host/gateway.mjs");
+    const { validateNetworkSettings } = await moduleAt("dist/host/network.mjs");
+    system = await readSystem(values.system, gatewaySchema, defaultGateway, validateNetworkSettings);
+  }
   const supervisor = new Supervisor({
     node: process.execPath, args: [path.join(backendRoot, "dist/src/main.js")], directory,
     env: { AGENT_HOST: undefined, AGENT_PORT: undefined, AGENT_ENGINE: undefined, AGENT_RUNTIME_NPM: npm, AGENT_MANAGED_RUNTIMES: "true" },
@@ -174,11 +273,19 @@ async function main() {
     const config = readConfig([], { AGENT_DATA_DIR: directory, AGENT_MANAGED_RUNTIMES: "true" });
     const previous = readSettings(config);
     assertCompatible(previous, settings);
+    if (values.skills) await copySkills(values.skills, directory, skills);
     const manager = new SettingsManager(config);
     // Validate skill directories and save atomically before any CLI download or execution.
     manager.save({ revision: manager.view().revision, settings: {
-      ...settings, agents: settings.agents.map((agent) => ({ ...agent, enabled: false, runtime: previous.agents.find((item) => item.id === agent.id).runtime })),
+      ...settings, agents: settings.agents.map((agent) => ({ ...agent, enabled: false,
+        runtime: selected.includes(agent) ? previous.agents.find((item) => item.id === agent.id).runtime : agent.runtime })),
     } });
+    if (system) {
+      supervisor.gateway = supervisor.appliedGateway = system.gateway;
+      supervisor.settings = supervisor.applied = system.network;
+      supervisor.error = null;
+      await supervisor.persist(false);
+    }
     if (runtimesPath) {
       const { startProcess, stopProcess } = await moduleAt("dist/src/engines/process.js");
       const { within } = await moduleAt("dist/src/async.js");
