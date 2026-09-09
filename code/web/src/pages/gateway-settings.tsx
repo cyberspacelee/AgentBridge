@@ -77,7 +77,7 @@ function GatewayForm({ initial }: { initial: GatewayView }) {
           <div className="flex min-w-0 flex-col gap-2 text-sm">
             <p>当前访问地址</p>
             {initial.urls.map((url) => <div key={url} className="flex min-w-0 items-center gap-2"><code className="break-all">{url}</code><CopyText text={url} label="复制网关地址" /></div>)}
-            <a className="text-primary underline" href="/api/docs" target="_blank" rel="noreferrer">网关接口文档与评测示例</a>
+            <a className="text-primary underline" href="/api/docs" target="_blank" rel="noreferrer">API 文档（OpenAPI）</a>
           </div>
           {view.restartRequired && <p role="status" className="text-sm text-muted-foreground">网关设置已保存，重启后生效。重启会一并应用已保存的网络设置。</p>}
           {restarting && <p role="status" className="text-sm">

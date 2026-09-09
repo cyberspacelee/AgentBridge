@@ -54,6 +54,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
     await mkdir(resources, { recursive: true });
     await symlink(packaged, backend, linkType);
     await symlink(path.resolve("tools"), path.join(directory, "tools"), linkType);
+    await fs.cp(path.resolve("docs"), path.join(backend, "docs"), { recursive: true });
     await writeFile(path.join(backend, "package.json"), '{"type":"module"}');
     await symlink(path.resolve("node_modules"), path.join(backend, "node_modules"), process.platform === "win32" ? "junction" : "dir");
     await execute(process.execPath, [path.resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.json", "--outDir", path.join(backend, "dist")], { timeout: 60000 });

@@ -98,7 +98,8 @@ try {
   const stream = await fetch(`${origin}/event`);
   assert.equal(stream.status, 200);
   await stream.body.cancel();
-  assert.match(await (await fetch(`${origin}/api/docs`)).text(), /prompt_async/);
+  assert.match((await fetch(`${origin}/api/docs`)).headers.get("content-type"), /text\/html/);
+  assert.ok((await (await fetch(`${origin}/api/openapi.json`)).json()).paths["/session/{id}/prompt_async"]);
   const runtime = await page.evaluate(async () => (await fetch("/api/runtimes")).json());
   assert.equal(runtime.runtimes.length, 4);
   assert.ok(runtime.runtimes.every((item) => item.managed && item.installedVersion === null));

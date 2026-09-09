@@ -1,5 +1,6 @@
 import { codeRoot } from "../engines/tool-instructions.js";
 import { systemRoutes } from "./system.js";
+import { documentationRoutes } from "./docs.js";
 import Fastify from "fastify";
 import staticFiles from "@fastify/static";
 import { randomUUID, createHash } from "node:crypto";
@@ -199,7 +200,7 @@ export function createServer(runtime: SessionRuntime) {
       .code(failure.statusCode)
       .send({ code: failure.code, message: failure.message });
   });
-  server.get("/api/docs", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(await readFile(path.join(codeRoot, "docs/GATEWAY_API.md"), "utf8")));
+  documentationRoutes(server);
   server.get("/api/examples/evaluate.mjs", async (_request, reply) => reply.type("text/plain; charset=utf-8").send(await readFile(path.join(codeRoot, "tools/evaluate.mjs"), "utf8")));
   server.get("/health/live", async () => ({
     ok: true,

@@ -199,7 +199,7 @@ test("gateway settings show public API docs, retain the port and guide Web recon
   await page.goto("/settings");
   const pane = page.getByRole("region", { name: "网关服务", exact: true });
   await expect(pane.getByLabel("网关端口", { exact: true })).toHaveValue("3010");
-  await expect(pane.getByRole("link", { name: "网关接口文档与评测示例" })).toHaveAttribute("href", "/api/docs");
+  await expect(pane.getByRole("link", { name: "API 文档（OpenAPI）" })).toHaveAttribute("href", "/api/docs");
   await pane.getByLabel("监听地址", { exact: true }).fill("0.0.0.0");
   await pane.getByLabel("网关端口", { exact: true }).fill("3100");
   await pane.getByRole("button", { name: "保存网关设置", exact: true }).click();
@@ -212,4 +212,33 @@ test("gateway settings show public API docs, retain the port and guide Web recon
   await expect(pane.getByRole("link", { name: "使用新地址打开工作台" })).toHaveAttribute("href", "http://127.0.0.1:3100/settings");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await pane.screenshot({ path: info.outputPath("gateway-settings.png") });
+});
+
+test("API documentation renders schemas offline and exposes Markdown for agents", async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const external: string[] = [];
+  await page.route("**/*", (route) => {
+    if (new URL(route.request().url()).hostname !== "127.0.0.1") {
+      external.push(route.request().url());
+      return route.abort();
+    }
+    return route.continue();
+  });
+  await page.goto("/api/docs");
+  await expect(page.getByRole("heading", { name: /^AgentBridge API/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Markdown 文档（供 Agent 使用）" })).toHaveAttribute("href", "/api/docs.md");
+  const session = page.locator("#operations-会话-createSession");
+  await session.locator(".opblock-summary-control").click();
+  await expect(session.getByText("directory", { exact: true }).first()).toBeVisible();
+  await expect(session.getByText("interactionPolicy", { exact: true }).first()).toBeVisible();
+  await expect(session.getByText("Request body", { exact: true })).toBeVisible();
+  await expect(session.getByText("Responses", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+  expect(external).toEqual([]);
+  await page.screenshot({ path: info.outputPath("api-docs.png"), fullPage: false });
+  const markdown = await page.request.get("/api/docs.md");
+  expect(markdown.headers()["content-type"]).toContain("text/markdown");
+  expect(await markdown.text()).toContain("完整会话调用示例");
 });
