@@ -39,7 +39,7 @@ process.on('message',m=>{if(m.type==='shutdown')server.close(()=>process.disconn
     assert.throws(() => process.kill(old!, 0), { code: "ESRCH" });
   } finally {
     const exit = once(child, "exit"); child.kill("SIGTERM"); await exit;
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
 
