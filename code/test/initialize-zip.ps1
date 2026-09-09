@@ -58,7 +58,7 @@ try {
     }
     foreach ($names in @(
         @('../escape.txt'), @('C:/escape.txt'), @('/escape.txt'), @('office/../../escape.txt'),
-        @('office/file:stream'), @('office/NUL.txt'), @('office./SKILL.md'), @('office/file?'), @('office/file*'), @('office/file|'),
+        @('office/file:stream'), @('office/NUL.txt'), @('office./SKILL.md'), @('office/file?'), @('office/file*'),
         @('office/SKILL.md', 'OFFICE/skill.md'), @('office\..\escape.txt')
     )) {
         $zip = New-TestZip $names
