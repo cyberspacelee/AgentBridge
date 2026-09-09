@@ -36,6 +36,18 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm --filter @agentbridge/web typecheck
       - run: pnpm --filter @agentbridge/web lint
+      - name: Check runtime ZIP paths with Win32 long paths disabled
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+          $previous = (Get-ItemProperty -Path $key -Name LongPathsEnabled).LongPathsEnabled
+          try {
+            Set-ItemProperty -Path $key -Name LongPathsEnabled -Value 0
+            # A fresh process must observe the registry value before doing any file I/O.
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/initialize-zip.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Runtime ZIP extraction failed with Win32 long paths disabled' }
+          } finally { Set-ItemProperty -Path $key -Name LongPathsEnabled -Value $previous }
       - run: pnpm test
       - run: pnpm desktop:dist
         env:
