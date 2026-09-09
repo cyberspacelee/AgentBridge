@@ -47,6 +47,12 @@ function Install-Application([string] $Installer, [string] $Destination) {
     return $application
 }
 
+function ConvertTo-ExtendedPath([string] $AbsolutePath) {
+    if ([System.IO.Path]::DirectorySeparatorChar -ne '\' -or $AbsolutePath.StartsWith('\\?\')) { return $AbsolutePath }
+    if ($AbsolutePath.StartsWith('\\')) { return '\\?\UNC\' + $AbsolutePath.Substring(2) }
+    return '\\?\' + $AbsolutePath
+}
+
 # Extract only regular files into a fresh directory; never trust ZIP entry paths.
 function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
     if (-not $InputPath) { return '' }
@@ -55,9 +61,10 @@ function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
         if ([System.IO.Path]::GetExtension($source) -ine '.zip') { throw "$FolderName must be a directory or ZIP file." }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $destination = Join-Path ([System.IO.Path]::GetTempPath()) ('AgentBridge-' + [guid]::NewGuid().ToString('N'))
-        [System.IO.Directory]::CreateDirectory($destination) | Out-Null
+        $nativeDestination = ConvertTo-ExtendedPath $destination
+        [System.IO.Directory]::CreateDirectory($nativeDestination) | Out-Null
         $temporaryDirectories.Add($destination)
-        $archive = [System.IO.Compression.ZipFile]::OpenRead($source)
+        $archive = [System.IO.Compression.ZipFile]::OpenRead((ConvertTo-ExtendedPath $source))
         try {
             $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             [long] $bytes = 0
@@ -66,7 +73,7 @@ function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
                 $name = $entry.FullName.Replace('\', '/')
                 $parts = $name.TrimEnd('/').Split('/')
                 $fileType = ($entry.ExternalAttributes -shr 16) -band 61440
-                if ($name.StartsWith('/') -or $name -match '[:\x00-\x1f]' -or
+                if ($name.StartsWith('/') -or $name -match '[:*?"<>|\x00-\x1f]' -or
                     @($parts | Where-Object { $_ -in @('', '.', '..') -or $_ -match '[. ]$|^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)' }).Count -gt 0 -or
                     $fileType -notin @(0, 16384, 32768) -or ($entry.ExternalAttributes -band 1024) -ne 0 -or
                     -not $names.Add($name.TrimEnd('/'))) { throw 'ZIP contains an unsafe, duplicate or unsupported entry.' }
@@ -75,14 +82,16 @@ function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
             }
             foreach ($entry in $archive.Entries) {
                 $name = $entry.FullName.Replace('\', '/')
-                $target = [System.IO.Path]::GetFullPath((Join-Path $destination $name))
-                if (-not $target.StartsWith($destination + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'ZIP entry escapes its destination.' }
+                # Extended Windows paths require native separators and avoid MAX_PATH in .NET I/O.
+                $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($nativeDestination, $name.Replace('/', [System.IO.Path]::DirectorySeparatorChar)))
+                if (-not $target.StartsWith($nativeDestination + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'ZIP entry escapes its destination.' }
                 if ($name.EndsWith('/')) { [System.IO.Directory]::CreateDirectory($target) | Out-Null }
                 else {
                     [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target)) | Out-Null
                     $inputStream = $entry.Open()
                     try {
-                        $outputStream = [System.IO.File]::Open($target, [System.IO.FileMode]::CreateNew)
+                        try { $outputStream = [System.IO.File]::Open($target, [System.IO.FileMode]::CreateNew) }
+                        catch { throw "Cannot extract ZIP entry '$name' to '$target' ($($target.Length) characters): $($_.Exception.GetBaseException().Message)" }
                         try {
                             $buffer = New-Object byte[] 65536
                             [long] $written = 0
@@ -154,5 +163,5 @@ try {
     Write-Error $_ -ErrorAction Continue
     exit 1
 } finally {
-    foreach ($directory in $temporaryDirectories) { Remove-Item -LiteralPath $directory -Recurse -Force }
+    foreach ($directory in $temporaryDirectories) { [System.IO.Directory]::Delete((ConvertTo-ExtendedPath $directory), $true) }
 }

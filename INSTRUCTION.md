@@ -109,6 +109,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 
 ZIP 先解压到临时目录，支持普通文件和目录；绝对路径、`..` 越界、重复路径、符号链接、Windows 特殊设备名等会被拒绝。每个 ZIP 最多 200,000 个条目、展开大小最多 8 GiB，处理结束后清理临时目录。Windows 的普通 runtimes ZIP 不依赖 Unix 符号链接；如果来源是其他平台的含链接目录，请使用对应平台运行环境，不能直接搬到 Windows。
 
+Windows ZIP 解压和清理使用扩展长度路径，支持临时目录、版本 UUID 和深层 `node_modules` 拼接后超过 260 字符的路径，无需修改注册表。版本 UUID 是 runtime 清单引用的目录名，不要手动删改。旧版脚本若在临时目录创建 Pi/OpenCode 文件时报 `Open` 路径错误，请替换更新后的 `Initialize-AgentBridge.ps1`；改短临时目录只能缓解路径长度问题。单个文件名/目录名的文件系统长度限制仍然适用。
+
 相同文件可重复执行：已登记 runtime 保留，同内容 Skill 复用；已有不同业务配置或同 ID 的不同 Skill 内容会拒绝覆盖，改用新数据目录或在应用中管理。显式提供 `-SystemPath` 或自动发现同目录 `system.json` 时会应用所提供的系统设置。错误返回非零退出码，保留已保存配置和已完成安装，且不执行 `-Start`；修复后可以重试。原生模型真实请求、额外 MCP 依赖及外部办公服务仍需在目标环境验证。
 
 临时校验网关仅监听 `127.0.0.1` 的自动分配端口，不覆盖导入的监听地址和端口，也不采用当前终端的 `AGENT_HOST`、`AGENT_PORT`、`AGENT_ENGINE`。正常启动 Desktop 仍遵循下文环境变量优先级。实例运行时由数据目录锁拒绝初始化；目标实例已保存的加密代理密码无法由独立脚本解密时，请用新数据目录，或通过桌面页面操作。

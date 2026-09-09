@@ -9,8 +9,8 @@ $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Initialization script does not parse.' }
 # Load the real extractor without running application initialization.
-$function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Expand-InputDirectory' }, $true)
-Invoke-Expression $function.Extent.Text
+$functions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('ConvertTo-ExtendedPath', 'Expand-InputDirectory') }, $true)
+foreach ($function in $functions) { Invoke-Expression $function.Extent.Text }
 
 function New-TestZip([string[]] $Names, [int] $Attributes = 0) {
     $file = Join-Path $root ([guid]::NewGuid().ToString('N') + '.zip')
@@ -27,6 +27,11 @@ function New-TestZip([string[]] $Names, [int] $Attributes = 0) {
 }
 
 try {
+    if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+        if ((ConvertTo-ExtendedPath 'C:\runtime') -ne '\\?\C:\runtime' -or
+            (ConvertTo-ExtendedPath '\\server\share\runtime') -ne '\\?\UNC\server\share\runtime' -or
+            (ConvertTo-ExtendedPath '\\?\C:\runtime') -ne '\\?\C:\runtime') { throw 'Extended local/UNC path conversion failed.' }
+    }
     foreach ($prefix in @('', 'skills/')) {
         $zip = New-TestZip @(($prefix + 'office/SKILL.md'), ($prefix + 'office/assets/template.txt'))
         $expanded = Expand-InputDirectory $zip 'skills'
@@ -38,17 +43,22 @@ try {
     $expanded = Expand-InputDirectory $zip 'runtimes'
     if (-not (Test-Path -LiteralPath (Join-Path $expanded 'codex/manifest.json'))) { throw 'Runtime wrapper was not removed.' }
     foreach ($agent in @('pi', 'opencode')) {
-        $entry = "runtimes/$agent/versions/11111111-1111-4111-8111-111111111111/" + ('node_modules/dependency/' * 12) + 'dist/index.js'
-        $zip = New-TestZip @($entry)
-        $expanded = Expand-InputDirectory $zip 'runtimes'
-        $target = Join-Path $expanded $entry.Substring('runtimes/'.Length)
-        if ($target.Length -le 260) { throw 'Fixture must exercise a path longer than MAX_PATH.' }
-        if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $target = '\\?\' + $target }
-        if ([System.IO.File]::ReadAllText($target) -ne 'test content') { throw 'Long runtime path was not extracted.' }
+        $prefix = "runtimes/$agent/versions/11111111-1111-4111-8111-111111111111/"
+        foreach ($entry in @(
+            ($prefix + 'node_modules/' + ('dependency-' * 15) + '.js'),
+            ($prefix + ('node_modules/dependency/' * 12) + 'dist/index.js')
+        )) {
+            $zip = New-TestZip @($entry)
+            $expanded = Expand-InputDirectory $zip 'runtimes'
+            $target = Join-Path $expanded $entry.Substring('runtimes/'.Length)
+            if ($target.Length -le 260) { throw 'Fixture must exercise a path longer than MAX_PATH.' }
+            if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $target = '\\?\' + $target }
+            if ([System.IO.File]::ReadAllText($target) -ne 'test content') { throw 'Long runtime path was not extracted.' }
+        }
     }
     foreach ($names in @(
         @('../escape.txt'), @('C:/escape.txt'), @('/escape.txt'), @('office/../../escape.txt'),
-        @('office/file:stream'), @('office/NUL.txt'), @('office./SKILL.md'),
+        @('office/file:stream'), @('office/NUL.txt'), @('office./SKILL.md'), @('office/file?'), @('office/file*'), @('office/file|'),
         @('office/SKILL.md', 'OFFICE/skill.md'), @('office\..\escape.txt')
     )) {
         $zip = New-TestZip $names
@@ -62,6 +72,9 @@ try {
     if (-not $rejected) { throw 'ZIP symbolic link was accepted.' }
     'ZIP extraction checks passed.'
 } finally {
-    foreach ($directory in $temporaryDirectories) { Remove-Item -LiteralPath $directory -Recurse -Force }
+    foreach ($directory in $temporaryDirectories) {
+        [System.IO.Directory]::Delete((ConvertTo-ExtendedPath $directory), $true)
+        if (Test-Path -LiteralPath $directory) { throw 'Extracted runtime directory was not cleaned up.' }
+    }
     Remove-Item -LiteralPath $root -Recurse -Force
 }
