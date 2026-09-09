@@ -53,6 +53,8 @@ test("compaction and model thinking persist, apply per agent, and restore native
       assert.deepEqual(pi.compaction, enabled ? { enabled: true } : undefined);
       assert.deepEqual(pi.modelThinkingLevels, enabled ? { "bridge/model": "off" } : {});
       assert.equal(piProviders(config).bridge!.models[0]!.reasoning, enabled);
+      assert.deepEqual(piProviders(config).bridge!.models[0]!.compat, { supportsDeveloperRole: false });
+      assert.deepEqual(JSON.parse(await readFile(path.join(agentDirectory(config, "pi"), "models.json"), "utf8")).providers, piProviders(config));
       assert.deepEqual(oc.compaction, enabled ? { auto: true } : undefined);
       assert.deepEqual(oc.provider.bridge.models.model.options, enabled ? { reasoningEffort: "none" } : undefined);
       assert.deepEqual(grok.session, enabled ? { auto_compact_threshold_percent: 85 } : undefined);

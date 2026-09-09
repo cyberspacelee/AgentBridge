@@ -190,6 +190,8 @@ export function piProviders(config: Config) {
           maxTokens: m.maxTokens,
           name: m.name || m.id,
           reasoning: m.thinking === "off",
+          // Disabling thinking must not opt compatible endpoints into the developer role.
+          compat: { supportsDeveloperRole: false },
           ...(m.thinking === "off" ? { thinkingLevelMap: { off: "none" } } : {}),
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

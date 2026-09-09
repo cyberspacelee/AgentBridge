@@ -172,6 +172,11 @@ for (const engine of ["pi", "opencode"] as const)
           for await (const chunk of req) chunks.push(Buffer.from(chunk));
           const body = JSON.parse(Buffer.concat(chunks).toString());
           modelRequests.push(JSON.stringify(body));
+          if (body.messages.some((m: { role: string }) => !["system", "user", "assistant", "tool"].includes(m.role))) {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Invalid role: only system, user, assistant and tool are supported" } }));
+            return;
+          }
           if (
             body.messages.some((message: { content: unknown }) =>
               JSON.stringify(message.content).includes(
@@ -360,8 +365,11 @@ for (const engine of ["pi", "opencode"] as const)
         assert.equal(await readFile(output, "utf8"), "native tool verified\n");
         assert.equal(toolRequests, 1);
         assert.ok(modelRequests.length > 0);
-        for (const request of modelRequests)
-          assert.equal(JSON.parse(request).reasoning_effort, "none");
+        for (const request of modelRequests) {
+          const body = JSON.parse(request);
+          assert.equal(body.reasoning_effort, "none");
+          assert.ok(body.messages.some((m: { role: string }) => m.role === "system"));
+        }
         assert.ok(
           modelRequests.some((request) =>
             request.includes("bridge-selected-marker"),

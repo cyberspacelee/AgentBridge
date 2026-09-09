@@ -62,7 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
-  -InstallerPath '.\AgentBridge Setup 0.1.16.exe' `
+  -InstallerPath '.\AgentBridge Setup 0.1.17.exe' `
   -InstallDirectory 'D:\Apps\AgentBridge' `
   -SettingsPath .\settings.json -Start
 ```
@@ -181,7 +181,7 @@ pnpm start
 ## 管理配置
 
 1. 在“共享资源”中添加 OpenAI 兼容连接：供应商 ID、Base URL、API Key、协议及模型列表。Base URL 填 API 根路径，例如 `https://api.example.com/v1`，不填具体请求端点。
-2. 每个模型可配置名称、上下文长度、最大输出长度及默认/关闭思考。关闭思考需要供应商和模型支持。只支持 Chat Completions 与 Responses；Codex 只接受 Responses。
+2. 每个模型可配置名称、上下文长度、最大输出长度及默认/关闭思考。关闭思考需要供应商和模型支持。只支持 Chat Completions 与 Responses；Codex 只接受 Responses。Pi 使用 `system` 角色发送系统提示，关闭思考也不会改为 `developer`，以兼容不支持该角色的服务。
 3. 在 Agent 详情选择上下文压缩（默认/启用）、允许使用的模型、默认模型、Skills、MCP 和默认交互策略，保存后启用。默认权限审批和提问均为 `auto`：权限自动批准，提问按首个选项或默认文本回答；需要人工处理时改为 `manual`。创建会话时可覆盖该策略，已创建会话的策略保持固定。
 4. 修改已启用 Agent 的配置后，点击应用。页面分别显示保存修订与已应用修订；保存不会改变正在执行的进程配置。
 5. 连接测试会向已保存的供应商发送一次最多 64 个输出 token 的请求，超时 30 秒。它可能产生模型费用。
