@@ -1,7 +1,7 @@
 import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { parseArgs } from "node:util";
+import { parseArgs, isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -114,10 +114,11 @@ export async function readSystem(filename, gatewaySchema, defaultGateway, valida
 
 export function assertCompatible(previous, next) {
   const empty = !previous.providers.length && !previous.skills.length && !previous.mcp.length &&
+    previous.runTimeoutMs === undefined &&
     previous.agents.every((agent) => !agent.enabled && !agent.models.length && !agent.skillIds.length && !agent.mcpIds.length);
   // Initialization can resume its own configuration; editing existing profiles belongs in the app.
   const comparable = (settings) => ({ ...settings, agents: settings.agents.map(({ enabled, runtime, ...agent }) => agent) });
-  if (!empty && JSON.stringify(comparable(previous)) !== JSON.stringify(comparable(next)))
+  if (!empty && !isDeepStrictEqual(comparable(previous), comparable(next)))
     throw new Error("Existing settings differ from this profile. Use the app to edit them, or select a new data directory.");
 }
 
@@ -226,13 +227,18 @@ export async function initializeRuntimes(request, agents, log = console.log, loc
 }
 
 async function main() {
-  const { positionals, values } = parseArgs({ allowPositionals: true, options: { runtimes: { type: "string" }, skills: { type: "string" }, system: { type: "string" } } });
+  const { positionals, values } = parseArgs({ allowPositionals: true, options: { runtimes: { type: "string" }, skills: { type: "string" }, system: { type: "string" }, "run-timeout-minutes": { type: "string" } } });
   const [backendRoot, directory, filename, npm, legacyRuntimesPath] = positionals;
   const runtimesPath = values.runtimes ?? legacyRuntimesPath;
   if (!backendRoot || !directory || !filename || !npm) throw new Error("Run Initialize-AgentBridge.ps1 with -ExePath and -ConfigPath");
   const moduleAt = (relative) => import(pathToFileURL(path.join(backendRoot, relative)).href);
   const { settingsSchema, agentIds } = await moduleAt("dist/shared/settings.js");
   const { settings, selected: requested } = await readProfile(path.resolve(filename), settingsSchema, agentIds);
+  if (values["run-timeout-minutes"] !== undefined) {
+    const minutes = Number(values["run-timeout-minutes"]);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) throw new Error("--run-timeout-minutes must be an integer from 1 to 1440");
+    settings.runTimeoutMs = minutes * 60000;
+  }
   const skills = structuredClone(settings.skills);
   if (values.skills) for (const skill of settings.skills) skill.path = path.join(directory, "skills", skill.id);
   const selected = [];
@@ -271,6 +277,8 @@ async function main() {
     cancellation.signal.throwIfAborted();
     const config = readConfig([], { AGENT_DATA_DIR: directory, AGENT_MANAGED_RUNTIMES: "true" });
     const previous = readSettings(config);
+    if (settings.runTimeoutMs === undefined && previous.runTimeoutMs !== undefined)
+      settings.runTimeoutMs = previous.runTimeoutMs;
     assertCompatible(previous, settings);
     if (values.skills) await copySkills(values.skills, directory, skills);
     const manager = new SettingsManager(config);

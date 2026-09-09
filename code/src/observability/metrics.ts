@@ -240,7 +240,7 @@ export class Telemetry {
         ? this.runtime.agentHealth(engine)
         : null,
       agents: this.runtime.agentViews().filter((agent) => !engine || agent.id === engine),
-      limits: this.runtime.config.limits,
+      limits: this.runtime.limits(),
       completed,
       failed,
       timedOut,

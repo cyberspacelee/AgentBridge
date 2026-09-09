@@ -137,6 +137,12 @@ export class SessionRuntime {
       )
     );
   }
+  limits() {
+    return {
+      ...this.config.limits,
+      runTimeoutMs: readSettings(this.config).runTimeoutMs ?? this.config.limits.runTimeoutMs,
+    };
+  }
   agentHealth(id: string) {
     const health = this.engine(id).health();
     if (this.agentOperations.has(id))
@@ -789,6 +795,7 @@ export class SessionRuntime {
         ))
         ? previousModel
         : null;
+    const acceptedAt = now();
     const run: Run = {
       runtimeVersion: this.runtimes.view(agentIdSchema.safeParse(session.engineId).success ? session.engineId as AgentId : this.config.engine).runningVersion,
       configRevision: this.appliedRevisions.get(session.engineId) ?? null,
@@ -803,9 +810,9 @@ export class SessionRuntime {
         agentConfiguration(this.config, session.engineId)?.defaultModel ??
         (session.engineId === this.adapter.id ? this.config.model : null),
       state: "queued",
-      acceptedAt: now(),
+      acceptedAt,
       deadlineAt: new Date(
-        Date.now() + this.config.limits.runTimeoutMs,
+        Date.parse(acceptedAt) + this.limits().runTimeoutMs,
       ).toISOString(),
       startedAt: null,
       finishedAt: null,
@@ -1038,7 +1045,7 @@ export class SessionRuntime {
           if (run.state === "queued")
             this.finish(run.id, "timed_out", {
               code: "TIMEOUT",
-              message: "Execution deadline expired while queued",
+              message: "Gateway task deadline exceeded while queued; Agent execution never started",
               stage: "queue",
             });
           else void this.stopRun(run.id, "timeout").catch((error) => this.log("warn", "cleanup", "CLEANUP_FAILED", errorDetail(error, diagnosticSecrets(this.config))));
@@ -1119,8 +1126,9 @@ export class SessionRuntime {
       this.publishSession(session.id);
     });
     let before: Map<string, string> | null = null;
+    const inventory = new AbortController();
     try {
-      before = await discoverFiles(session.directory);
+      before = await within(discoverFiles(session.directory, inventory.signal), this.config.limits.artifactTimeoutMs);
     } catch (error) {
       this.log(
         "warn",
@@ -1130,6 +1138,8 @@ export class SessionRuntime {
         session.id,
         runId,
       );
+    } finally {
+      inventory.abort();
     }
     if (this.run(runId).state !== "running") return;
     try {
@@ -1145,48 +1155,32 @@ export class SessionRuntime {
           throw engineError(
             "Engine ended without a successful final assistant message",
           );
-        try {
-          const artifacts = before
-            ? await registerChangedFiles(session, run, before)
-            : [];
-          if (this.run(runId).state === "running")
-            this.store.transaction(() => {
-              for (const artifact of artifacts) {
-                this.store.put("artifacts", artifact);
-                this.store.emit({
-                  type: "artifact.updated",
-                  sessionId: session.id,
-                  runId,
-                  properties: artifact,
-                });
-              }
-            });
-        } catch (error) {
-          this.log(
-            "warn",
-            "artifact",
-            "ARTIFACT_CHECK_FAILED",
-            `Artifact discovery or verification failed: ${errorDetail(error, diagnosticSecrets(this.config))}`,
-            session.id,
-            runId,
-          );
-        }
-        if (this.run(runId).state !== "running") return;
+        // Persist native success before filesystem work can cross the execution deadline.
         this.store.transaction(() => {
-          if (
-            !last.parts.some(
-              (p) => p.type === "step-finish" && p.reason === "stop",
-            )
-          )
-            last.parts.push({
-              id: randomUUID(),
-              type: "step-finish",
-              reason: "stop",
-              usage: result.usage ?? null,
-            });
+          if (!last.parts.some((p) => p.type === "step-finish" && p.reason === "stop"))
+            last.parts.push({ id: randomUUID(), type: "step-finish", reason: "stop", usage: result.usage ?? null });
           this.saveMessage(last);
           this.finish(runId, "completed", null, result);
         });
+        if (before) {
+          const timeout = this.config.limits.artifactTimeoutMs;
+          const controller = new AbortController();
+          try {
+            const artifacts = await within(registerChangedFiles(session, run, before, controller.signal), timeout);
+            this.store.transaction(() => {
+              for (const artifact of artifacts) {
+                this.store.put("artifacts", artifact);
+                this.store.emit({ type: "artifact.updated", sessionId: session.id, runId, properties: artifact });
+              }
+            });
+          } catch (error) {
+            this.log("warn", "artifact", "ARTIFACT_CHECK_FAILED",
+              `Agent execution completed; artifact registration failed (limit ${timeout} ms): ${errorDetail(error, diagnosticSecrets(this.config))}`,
+              session.id, runId);
+          } finally {
+            controller.abort();
+          }
+        }
       } else
         this.finish(
           runId,
@@ -1534,7 +1528,7 @@ export class SessionRuntime {
         reason === "timeout"
           ? {
               code: "TIMEOUT",
-              message: "Run deadline exceeded",
+              message: `Gateway task deadline exceeded (${Math.round((Date.parse(run.deadlineAt) - Date.parse(run.acceptedAt)) / 1000)} seconds from submission); Agent stop confirmed`,
               stage: "execution",
             }
           : null,

@@ -91,7 +91,7 @@ pnpm start --host 0.0.0.0 --port 6217
 | `AGENT_OPENAI_API` | openai-completions（默认）或 openai-responses |
 | `AGENT_MODEL` | 默认引擎的兜底模型，JSON 格式 `{"providerID":"...","modelID":"..."}`；请求指定的模型优先 |
 | `AGENT_ALLOWED_DIRECTORIES` | 可访问工作目录的绝对路径 JSON 数组，默认空数组不限制目录选择 |
-| `AGENT_LIMITS` | 超时、并发和事件保留等限制，详见安装说明 |
+| `AGENT_LIMITS` | 超时、并发和事件保留等限制；任务默认 30 分钟，页面保存值优先，详见安装说明 |
 
 模型凭据只配置在服务端，不应提交到 Git。默认 SQLite 数据目录只允许一个网关实例持有写锁；启动多个实例时需分别配置数据目录和网关端口。
 
@@ -163,3 +163,5 @@ Hallmark 是可选的个人设计工具，本项目忽略其安装目录 `.agent
 - [架构说明](ARCHITECTURE.md)与[开发约定](DEVELOPMENT.md)
 - [设计文档索引](docs/design/README.md)
 - [前端开发说明](code/web/README.md)
+
+任务默认共用 30 分钟总时限，可在“系统信息 → 任务超时”配置，新任务立即生效。PowerShell 初始化支持 `-RunTimeoutMinutes`。详见[超时与完成处理](code/docs/TIMEOUTS.md)。

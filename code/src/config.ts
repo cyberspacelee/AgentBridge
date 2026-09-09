@@ -4,13 +4,14 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { modelSchema } from "../shared/contracts.js";
 import { providerSchema } from "../shared/settings.js";
-import { agentIdSchema, defaultAgent } from "../shared/settings.js";
+import { agentIdSchema, defaultAgent, defaultRunTimeoutMs } from "../shared/settings.js";
 import { defaultNetworkSettings, normalizeNpmRegistry } from "../host/network.mjs";
 import { GatewayError } from "./errors.js";
 
 export const limitsSchema = z
   .object({
-    runTimeoutMs: z.coerce.number().int().min(100).default(600000),
+    runTimeoutMs: z.coerce.number().int().min(100).max(86400000).default(defaultRunTimeoutMs),
+    artifactTimeoutMs: z.coerce.number().int().min(100).max(600000).default(30000),
     startupTimeoutMs: z.coerce.number().int().min(100).default(30000),
     abortTimeoutMs: z.coerce.number().int().min(100).default(10000),
     maxConcurrentRuns: z.coerce.number().int().min(1).max(100).default(4),

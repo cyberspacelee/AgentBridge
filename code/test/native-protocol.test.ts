@@ -84,9 +84,10 @@ for (const id of ["codex", "grok"] as const)
       provider: "fixture",
       rpc: {
         closed: false,
-        request: async (method: string) => {
+        request: async (method: string, _params: unknown, timeout?: number | null) => {
           if (method === "session/prompt")
             return new Promise<Record<string, unknown>>((resolve) => {
+              assert.equal(timeout, null, "Grok prompt must use the gateway deadline");
               completePrompt = resolve;
             });
           if (method === "turn/interrupt") finish(true);

@@ -259,7 +259,8 @@ export function opencodeEnvironment(config: Config) {
               ? "@ai-sdk/openai"
               : "@ai-sdk/openai-compatible",
           name: p.id,
-          options: { baseURL: p.baseUrl, apiKey: p.apiKey || "not-required" },
+          // The gateway owns the task deadline, including slow model responses.
+          options: { baseURL: p.baseUrl, apiKey: p.apiKey || "not-required", timeout: false, headerTimeout: false, chunkTimeout: false },
           models: Object.fromEntries(
             p.models.map((m) => [
               m.id,

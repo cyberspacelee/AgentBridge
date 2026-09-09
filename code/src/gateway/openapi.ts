@@ -58,7 +58,7 @@ const schemas: Record<string, Schema> = {
   Run: object({
     id: str, sessionId: str, submissionId: str, sequence: int, inputParts: json(promptSchema.shape.parts),
     model: nullable(ref("Model")), state: described(enumeration(...runStates), "queued/running/stopping 为非终态；completed/failed/timed_out/cancelled 为终态，仅 completed 表示成功。"),
-    acceptedAt: date, deadlineAt: date, startedAt: nullable(date), finishedAt: nullable(date),
+    acceptedAt: date, deadlineAt: described(date, "提交时保存的绝对截止时间，包含排队和人工等待；修改系统时限不改变已提交执行。Agent 确认成功后的产物登记单独计时。"), startedAt: nullable(date), finishedAt: nullable(date),
     stopReason: nullable(enumeration("user", "timeout", "deletion", "shutdown")), error: nullable(ref("Failure")), usage: nullable(ref("Usage")),
     traceId: str, configRevision: nullable(str), runtimeVersion: nullable(str),
   }, ["runtimeVersion"]),
@@ -197,7 +197,7 @@ operation("post", "/session", "createSession", "会话", "创建会话", ref("Se
 operation("get", "/session/{id}", "getSession", "会话", "查询会话", ref("SessionView"), { errors: [404], description: "status=idle 仅表示当前空闲，不表示上一轮成功。message_count 为会话消息总数。" });
 operation("get", "/session/status", "listSessionStatuses", "会话", "查询所有会话忙闲状态", dictionary(object({ type: enumeration("busy", "idle") })), { result: { ses_001: { type: "idle" } } });
 operation("post", "/session/{id}/prompt_async", "promptSession", "会话", "提交消息并等待本轮结束", null, { input: ref("Prompt"), status: 204, errors: [404, 409, 429, 502, 504], example: promptExample,
-  description: "名称虽为 prompt_async，HTTP 连接会等待本轮终态：成功 204（空响应）、失败 502、超时 504、取消 409。HTTP 超时应大于运行上限（默认 600 秒）。manual 模式须在另一连接处理审批/问题。无需重新创建会话即可再次调用完成多轮对话。此接口无幂等键；需要立即返回 runId 和幂等重试请用 POST /api/tasks/{id}/runs。" });
+  description: "名称虽为 prompt_async，HTTP 连接会等待本轮终态：成功 204（空响应）、失败 502、超时 504、取消 409。HTTP 超时应大于运行上限（默认 1800 秒，可在系统信息页配置）。manual 模式须在另一连接处理审批/问题。无需重新创建会话即可再次调用完成多轮对话。此接口无幂等键；需要立即返回 runId 和幂等重试请用 POST /api/tasks/{id}/runs。" });
 operation("get", "/session/{id}/message", "listSessionMessages", "会话", "读取会话消息与工具轨迹", array(ref("Message")), { errors: [404], result: [messageExample],
   description: "返回全部消息（不分页）。文本在 parts[].content。最终助手消息需 role=assistant、info.finish=stop 且含 step-finish；tool-calls 或单独 step-finish 不能判定成功。失败时仍可读取已有轨迹。" });
 for (const action of ["abort", "stop"]) operation("post", `/session/{id}/${action}`, `${action}Session`, "会话", action === "abort" ? "中止会话执行" : "中止会话执行（abort 别名）", ref("Ok"), { errors: [404, 409, 504], result: { ok: true }, description: "无请求体。取消本会话活动与排队中的执行，未完成交互会过期；保留会话和已生成消息，后续仍可提交新一轮。" });
@@ -243,7 +243,7 @@ operation("post", "/api/system/lifecycle", "changeLifecycle", "系统", "重启�
 operation("get", "/api/system/directories", "listDirectories", "系统", "浏览工作目录", ref("DirectoryView"), { parameters: [parameter("directory", { type: "string", maxLength: 4096 }, "主机绝对路径；省略列出允许的根目录。")], description: "只返回可见目录；最多 500 条、最多扫描 5000 个子项，达到上限时 truncated=true。parent 为 null 表示不能再向上浏览。" });
 operation("post", "/api/system/certificates", "uploadCertificate", "系统", "保存 PEM CA 证书", object({ path: str }), { input: object({ pem: { type: "string", minLength: 1, maxLength: 2097152 } }), description: "pem 为有效的 CA 证书，最多 2 MiB；本接口 JSON 请求体上限 3 MiB。返回网关主机上的保存路径，可用于 caFile。" });
 operation("get", "/api/settings", "getSettings", "Agent 与资源", "读取资源配置", ref("SettingsView"));
-operation("put", "/api/settings", "saveSettings", "Agent 与资源", "替换资源配置", ref("SettingsView"), { input: object({ settings: ref("SettingsInput"), revision: str }), errors: [409], description: "完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。保存后对相关 Agent 执行 apply。" });
+operation("put", "/api/settings", "saveSettings", "Agent 与资源", "替换资源配置", ref("SettingsView"), { input: object({ settings: ref("SettingsInput"), revision: str }), errors: [409], description: "完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。Agent 资源配置保存后对相关 Agent 执行 apply；runTimeoutMs 为 60000–86400000 毫秒，保存后立即用于四个 Agent 的新任务，无需 apply 或重启，优先于 AGENT_LIMITS.runTimeoutMs。省略时使用环境变量或默认 1800000 毫秒。" });
 operation("get", "/api/agents", "listAgents", "Agent 与资源", "读取 Agent 状态", object({ agents: array(ref("AgentView")) }));
 operation("post", "/api/agents/{id}/actions", "actOnAgent", "Agent 与资源", "启用、停用、停止或应用 Agent 配置", ref("AgentView"), { input: json(agentActionSchema), parameters: [agentParameter], status: 202, errors: [409, 502, 504], description: "disable/apply 等待活动执行；stop 强制停止。202 后轮询 /api/agents 的 operation/error/health。" });
 operation("get", "/api/engines/{id}/models", "listModels", "Agent 与资源", "查询 Agent 可用模型", object({ models: array(ref("ModelOption")) }), { parameters: [agentParameter], errors: [404, 503, 504] });

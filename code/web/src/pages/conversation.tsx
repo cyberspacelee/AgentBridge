@@ -427,6 +427,15 @@ export function Conversation() {
                   <dl className="metadata">
                     <dt>接收时间</dt>
                     <dd>{date(selected.acceptedAt)}</dd>
+                    <dt>本轮总时限</dt>
+                    <dd>
+                      {duration(
+                        Date.parse(selected.deadlineAt) -
+                          Date.parse(selected.acceptedAt)
+                      )}
+                    </dd>
+                    <dt>截止时间</dt>
+                    <dd>{date(selected.deadlineAt)}</dd>
                     <dt>输入 Token</dt>
                     <dd>{number(selected.usage?.input)}</dd>
                     <dt>输出 Token</dt>
@@ -506,6 +515,17 @@ export function Conversation() {
               </dd>
               <dt>{runFilter ? "所选执行接收时间" : "最近执行接收时间"}</dt>
               <dd>{date(selected?.acceptedAt)}</dd>
+              <dt>本轮总时限</dt>
+              <dd>
+                {duration(
+                  selected
+                    ? Date.parse(selected.deadlineAt) -
+                        Date.parse(selected.acceptedAt)
+                    : null
+                )}
+              </dd>
+              <dt>截止时间</dt>
+              <dd>{date(selected?.deadlineAt)}</dd>
               <dt>费用 (USD)</dt>
               <dd>{number(selected?.usage?.costUsd)}</dd>
             </dl>

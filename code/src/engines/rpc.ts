@@ -23,7 +23,7 @@ export class RpcProcess {
     {
       resolve: (value: Record<string, unknown>) => void;
       reject: (error: Error) => void;
-      timer: NodeJS.Timeout;
+      timer?: NodeJS.Timeout;
     }
   >();
   onMessage: (
@@ -105,7 +105,7 @@ export class RpcProcess {
   request(
     method: string,
     params: unknown,
-    timeoutMs = 30000,
+    timeoutMs: number | null = 30000,
   ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       if (this.pending.size >= 1024) {
@@ -113,7 +113,8 @@ export class RpcProcess {
         return;
       }
       const id = ++this.nextId;
-      const timer = setTimeout(() => {
+      // Long-running prompts are cancelled by the gateway's persisted deadline.
+      const timer = timeoutMs === null ? undefined : setTimeout(() => {
         this.pending.delete(id);
         reject(engineError(`Agent RPC timed out: ${method}`));
       }, timeoutMs);

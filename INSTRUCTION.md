@@ -62,7 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
-  -InstallerPath '.\AgentBridge Setup 0.1.13.exe' `
+  -InstallerPath '.\AgentBridge Setup 0.1.15.exe' `
   -InstallDirectory 'D:\Apps\AgentBridge' `
   -SettingsPath .\settings.json -Start
 ```
@@ -79,6 +79,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge
 | `-RuntimesPath` | 可选，默认自动读取同目录 runtimes ZIP 或目录；有本地包时不回退到联网安装 |
 | `-SkillsPath` | 可选，默认自动读取同目录 Skill ZIP 或目录；统一存入 `data/skills/<资源ID>/` |
 | `-DataDirectory` | 桌面用户数据根目录，默认 `AGENT_DESKTOP_DATA_DIR` 或 `%APPDATA%\AgentBridge`；业务数据位于其 `data/` 子目录 |
+| `-RunTimeoutMinutes` | 可选，1–1440 的整数分钟数；显式覆盖导入配置中的任务时限并持久化，四个 Agent 共用。省略时保留导入值；旧配置无此字段时沿用目标已保存值或默认 30 分钟 |
 | `-Start` | 初始化成功后用本次数据目录启动应用 |
 
 默认安装结果：
@@ -242,7 +243,7 @@ Codex/Grok 每个会话有独立的托管 HOME，加载前检查原生 Skill 发
 | `ENGINE_A_PORT` | OpenCode 内部端口，默认 0 自动分配 |
 | `CODEX_COMMAND` / `GROK_COMMAND` | Codex / Grok 命令 |
 | `AGENT_ALLOWED_DIRECTORIES` | 允许的绝对目录 JSON 数组，空数组不限制 |
-| `AGENT_LIMITS` | 超时、并发、会话数、事件保留等 JSON 配置，见 code/src/config.ts |
+| `AGENT_LIMITS` | 超时、并发、会话数、事件保留等 JSON 配置；runTimeoutMs 默认 1800000，被页面保存的时限覆盖；artifactTimeoutMs 默认 30000，见 code/src/config.ts |
 | `AGENT_STORAGE=memory` | 显式使用临时数据库，进程退出丢失网关历史；配置文件仍持久化 |
 
 源码 Web 可用以下环境变量初始化模型连接；模型变量仅在尚无 `settings.json` 时生效，页面保存后由文件管理。它们不负责下载 CLI；新受管实例仍需安装所选 Agent，或通过 PowerShell 初始化完成安装和启用：
@@ -311,3 +312,23 @@ PowerShell 使用 `$env:变量名="值"` 设置对应变量后执行测试命令
 优先查看任务诊断中的脱敏错误、Agent 已应用版本以及连接测试结果。已就绪只代表 CLI 与协议可用。模型 ID、API 协议、Base URL、凭据、上下文限制都必须与供应商一致。
 
 Windows 使用存在的绝对路径，检查服务账户对工作目录、数据目录及 Git Bash 的权限。产物扫描的 DISCOVERY_FAILED 与模型请求错误分开报告；目录权限或扫描上限导致无法登记文件，不代表模型执行成功或失败。原文件丢失、内容变化或越界时，下载接口明确返回错误。
+
+## 任务超时设置
+
+Pi、OpenCode、Codex 和 Grok 默认共用 **30 分钟**任务总时限。在“系统信息 → 任务超时”输入 1–1440 的整数分钟数，点击“保存超时设置”；无需重启，对新提交的任务立即生效。保存冲突时草稿保留，刷新系统配置后可选择保留分钟数再保存。任务详情显示本轮时限和截止时间。
+
+时限从提交开始计算，包含排队和等待审批，持续输出不会重置。已提交任务保留自己的 deadlineAt；Agent 确认成功后，产物扫描和校验使用单独的 30 秒期限，产物警告不会把成功任务改成超时。
+
+设置保存在业务数据目录的 settings.json 顶层 runTimeoutMs（毫秒）。优先级为页面/初始化写入的值 > AGENT_LIMITS.runTimeoutMs > 默认 1800000。旧配置没有此字段时无需修改。Desktop 不加载 .env，推荐页面设置或初始化配置。
+
+初始化示例：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 `
+  -ExePath 'D:\Apps\AgentBridge\agentbridge.exe' `
+  -SettingsPath .\settings.json -RunTimeoutMinutes 30 -Start
+```
+
+此参数用于初始化新实例，不绕过已有配置冲突保护。已有实例应通过页面修改；重复初始化且导入配置未写 runTimeoutMs 时保留目标已保存的时限。部署包中的 initialize.example.json 显式使用 1800000。
+
+评测脚本默认读取网关时限并加 60 秒余量，使用异步提交与轮询；`--timeout` 可覆盖脚本自身等待时间。模型服务、代理和原生 CLI 内部的超时属于独立层，网关配置不能覆盖远端服务限制。详细机制、改动范围和验证场景见[超时与完成处理](code/docs/TIMEOUTS.md)。

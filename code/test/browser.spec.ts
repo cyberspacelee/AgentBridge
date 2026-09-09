@@ -1950,3 +1950,47 @@ test("questionnaire preserves answers across steps and shows resolved answers", 
   await expect(page.getByText(/Markdown；保留数据来源/)).toBeVisible();
   await expect(page.getByRole("button", { name: "提交回答", exact: true })).toHaveCount(0);
 });
+
+test("task timeout settings persist, validate and retain drafts after conflicts", async ({ page, request }, info) => {
+  const original = await (await request.get("/api/settings")).json();
+  try {
+    await request.put("/api/settings", { data: { revision: original.revision, settings: { ...original.settings, runTimeoutMs: 1800000 } } });
+    await page.goto("/settings");
+    const form = page.getByRole("form", { name: "任务超时设置" });
+    const input = form.getByLabel("任务总时限（分钟）", { exact: true });
+    const save = form.getByRole("button", { name: "保存超时设置", exact: true });
+    await expect(input).toHaveValue("30");
+    await input.fill("0");
+    await expect(form.getByText("请输入 1–1440 之间的整数分钟数。", { exact: true })).toBeVisible();
+    await expect(save).toBeDisabled();
+    await input.fill("45");
+    await save.click();
+    await expect(form.getByRole("status")).toContainText("已保存");
+    expect((await (await request.get("/api/runtime")).json()).limits.runTimeoutMs).toBe(2700000);
+    await page.reload();
+    await expect(input).toHaveValue("45");
+    await input.fill("60");
+    const current = await (await request.get("/api/settings")).json();
+    const defaultAgent = current.settings.defaultAgent === "pi" ? "grok" : "pi";
+    await request.put("/api/settings", { data: { revision: current.revision, settings: { ...current.settings, defaultAgent, runTimeoutMs: 7200000 } } });
+    await save.click();
+    await expect(form.getByRole("alert")).toContainText("配置已在其他位置修改");
+    await expect(input).toHaveValue("60");
+    await page.getByRole("button", { name: "刷新系统配置", exact: true }).click();
+    await form.getByRole("button", { name: "使用最新配置并保留分钟数", exact: true }).click();
+    await save.click();
+    await expect(form.getByRole("status")).toContainText("已保存");
+    const saved = await (await request.get("/api/settings")).json();
+    expect(saved.settings.runTimeoutMs).toBe(3600000);
+    expect(saved.settings.defaultAgent).toBe(defaultAgent);
+    await form.getByRole("button", { name: "恢复默认 30 分钟", exact: true }).click();
+    await save.click();
+    await expect(form.getByRole("status")).toContainText("已保存");
+    await expect(input).toHaveValue("30");
+    await form.screenshot({ path: `/tmp/agentbridge-timeout-${info.project.name}.png` });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally {
+    const current = await (await request.get("/api/settings")).json();
+    await request.put("/api/settings", { data: { revision: current.revision, settings: original.settings } });
+  }
+});

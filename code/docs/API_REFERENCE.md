@@ -1,6 +1,6 @@
 # AgentBridge API — API Reference
 
-版本：0.1.14 · OpenAPI 3.1.0
+版本：0.1.15 · OpenAPI 3.1.0
 Base URL 为当前网关地址。无需 Authorization/Cookie；仅供受信任客户端，同源与目录访问约束仍生效。JSON 请求使用 Content-Type: application/json，默认最大 1 MiB。响应头 X-Request-ID 用于追踪。字段标记 required 为必填；null 与省略不同。[Markdown 文档（供 Agent 使用）](/api/docs.md) · [完整会话示例](/api/examples/session.md)。
 获取地址：`GET /api/docs.md`（本文）、`GET /api/openapi.json`（机器定义）、`GET /api/docs`（网页）、`GET /api/examples/session.md`（完整会话示例）。
 Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参数的操作明确标注“无”，不要构造额外请求体。请求表的“必填”针对所在对象；父对象可选不代表其内部必填字段可省略。响应表的“必返”表示字段存在，null 表示值可能为空。命名类型在文末数据模型中展开。
@@ -158,7 +158,7 @@ curl -fsS "$BASE/session/$SID/message" | jq '.'
 curl -fsS "$BASE/api/tasks/$SID" | jq '.detail.artifacts'
 ```
 
-轮询 `detail.run.state`，同时继续处理人工交互。`queued/running/stopping` 尚未结束；`completed/failed/timed_out/cancelled` 是终态，仅 `completed` 成功。失败原因见 `run.error`，输出文本在 `messages[].parts[]` 的 `content`，工具输入输出在 tool part。`usage=null` 表示用量未知，不能当作零。产物 ID 来自 `detail.artifacts`，下载用 `GET /api/artifacts/{id}/content`。
+轮询 `detail.run.state`，同时继续处理人工交互。`queued/running/stopping` 尚未结束；`completed/failed/timed_out/cancelled` 是终态，仅 `completed` 成功。失败原因见 `run.error`，输出文本在 `messages[].parts[]` 的 `content`，工具输入输出在 tool part。`usage=null` 表示用量未知，不能当作零。执行成功先落库，产物可能仍在登记；通过 `artifact.updated` 或刷新详情获取后续产物，登记失败只记录产物警告。产物 ID 来自 `detail.artifacts`，下载用 `GET /api/artifacts/{id}/content`。
 
 `session.status=idle` / `session.idle` 只表示空闲。若依据消息确认完成，最后助手消息须 `info.finish=stop` 且包含 `step-finish`；`tool-calls` 不表示本轮完成。
 
@@ -178,9 +178,19 @@ curl -fsS -X DELETE "$BASE/session/$SID"
 
 ##### 另一种提交方式：prompt_async
 
-`POST /session/{id}/prompt_async` 接受 `{parts,model?,agent?}`。虽然名称包含 async，HTTP 连接会等待本轮执行结束：204 成功且无响应体；502 执行失败；504 超时；409 取消。客户端 HTTP 超时应大于运行上限（默认 600 秒）。人工模式必须用另一连接处理审批和问题。该接口没有幂等键；以上立即返回 runId 的接口更适合人工交互流程。
+`POST /session/{id}/prompt_async` 接受 `{parts,model?,agent?}`。虽然名称包含 async，HTTP 连接会等待本轮执行结束：204 成功且无响应体；502 执行失败；504 超时；409 取消。客户端 HTTP 超时应大于运行上限（默认 1800 秒，可在系统信息页配置）。人工模式必须用另一连接处理审批和问题。该接口没有幂等键；以上立即返回 runId 的接口更适合人工交互流程。
 
 自动模式验证脚本：`GET /api/examples/evaluate.mjs`。Node.js >=22.21，无额外依赖；运行 `node evaluate.mjs --url http://127.0.0.1:6217 --directory /absolute/workspace --prompt '只回复 OK'`。
+
+##### 任务期限配置
+
+四个 Agent 默认共用 30 分钟任务总时限。从提交开始计算，包含排队和人工等待；持续输出不续期。`deadlineAt` 随本轮持久化，修改设置不会影响已提交的任务。
+
+在“系统信息 → 任务超时”输入 1–1440 的整数分钟数并保存。API 使用 `GET /api/settings` 取得配置与 revision，然后通过 `PUT /api/settings` 完整提交并设置 `settings.runTimeoutMs`（毫秒）。新提交立即生效，无需重启；`GET /api/runtime` 的 `limits.runTimeoutMs` 返回当前生效值。配置优先级为 settings.json 中的值、AGENT_LIMITS.runTimeoutMs、默认 1800000。
+
+评测脚本 `tools/evaluate.mjs` 默认读取生效时限并额外等待 60 秒，使用异步提交与轮询，避免 HTTP 长请求的响应头超时；显式 `--timeout` 仍可覆盖客户端等待时间。网关的兼容接口 `/session/{id}/prompt_async` 仍等待终态，区别于 OpenCode 原生同名接口；长任务客户端应优先使用 `/api/tasks/{id}/runs`。
+
+详见[超时与完成处理](TIMEOUTS.md)。
 
 
 路径/查询/额外请求头参数：无。
@@ -353,7 +363,7 @@ status=idle 仅表示当前空闲，不表示上一轮成功。message_count 为
 
 **POST /session/{id}/prompt_async — 提交消息并等待本轮结束**
 
-名称虽为 prompt_async，HTTP 连接会等待本轮终态：成功 204（空响应）、失败 502、超时 504、取消 409。HTTP 超时应大于运行上限（默认 600 秒）。manual 模式须在另一连接处理审批/问题。无需重新创建会话即可再次调用完成多轮对话。此接口无幂等键；需要立即返回 runId 和幂等重试请用 POST /api/tasks/{id}/runs。
+名称虽为 prompt_async，HTTP 连接会等待本轮终态：成功 204（空响应）、失败 502、超时 504、取消 409。HTTP 超时应大于运行上限（默认 1800 秒，可在系统信息页配置）。manual 模式须在另一连接处理审批/问题。无需重新创建会话即可再次调用完成多轮对话。此接口无幂等键；需要立即返回 runId 和幂等重试请用 POST /api/tasks/{id}/runs。
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -1120,7 +1130,7 @@ data: {"schemaVersion":1,"eventId":"evt_002","revision":2,"instanceId":"instance
 
 **PUT /api/settings — 替换资源配置**
 
-完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。保存后对相关 Agent 执行 apply。
+完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。Agent 资源配置保存后对相关 Agent 执行 apply；runTimeoutMs 为 60000–86400000 毫秒，保存后立即用于四个 Agent 的新任务，无需 apply 或重启，优先于 AGENT_LIMITS.runTimeoutMs。省略时使用环境变量或默认 1800000 毫秒。
 
 路径/查询/额外请求头参数：无。
 
@@ -2136,6 +2146,7 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | --- | --- | --- | --- | --- |
 | schemaVersion | number | 否 | default=1；const=1 | — |
 | defaultAgent | string | 否 | default="pi"；enum=["pi","opencode","codex","grok"] | — |
+| runTimeoutMs | integer | 否 | minimum=60000；maximum=86400000 | — |
 | agents | Array<object> | 否 | default=[{"id":"pi","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"opencode","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"codex","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"grok","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}}]；minItems=4；maxItems=4 | — |
 | agents[].id | string | 是 | enum=["pi","opencode","codex","grok"] | — |
 | agents[].enabled | boolean | 否 | default=false | — |
@@ -2191,6 +2202,7 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | --- | --- | --- | --- | --- |
 | schemaVersion | number | 是 | default=1；const=1 | — |
 | defaultAgent | string | 是 | default="pi"；enum=["pi","opencode","codex","grok"] | — |
+| runTimeoutMs | integer | 否 | minimum=60000；maximum=86400000 | — |
 | agents | Array<object> | 是 | default=[{"id":"pi","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"opencode","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"codex","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"grok","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}}]；minItems=4；maxItems=4 | — |
 | agents[].id | string | 是 | enum=["pi","opencode","codex","grok"] | — |
 | agents[].enabled | boolean | 是 | default=false | — |
@@ -2341,7 +2353,7 @@ Token 用量与美元费用；null 表示未报告，不能当作 0。
 | model | Model \| null | 是 |  | — |
 | state | string | 是 | enum=["queued","running","stopping","completed","failed","timed_out","cancelled"] | queued/running/stopping 为非终态；completed/failed/timed_out/cancelled 为终态，仅 completed 表示成功。 |
 | acceptedAt | string | 是 | format="date-time" | — |
-| deadlineAt | string | 是 | format="date-time" | — |
+| deadlineAt | string | 是 | format="date-time" | 提交时保存的绝对截止时间，包含排队和人工等待；修改系统时限不改变已提交执行。Agent 确认成功后的产物登记单独计时。 |
 | startedAt | string \| null | 是 | format="date-time" | — |
 | finishedAt | string \| null | 是 | format="date-time" | — |
 | stopReason | string \| null | 是 | enum=["user","timeout","deletion","shutdown"] | — |

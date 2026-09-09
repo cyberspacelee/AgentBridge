@@ -5,6 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { digestFile, discoverFiles } from "../src/runtime/artifacts.js";
 
+test("cancelled artifact work stops before filesystem access", async () => {
+  const reason = new Error("artifact deadline");
+  const signal = AbortSignal.abort(reason);
+  await assert.rejects(discoverFiles("/missing-inventory", signal), (error) => error === reason);
+  await assert.rejects(digestFile("/missing-artifact", signal), (error) => error === reason);
+});
+
 test("artifact verification and inventory enforce their inclusive size and entry limits", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-boundaries-"));
   try {

@@ -241,7 +241,7 @@ export function createServer(runtime: SessionRuntime) {
     })),
     storage: store.filename === ":memory:" ? "memory" : "sqlite",
     models: config.model ? [config.model] : [],
-    limits: config.limits,
+    limits: runtime.limits(),
     interactionDefaults: agentConfiguration(config, runtime.engine().id)?.interactionPolicy ?? defaultInteractionPolicy,
     capabilities: {
       text: true,

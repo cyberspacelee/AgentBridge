@@ -86,7 +86,7 @@ curl -fsS "$BASE/session/$SID/message" | jq '.'
 curl -fsS "$BASE/api/tasks/$SID" | jq '.detail.artifacts'
 ```
 
-轮询 `detail.run.state`，同时继续处理人工交互。`queued/running/stopping` 尚未结束；`completed/failed/timed_out/cancelled` 是终态，仅 `completed` 成功。失败原因见 `run.error`，输出文本在 `messages[].parts[]` 的 `content`，工具输入输出在 tool part。`usage=null` 表示用量未知，不能当作零。产物 ID 来自 `detail.artifacts`，下载用 `GET /api/artifacts/{id}/content`。
+轮询 `detail.run.state`，同时继续处理人工交互。`queued/running/stopping` 尚未结束；`completed/failed/timed_out/cancelled` 是终态，仅 `completed` 成功。失败原因见 `run.error`，输出文本在 `messages[].parts[]` 的 `content`，工具输入输出在 tool part。`usage=null` 表示用量未知，不能当作零。执行成功先落库，产物可能仍在登记；通过 `artifact.updated` 或刷新详情获取后续产物，登记失败只记录产物警告。产物 ID 来自 `detail.artifacts`，下载用 `GET /api/artifacts/{id}/content`。
 
 `session.status=idle` / `session.idle` 只表示空闲。若依据消息确认完成，最后助手消息须 `info.finish=stop` 且包含 `step-finish`；`tool-calls` 不表示本轮完成。
 
@@ -106,6 +106,16 @@ curl -fsS -X DELETE "$BASE/session/$SID"
 
 ## 另一种提交方式：prompt_async
 
-`POST /session/{id}/prompt_async` 接受 `{parts,model?,agent?}`。虽然名称包含 async，HTTP 连接会等待本轮执行结束：204 成功且无响应体；502 执行失败；504 超时；409 取消。客户端 HTTP 超时应大于运行上限（默认 600 秒）。人工模式必须用另一连接处理审批和问题。该接口没有幂等键；以上立即返回 runId 的接口更适合人工交互流程。
+`POST /session/{id}/prompt_async` 接受 `{parts,model?,agent?}`。虽然名称包含 async，HTTP 连接会等待本轮执行结束：204 成功且无响应体；502 执行失败；504 超时；409 取消。客户端 HTTP 超时应大于运行上限（默认 1800 秒，可在系统信息页配置）。人工模式必须用另一连接处理审批和问题。该接口没有幂等键；以上立即返回 runId 的接口更适合人工交互流程。
 
 自动模式验证脚本：`GET /api/examples/evaluate.mjs`。Node.js >=22.21，无额外依赖；运行 `node evaluate.mjs --url http://127.0.0.1:6217 --directory /absolute/workspace --prompt '只回复 OK'`。
+
+## 任务期限配置
+
+四个 Agent 默认共用 30 分钟任务总时限。从提交开始计算，包含排队和人工等待；持续输出不续期。`deadlineAt` 随本轮持久化，修改设置不会影响已提交的任务。
+
+在“系统信息 → 任务超时”输入 1–1440 的整数分钟数并保存。API 使用 `GET /api/settings` 取得配置与 revision，然后通过 `PUT /api/settings` 完整提交并设置 `settings.runTimeoutMs`（毫秒）。新提交立即生效，无需重启；`GET /api/runtime` 的 `limits.runTimeoutMs` 返回当前生效值。配置优先级为 settings.json 中的值、AGENT_LIMITS.runTimeoutMs、默认 1800000。
+
+评测脚本 `tools/evaluate.mjs` 默认读取生效时限并额外等待 60 秒，使用异步提交与轮询，避免 HTTP 长请求的响应头超时；显式 `--timeout` 仍可覆盖客户端等待时间。网关的兼容接口 `/session/{id}/prompt_async` 仍等待终态，区别于 OpenCode 原生同名接口；长任务客户端应优先使用 `/api/tasks/{id}/runs`。
+
+详见[超时与完成处理](TIMEOUTS.md)。

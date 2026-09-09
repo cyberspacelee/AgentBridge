@@ -11,7 +11,7 @@ test("invalid JSON names its environment variable without echoing credentials", 
 
 test("limits reject fractional, non-finite and out-of-range values", () => {
   const boundaries = {
-    runTimeoutMs: [100], startupTimeoutMs: [100], abortTimeoutMs: [100],
+    runTimeoutMs: [100, 86400000], artifactTimeoutMs: [100, 600000], startupTimeoutMs: [100], abortTimeoutMs: [100],
     maxConcurrentRuns: [1, 100], maxQueuedPerSession: [1, 1000], maxSessions: [1, 10000],
     maxSseConnections: [1, 10000], maxArtifactDownloads: [1, 16], maxEvents: [100],
     maxEventBytes: [1048576], eventRetentionMs: [1000], maxPartBytes: [1024],
@@ -22,4 +22,9 @@ test("limits reject fractional, non-finite and out-of-range values", () => {
       assert.equal(limitsSchema.safeParse({ [key]: value }).success, false, `${key}=${value}`);
     if (max) assert.ok(limitsSchema.safeParse({ [key]: max }).success, key);
   }
+});
+
+test("every engine defaults to a 30 minute gateway deadline", () => {
+  for (const engine of ["pi", "opencode", "codex", "grok"])
+    assert.equal(readConfig(["--engine", engine], {}).limits.runTimeoutMs, 1800000);
 });

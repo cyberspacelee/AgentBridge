@@ -1,5 +1,5 @@
 import type { SystemView } from "../../../shared/system"
-import { useContext } from "react"
+import { useContext, useState } from "react"
 import { Link } from "react-router-dom"
 import { ChevronDown, Bot } from "lucide-react"
 import type { SettingsView } from "../../../shared/settings"
@@ -23,11 +23,14 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { GatewaySettingsPanel } from "./gateway-settings"
 import { NetworkSettingsPanel } from "./network-settings"
+import { TimeoutSettingsPanel } from "./timeout-settings"
 
 export function Settings() {
   const { runtime, revision } = useContext(GatewayContext)
   const system = useQuery<SystemView>("/api/system", revision)
   const settings = useQuery<SettingsView>("/api/settings")
+  const [savedSettings, setSavedSettings] = useState<SettingsView>()
+  const currentSettings = savedSettings ?? settings.data
   return (
     <div className="page settings-page flex flex-col gap-6">
       <div className="page-heading mb-0 flex-nowrap items-start">
@@ -37,8 +40,11 @@ export function Settings() {
             管理下载源、网络连接与实例运行信息。
           </p>
         </div>
-        <Button variant="outline" size="sm"
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => {
+            setSavedSettings(undefined)
             settings.reload()
             system.reload()
           }}
@@ -48,6 +54,14 @@ export function Settings() {
       </div>
       <GatewaySettingsPanel system={system.data} />
       <NetworkSettingsPanel />
+      {currentSettings && runtime && (
+        <TimeoutSettingsPanel
+          key={runtime.instanceId}
+          initial={currentSettings}
+          fallback={runtime.limits.runTimeoutMs}
+          onSaved={setSavedSettings}
+        />
+      )}
       <Failure error={settings.error ?? system.error} />
       {system.data?.maintenance !== "ready" && system.data && (
         <p role="status">
@@ -129,7 +143,6 @@ export function Settings() {
                 <Bot data-icon="inline-start" />
                 管理 Agents
               </Button>
-
             </CardFooter>
           </Card>
           <Card>
@@ -160,7 +173,12 @@ export function Settings() {
               <CollapsibleContent>
                 <CardContent className="pt-4">
                   <dl className="agent-facts">
-                    {Object.entries(runtime.limits).map(([key, value]) => (
+                    {Object.entries({
+                      ...runtime.limits,
+                      runTimeoutMs:
+                        currentSettings?.settings.runTimeoutMs ??
+                        runtime.limits.runTimeoutMs,
+                    }).map(([key, value]) => (
                       <div key={key}>
                         <dt>{limitNames[key] ?? key}</dt>
                         <dd>
@@ -185,7 +203,8 @@ export function Settings() {
 
 const limitNames: Record<string, string> = {
   startupTimeoutMs: "启动超时",
-  runTimeoutMs: "执行超时",
+  runTimeoutMs: "任务总时限",
+  artifactTimeoutMs: "产物登记超时",
   abortTimeoutMs: "停止超时",
   maxConcurrentRuns: "最大并发执行数",
   maxSessions: "最大会话数",

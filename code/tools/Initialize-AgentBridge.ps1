@@ -8,6 +8,7 @@ param(
     [string] $SystemPath,
     [string] $RuntimesPath,
     [string] $SkillsPath,
+    [ValidateRange(1, 1440)] [int] $RunTimeoutMinutes,
     [switch] $Start,
     [string] $DataDirectory = $(if ($env:AGENT_DESKTOP_DATA_DIR) { $env:AGENT_DESKTOP_DATA_DIR } else { Join-Path $env:APPDATA 'AgentBridge' })
 )
@@ -153,6 +154,8 @@ try {
     if ($runtimeDirectory) { $initializeArgs += @('--runtimes', $runtimeDirectory) }
     if ($skillDirectory) { $initializeArgs += @('--skills', $skillDirectory) }
     if ($systemFile) { $initializeArgs += @('--system', $systemFile) }
+    # Persist an explicit override; never silently replace an imported timeout.
+    if ($PSBoundParameters.ContainsKey('RunTimeoutMinutes')) { $initializeArgs += @('--run-timeout-minutes', [string] $RunTimeoutMinutes) }
     & $node @initializeArgs
     if ($LASTEXITCODE -ne 0) { throw "Initialization failed (exit $LASTEXITCODE). Saved configuration and completed installations are retained." }
     if ($Start) {

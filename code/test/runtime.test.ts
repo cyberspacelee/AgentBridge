@@ -206,7 +206,7 @@ test("bundled evaluation script collects successful results and fails cancelled 
   try {
     const url = await server.listen({ host: "127.0.0.1", port: 0 });
     for (const cancelled of [false, true]) {
-      const result = promisify(execFile)(process.execPath, [path.resolve("tools/evaluate.mjs"), "--url", url, "--directory", f.directory, "--engine", "pi", "--timeout", "10000"], { timeout: 15000 }).then(
+      const result = promisify(execFile)(process.execPath, [path.resolve("tools/evaluate.mjs"), "--url", url, "--directory", f.directory, "--engine", "pi", ...(cancelled ? ["--timeout", "10000"] : [])], { timeout: 15000 }).then(
         (value) => ({ ...value, code: 0 }),
         (error) => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }),
       );
@@ -1006,6 +1006,7 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
     ).json();
     assert.equal(overview.completed, 1);
     assert.equal(overview.usage.input, null);
+    await until(() => f.store.list("artifacts").length > 0);
     const artifact = f.store.list("artifacts")[0]!;
     const download = `/api/artifacts/${artifact.id}/content`;
     assert.equal((await server.inject(download)).body, "original report");
@@ -1448,4 +1449,64 @@ test("batched log retention remains bounded and keeps the newest diagnostics", a
     assert.ok(count >= 10000 && count <= 10099, String(count));
     assert.equal(f.store.db.prepare("SELECT message FROM runtime_logs ORDER BY id DESC LIMIT 1").get()!.message, "10249");
   } finally { await f.close(); }
+});
+
+test("timeout settings persist, validate and affect only subsequently accepted runs", async () => {
+  const f = await fixture(5000);
+  const server = createServer(f.runtime);
+  try {
+    const first = await f.runtime.submit(input(f.directory));
+    const originalDeadline = f.runtime.run(first.runId).deadlineAt;
+    const view = (await server.inject("/api/settings")).json();
+    for (const value of [0, -1, 59999, 86400001, 1800000.5, "1800000", null]) {
+      const response = await server.inject({ method: "PUT", url: "/api/settings", payload: { revision: view.revision, settings: { ...view.settings, runTimeoutMs: value } } });
+      assert.equal(response.statusCode, 400, String(value));
+    }
+    const saved = await server.inject({ method: "PUT", url: "/api/settings", payload: { revision: view.revision, settings: { ...view.settings, runTimeoutMs: 1800000 } } });
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(new SettingsManager(f.config).view().settings.runTimeoutMs, 1800000);
+    assert.equal((await server.inject("/api/runtime")).json().limits.runTimeoutMs, 1800000);
+    const second = await f.runtime.submit(input(f.directory), first.sessionId);
+    const next = f.runtime.run(second.runId);
+    assert.ok(Math.abs(Date.parse(next.deadlineAt) - Date.parse(next.acceptedAt) - 1800000) <= 2);
+    assert.equal(f.runtime.run(first.runId).deadlineAt, originalDeadline);
+    const conflict = await server.inject({ method: "PUT", url: "/api/settings", payload: { revision: view.revision, settings: { ...view.settings, runTimeoutMs: 3600000 } } });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(f.runtime.limits().runTimeoutMs, 1800000);
+  } finally { await server.close(); await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test("native success remains completed when artifact work runs beyond the execution deadline", async (t) => {
+  const fs = (await import("node:fs/promises")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const f = await fixture(5000);
+  const originalStat = fs.stat;
+  let scanning = false;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const accepted = await f.runtime.submit(input(f.directory));
+    await until(() => f.adapter.executions.has(accepted.sessionId));
+    const file = path.join(f.directory, "result.md");
+    await writeFile(file, "finished output");
+    t.mock.method(fs, "stat", async (...args: Parameters<typeof fs.stat>) => {
+      if (String(args[0]) === file) { scanning = true; await blocked; }
+      return Reflect.apply(originalStat, fs, args);
+    });
+    syncBuiltinESMExports();
+    f.adapter.complete(accepted.sessionId);
+    await until(() => scanning);
+    const run = f.runtime.run(accepted.runId);
+    f.store.transaction(() => f.store.put("runs", { ...run, deadlineAt: new Date(0).toISOString() }));
+    Reflect.get(f.runtime, "schedule").call(f.runtime);
+    assert.equal(f.runtime.run(accepted.runId).state, "completed");
+    release();
+    await until(() => f.store.list("artifacts").length === 1);
+    assert.equal(f.runtime.run(accepted.runId).state, "completed");
+  } finally {
+    release();
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await f.close();
+  }
 });

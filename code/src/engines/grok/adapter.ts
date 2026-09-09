@@ -245,7 +245,7 @@ export class GrokAdapter implements EngineAdapter {
           ...run.inputParts.map((p) => ({ type: "text", text: p.text })),
         ],
       },
-      this.config.limits.runTimeoutMs,
+      null,
     );
     const done = Promise.race([response, lost]).then((result): EngineResult => {
       const active = native.active!;

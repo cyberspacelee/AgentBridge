@@ -3,6 +3,8 @@ import type { EngineHealth, ModelOption } from "./contracts.js";
 
 export const defaultInteractionPolicy = { permission: "auto", question: "auto" } as const;
 export const defaultAgent = "pi";
+export const defaultRunTimeoutMs = 30 * 60 * 1000;
+export const runTimeoutSetting = z.number().int().min(60000).max(24 * 60 * 60 * 1000);
 
 export const agentIds = ["pi", "opencode", "codex", "grok"] as const;
 export const agentIdSchema = z.enum(agentIds);
@@ -126,6 +128,7 @@ export const settingsSchema = z
   .object({
     schemaVersion: z.literal(1).default(1),
     defaultAgent: agentIdSchema.default(defaultAgent),
+    runTimeoutMs: runTimeoutSetting.optional(),
     agents: z
       .array(agentSchema)
       .length(4)

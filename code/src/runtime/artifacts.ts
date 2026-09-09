@@ -63,12 +63,15 @@ const media: Record<string, string> = {
 };
 export async function discoverFiles(
   root: string,
+  signal?: AbortSignal,
 ): Promise<Map<string, string>> {
   const files = new Map<string, string>();
   let visited = 0;
   async function visit(directory: string, depth: number) {
+    signal?.throwIfAborted();
     if (depth > 10) return;
     for await (const entry of await opendir(directory)) {
+      signal?.throwIfAborted();
       if (++visited > 10000)
         throw new GatewayError(
           "SERVICE_UNAVAILABLE",
@@ -112,7 +115,8 @@ export async function artifactPath(
     throw new GatewayError("NOT_FOUND", "Artifact not available", 404);
   return resolved;
 }
-export async function digestFile(filename: string): Promise<string> {
+export async function digestFile(filename: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   if ((await stat(filename)).size > 100 * 1024 * 1024)
     throw new GatewayError(
       "SERVICE_UNAVAILABLE",
@@ -120,17 +124,19 @@ export async function digestFile(filename: string): Promise<string> {
       503,
     );
   const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filename)) hash.update(chunk);
+  for await (const chunk of createReadStream(filename, { signal })) hash.update(chunk);
   return hash.digest("hex");
 }
 export async function registerChangedFiles(
   session: Session,
   run: Run,
   before: Map<string, string>,
+  signal?: AbortSignal,
 ): Promise<Artifact[]> {
-  const after = await discoverFiles(session.directory);
+  const after = await discoverFiles(session.directory, signal);
   const result: Artifact[] = [];
   for (const [relativePath, signature] of after) {
+    signal?.throwIfAborted();
     if (before.get(relativePath) === signature) continue;
     const filename = await artifactPath(session.directory, relativePath);
     const info = await stat(filename);
@@ -145,7 +151,7 @@ export async function registerChangedFiles(
         "application/octet-stream",
       sizeBytes: info.size,
       modifiedAt: info.mtime.toISOString(),
-      digest: await digestFile(filename),
+      digest: await digestFile(filename, signal),
       registeredAt: new Date().toISOString(),
       availability: "available",
       validation: "not_checked",

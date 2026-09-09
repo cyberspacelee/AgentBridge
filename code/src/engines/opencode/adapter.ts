@@ -49,6 +49,7 @@ interface NativeSession {
     cancelled: boolean;
     submission?: Promise<unknown>;
     error?: EngineResult["error"];
+    interactionIds: Set<string>;
   };
 }
 
@@ -217,15 +218,7 @@ export class OpenCodeAdapter implements EngineAdapter {
           this.child ? processDiagnostic(this.child) : this.config.opencode.url,
           diagnosticSecrets(this.config),
         );
-      const response = await within(
-        fetch(this.url("/global/event"), {
-          headers: this.headers(),
-          signal: this.stream.signal,
-        }),
-        this.config.limits.startupTimeoutMs,
-      );
-      if (!response.ok || !response.body)
-        throw engineError("OpenCode event stream unavailable");
+      const response = await this.eventStream();
       this.generation++;
       this.state = {
         ...this.state,
@@ -234,7 +227,7 @@ export class OpenCodeAdapter implements EngineAdapter {
         message: null,
         processes: 1,
       };
-      this.streamJob = this.consume(response).catch((error) => {
+      this.streamJob = this.watchEvents(response).catch((error) => {
         if (!this.stream.signal.aborted) {
           this.state.status = "degraded";
           this.state.message = engineError("OpenCode event stream failed", error, diagnosticSecrets(this.config)).message;
@@ -254,6 +247,53 @@ export class OpenCodeAdapter implements EngineAdapter {
           () => {},
         );
       throw error;
+    }
+  }
+  private async eventStream() {
+    const header = new AbortController();
+    const timer = setTimeout(() => header.abort(), this.config.limits.startupTimeoutMs);
+    try {
+      const response = await fetch(this.url("/global/event"), {
+        headers: this.headers(),
+        signal: AbortSignal.any([this.stream.signal, header.signal]),
+      });
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        throw engineError("OpenCode event stream unavailable");
+      }
+      return response;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  private async watchEvents(response: Response) {
+    let failures = 0;
+    while (!this.stream.signal.aborted) {
+      const started = Date.now();
+      try { await this.consume(response); }
+      catch (error) {
+        if (this.stream.signal.aborted) return;
+        await response.body?.cancel().catch(() => {});
+        if (Date.now() - started >= this.config.limits.startupTimeoutMs) failures = 0;
+        let failure = error;
+        for (;;) {
+          if (++failures > 3) throw failure;
+          await delay(250 * failures, undefined, { signal: this.stream.signal });
+          try {
+            response = await this.eventStream();
+            // Recover approvals missed during the gap; run() reconciles final messages.
+            const directories = new Set([...this.sessions.values()].filter((s) => s.active).map((s) => s.session.directory));
+            for (const directory of directories)
+              for (const kind of ["permission", "question"])
+                for (const pending of z.array(z.record(z.string(), z.unknown())).parse(await this.request(`/${kind}`, "GET", undefined, directory)))
+                  this.event({ type: `${kind}.asked`, properties: pending });
+            break;
+          } catch (error) {
+            await response.body?.cancel().catch(() => {});
+            failure = error;
+          }
+        }
+      }
     }
   }
   private async consume(response: Response) {
@@ -459,6 +499,8 @@ export class OpenCodeAdapter implements EngineAdapter {
       event.type === "permission.asked" ||
       event.type === "question.asked"
     ) {
+      const key = `${event.type}:${str(properties.id)}`;
+      if (active.interactionIds.has(key)) return;
       const id = randomUUID();
       const kind =
         event.type === "permission.asked" ? "permission" : "question";
@@ -492,6 +534,7 @@ export class OpenCodeAdapter implements EngineAdapter {
         reply: null,
         error: null,
       };
+      active.interactionIds.add(key);
       this.interactions.set(id, {
         nativeId: z.string().parse(properties.id),
         sessionId: native.session.id,
@@ -513,11 +556,12 @@ export class OpenCodeAdapter implements EngineAdapter {
       messages: new Map<string, Message>(),
       parentId: `msg_${Date.now().toString(16)}${randomBytes(12).toString("hex")}`,
       cancelled: false,
+      interactionIds: new Set(),
     };
     native.active = active;
     try {
       active.submission = this.request(
-        `/session/${encodeURIComponent(native.nativeId)}/message`,
+        `/session/${encodeURIComponent(native.nativeId)}/prompt_async`,
         "POST",
         {
           messageID: active.parentId,
@@ -526,20 +570,43 @@ export class OpenCodeAdapter implements EngineAdapter {
           ...(run.model ? { model: run.model } : {}),
         },
         session.directory,
-        this.config.limits.runTimeoutMs + this.config.limits.abortTimeoutMs,
       );
-      await active.submission;
+      let submissionError: unknown;
+      await active.submission.catch((error) => { submissionError = error; });
+      let accepted = submissionError === undefined;
+      const reconcileUntil = Date.now() + this.config.limits.startupTimeoutMs;
+      let failures = 0;
+      let messages: Record<string, unknown>[] = [];
+      // SSE supplies live updates. Poll authoritative state to survive a missed terminal event.
+      // Never replay an ambiguous POST: its tool calls may already have changed the workspace.
+      while (!active.cancelled) {
+        try {
+          const statuses = object(await this.request("/session/status", "GET", undefined, session.directory));
+          if (!accepted || !statuses[native.nativeId] || object(statuses[native.nativeId]).type === "idle") {
+            messages = z.array(z.record(z.string(), z.unknown())).parse(
+              await this.request(`/session/${encodeURIComponent(native.nativeId)}/message`, "GET", undefined, session.directory),
+            );
+            accepted ||= messages.some((m) => object(m.info).id === active.parentId);
+            const replies = messages.filter((m) => {
+              const info = object(m.info);
+              return info.role === "assistant" && info.parentID === active.parentId;
+            });
+            const last = replies.at(-1);
+            const idle = !statuses[native.nativeId] || object(statuses[native.nativeId]).type === "idle";
+            if (idle && ((last && object(object(last.info).time).completed) || active.error)) {
+              const confirmed = object(await this.request("/session/status", "GET", undefined, session.directory));
+              if (!confirmed[native.nativeId] || object(confirmed[native.nativeId]).type === "idle") break;
+            }
+          }
+          failures = 0;
+        } catch (error) {
+          if (++failures >= 3) throw error;
+        }
+        if (!accepted && Date.now() >= reconcileUntil)
+          throw engineError("OpenCode submission outcome could not be confirmed; request was not replayed", submissionError, diagnosticSecrets(this.config));
+        await delay(500);
+      }
       if (active.cancelled) return { outcome: "aborted" };
-      const messages = z
-        .array(z.record(z.string(), z.unknown()))
-        .parse(
-          await this.request(
-            `/session/${encodeURIComponent(native.nativeId)}/message`,
-            "GET",
-            undefined,
-            session.directory,
-          ),
-        );
       let last: Message | undefined;
       const usages: Usage[] = [];
       for (const record of messages) {

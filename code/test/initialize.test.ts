@@ -30,6 +30,7 @@ test("the shipped initialization example matches current settings and defaults o
     const { settings, selected } = await readProfile(path.resolve("tools/initialize.example.json"), settingsSchema, agentIds);
     assert.equal(settings.schemaVersion, 1);
     assert.equal(settings.defaultAgent, "codex");
+    assert.equal(settings.runTimeoutMs, 1800000);
     assert.equal(settings.providers[0].api, "openai-responses");
     assert.equal(settings.providers[0].apiKey, env.AGENT_OPENAI_API_KEY);
     assert.deepEqual(settings.agents.filter((agent: { enabled: boolean }) => agent.enabled).map((agent: { id: string }) => agent.id), ["codex"]);
@@ -59,7 +60,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
     await symlink(path.resolve("node_modules"), path.join(backend, "node_modules"), process.platform === "win32" ? "junction" : "dir");
     await execute(process.execPath, [path.resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.json", "--outDir", path.join(backend, "dist")], { timeout: 60000 });
     const npm = await findNpm(process.execPath);
-    const args = [path.join(directory, "tools/initialize.mjs"), backend, data, filename, npm];
+    const args = [path.join(directory, "tools/initialize.mjs"), backend, data, filename, npm, "--run-timeout-minutes", "45"];
     const options = { timeout: 30000, env: { ...process.env, AGENT_HOST: "invalid-host", AGENT_PORT: "invalid-port", AGENT_ENGINE: "invalid-engine" } };
     await writeFile(filename, JSON.stringify({ schemaVersion: 1, defaultAgent: "codex" }));
     for (const saved of [false, true]) {
@@ -72,6 +73,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       if (saved) assert.equal(system.network.npmRegistry, "https://registry.npmmirror.com/");
       const settings = settingsSchema.parse(JSON.parse(await readFile(path.join(data, "settings.json"), "utf8")));
       assert.equal(settings.defaultAgent, "codex");
+      assert.equal(settings.runTimeoutMs, 2700000);
       assert.ok(settings.agents.every((agent) => !agent.enabled));
       await assert.rejects(readFile(path.join(data, ".host.lock")), { code: "ENOENT" });
       system.gateway = system.appliedGateway = { host: "192.0.2.1", port: 43210 }; // Cannot bind locally; the helper must use a temporary loopback listener.
@@ -79,6 +81,10 @@ test("initialization CLI starts through linked paths, preserves network/listener
       await writeFile(systemFile, JSON.stringify(system));
     }
     const original = await readFile(path.join(data, "settings.json"), "utf8");
+    for (const invalid of ["0", "1441", "1.5", "NaN"])
+      await assert.rejects(execute(process.execPath, [...args.slice(0, -1), invalid], options), /integer from 1 to 1440/);
+    await execute(process.execPath, args.slice(0, -2), options);
+    assert.equal(JSON.parse(await readFile(path.join(data, "settings.json"), "utf8")).runTimeoutMs, 2700000, "rerunning an older profile preserves the page setting");
     await writeFile(filename, JSON.stringify({ schemaVersion: 3 }));
     await assert.rejects(execute(process.execPath, args, options), /Invalid initialization configuration/);
     await writeFile(filename, '{"apiKey":"do-not-print-this-secret", broken}');
@@ -119,10 +125,11 @@ test("initialization CLI starts through linked paths, preserves network/listener
       });
       const root = path.join(directory, "PowerShell data");
       const { stdout } = await execute(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve("tools/Initialize-AgentBridge.ps1"), "-ExePath", exe,
-        "-SettingsPath", filename, "-SystemPath", systemFile, "-RuntimesPath", runtimes + ".zip", "-SkillsPath", skills + ".zip", "-DataDirectory", root], options);
+        "-SettingsPath", filename, "-SystemPath", systemFile, "-RuntimesPath", runtimes + ".zip", "-SkillsPath", skills + ".zip", "-DataDirectory", root, "-RunTimeoutMinutes", "45"], options);
       assert.match(stdout, /Initialization complete/);
       const saved = settingsSchema.parse(JSON.parse(await readFile(path.join(root, "data/settings.json"), "utf8")));
       assert.equal(saved.skills[0]!.path, path.join(root, "data/skills/office"));
+      assert.equal(saved.runTimeoutMs, 2700000);
       assert.equal(await readFile(path.join(saved.skills[0]!.path, "assets/template.txt"), "utf8"), "template");
       assert.deepEqual(JSON.parse(await readFile(path.join(root, "data/system.json"), "utf8")).gateway, system.gateway);
 

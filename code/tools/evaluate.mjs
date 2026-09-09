@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { Readable } from "node:stream";
 import { createInterface } from "node:readline";
@@ -9,13 +11,11 @@ const { values } = parseArgs({ options: {
   provider: { type: "string" },
   model: { type: "string" },
   prompt: { type: "string", default: "只回复 OK" },
-  timeout: { type: "string", default: "660000" },
+  timeout: { type: "string" },
 } });
 if (!values.directory) throw new Error("请用 --directory 指定网关主机上存在的绝对工作目录");
 if (!!values.provider !== !!values.model) throw new Error("--provider 和 --model 必须一起传入");
-const timeout = Number(values.timeout);
-if (!Number.isSafeInteger(timeout) || timeout < 1000 || timeout > 2147483647) throw new Error("--timeout 必须为 1000–2147483647 毫秒");
-const deadline = AbortSignal.timeout(timeout);
+let deadline = AbortSignal.timeout(30000);
 const base = new URL(values.url);
 if (!["http:", "https:"].includes(base.protocol) || base.username || base.password) throw new Error("--url 必须为无凭据的 HTTP(S) 网关地址");
 async function request(route, body, signal = deadline) {
@@ -27,6 +27,9 @@ async function request(route, body, signal = deadline) {
   return { status: response.status, result };
 }
 const { result: runtime } = await request("/api/runtime");
+const timeout = values.timeout === undefined ? runtime.limits.runTimeoutMs + 60000 : Number(values.timeout);
+if (!Number.isSafeInteger(timeout) || timeout < 1000 || timeout > 2147483647) throw new Error("--timeout 必须为 1000–2147483647 毫秒");
+deadline = AbortSignal.timeout(timeout);
 const engine = runtime.engines.find((item) => item.id === (values.engine ?? runtime.engine));
 if (!engine || engine.health.status !== "ready") throw new Error("所选引擎尚未就绪");
 const model = values.model ? { providerID: values.provider, modelID: values.model } : engine.defaultModel;
@@ -61,14 +64,22 @@ try {
     }
     throw new Error("SSE 连接在评测结束前关闭");
   })();
-  const prompt = await Promise.race([request(`${prefix}/prompt_async`, {
-    parts: [{ type: "text", text: values.prompt }], model, agent: "assistant",
+  const { result: accepted } = await Promise.race([request(`/api/tasks/${encodeURIComponent(sessionId)}/runs`, {
+    submissionId: randomUUID(), parts: [{ type: "text", text: values.prompt }], model,
   }), reading]);
+  let run;
+  do {
+    const { result } = await Promise.race([request(`/api/runs/${encodeURIComponent(accepted.runId)}`), reading]);
+    run = result.detail.run;
+    if (["completed", "failed", "timed_out", "cancelled"].includes(run.state)) break;
+    await delay(250, undefined, { signal: deadline });
+  } while (true);
+  if (run.state !== "completed") throw Object.assign(new Error(run.error?.message ?? `任务结束：${run.state}`), { code: run.state === "cancelled" ? "CONFLICT" : run.error?.code ?? "EVALUATION_FAILED" });
   await Promise.race([idle.promise, reading]);
   ({ result: messages } = await request(`${prefix}/message`));
   ({ result: session } = await request(prefix));
   const last = messages.at(-1);
-  completed = prompt.status === 204 && session.status === "idle" && last?.role === "assistant" && last.info.finish === "stop" && last.parts.some((part) => part.type === "step-finish");
+  completed = run.state === "completed" && session.status === "idle" && last?.role === "assistant" && last.info.finish === "stop" && last.parts.some((part) => part.type === "step-finish");
   if (!completed) throw new Error("本轮缺少成功终态或最终助手消息");
 } catch (error) {
   failure = { code: error.code ?? "EVALUATION_FAILED", message: error.message };

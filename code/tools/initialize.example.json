@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "defaultAgent": "codex",
+  "runTimeoutMs": 1800000,
   "providers": [
     {
       "id": "compatible",

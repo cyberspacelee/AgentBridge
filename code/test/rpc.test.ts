@@ -21,8 +21,12 @@ test("RPC correlates out-of-order replies, expires waiters and rejects every wai
       ]), [{ value: "slow" }, { value: "fast" }]);
       await assert.rejects(rpc.request("hang", {}, 20), /timed out/);
       assert.equal(Reflect.get(rpc, "pending").size, 0);
+      const longPrompt = rpc.request("echo", { value: "gateway-owned", delay: 80 }, null);
+      const waiter = [...Reflect.get(rpc, "pending").values()][0] as { timer?: unknown };
+      assert.equal(waiter.timer, undefined);
+      assert.deepEqual(await longPrompt, { value: "gateway-owned" });
       const results = await within(Promise.allSettled([
-        rpc.request("hang", {}), rpc.request(failure, {}),
+        rpc.request("hang", {}, null), rpc.request(failure, {}),
       ]), 3000);
       assert.ok(results.every((result) => result.status === "rejected"));
       assert.equal(Reflect.get(rpc, "pending").size, 0);
