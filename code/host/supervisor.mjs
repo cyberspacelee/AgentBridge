@@ -43,7 +43,9 @@ async function lockDirectory(directory) {
   try { await create(); }
   catch (error) {
     if (error.code !== "EEXIST") throw error;
-    const previous = JSON.parse(await readFile(filename, "utf8"));
+    let previous;
+    try { previous = JSON.parse(await readFile(filename, "utf8")); }
+    catch { await rm(filename, { force: true }); await create(); return async () => { try { if (JSON.parse(await readFile(filename, "utf8")).id === id) await rm(filename); } catch (error) { if (error.code !== "ENOENT") throw error; } }; }
     if (!Number.isSafeInteger(previous.pid) || previous.pid <= 1) throw new Error("实例锁损坏，请核对目录中的进程归属");
     let alive = true;
     try { process.kill(previous.pid, 0); } catch (error) { if (error.code === "ESRCH") alive = false; else throw error; }

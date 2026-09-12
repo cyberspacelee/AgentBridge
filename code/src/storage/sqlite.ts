@@ -53,10 +53,10 @@ export class Store {
   ) {
     if (filename !== ":memory:")
       mkdirSync(path.dirname(filename), { recursive: true });
-    this.db = new DatabaseSync(filename, { timeout: 100 });
+    this.db = new DatabaseSync(filename, { timeout: 5000 });
     try {
       this.db.exec(
-        "PRAGMA foreign_keys=ON; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;",
+        "PRAGMA foreign_keys=ON; BEGIN IMMEDIATE; COMMIT;",
       );
       const version = Number(
         this.db.prepare("PRAGMA user_version").get()?.user_version ?? 0,
@@ -255,20 +255,24 @@ export class Store {
   }
   messages(sessionId: string, runId?: string): Message[] {
     const params = runId ? [sessionId, runId] : [sessionId];
-    return this.db
+    const rows = this.db
       .prepare(
         `SELECT * FROM messages WHERE sessionId=? ${runId ? "AND runId=?" : ""} ORDER BY rowid`,
       )
-      .all(...params)
-      .map((row) => ({
+      .all(...params);
+    const parts = new Map<string, MessagePart[]>();
+    if (rows.length) {
+      const ids = rows.map((row) => String(row.id));
+      const placeholders = ids.map(() => "?").join(",");
+      for (const part of this.db.prepare(`SELECT messageId,content FROM message_parts WHERE messageId IN (${placeholders}) ORDER BY position`).all(...ids)) {
+        const id = String(part.messageId);
+        (parts.get(id) ?? parts.set(id, []).get(id)!).push(JSON.parse(String(part.content)) as MessagePart);
+      }
+    }
+    return rows.map((row) => ({
         ...row,
         info: JSON.parse(String(row.info)),
-        parts: this.db
-          .prepare(
-            "SELECT content FROM message_parts WHERE messageId=? ORDER BY position",
-          )
-          .all(String(row.id))
-          .map((p) => JSON.parse(String(p.content)) as MessagePart),
+        parts: parts.get(String(row.id)) ?? [],
       })) as unknown as Message[];
   }
   emit(input: EventInput) {

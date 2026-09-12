@@ -207,14 +207,11 @@ export function createServer(runtime: SessionRuntime) {
     instanceId: store.instanceId,
   }));
   server.get("/health/ready", async (_r, reply) => {
-    const ok =
-      store.healthy &&
-      runtime.adapters.some(
-        (adapter) => runtime.agentHealth(adapter.id).status === "ready",
-      );
+    const engine = runtime.agentHealth(runtime.engine().id);
+    const ok = store.healthy && engine.status === "ready";
     return reply
       .code(ok ? 200 : 503)
-      .send({ ok, engine: runtime.agentHealth(runtime.engine().id) });
+      .send({ ok, engine });
   });
   server.get("/metrics", async (_r, reply) =>
     reply
