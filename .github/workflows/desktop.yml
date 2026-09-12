@@ -3,6 +3,7 @@ name: Desktop
 on:
   workflow_dispatch:
   push:
+    branches: [master, main]
     tags: ["v*"]
   pull_request:
     paths:
