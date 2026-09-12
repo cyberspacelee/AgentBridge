@@ -108,8 +108,24 @@ export class Store {
   }
 
   transaction<T>(action: () => T): T {
-    // Nested writes join the outer transaction; a caught inner error is not a savepoint rollback.
-    if (this.active) return action();
+    if (this.active) {
+      const name = `nested_${this.pending.length}_${this.committedActions.length}`;
+      const pending = this.pending.length;
+      const actions = this.committedActions.length;
+      this.db.exec(`SAVEPOINT ${name}`);
+      try {
+        const result = action();
+        if (result && typeof result === "object" && "then" in result)
+          throw new Error("Store transactions must be synchronous");
+        this.db.exec(`RELEASE SAVEPOINT ${name}`);
+        return result;
+      } catch (error) {
+        this.db.exec(`ROLLBACK TO SAVEPOINT ${name}; RELEASE SAVEPOINT ${name}`);
+        this.pending.length = pending;
+        this.committedActions.length = actions;
+        throw error;
+      }
+    }
     this.db.exec("BEGIN IMMEDIATE");
     this.active = true;
     this.pending = [];

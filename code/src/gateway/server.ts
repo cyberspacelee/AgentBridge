@@ -118,7 +118,7 @@ export function createServer(runtime: SessionRuntime) {
     loggerInstance: logger,
     genReqId: () => randomUUID(),
     bodyLimit: 1024 * 1024,
-    requestTimeout: 0,
+    requestTimeout: 30000,
   });
   systemRoutes(server, runtime);
   const telemetry = new Telemetry(runtime);
