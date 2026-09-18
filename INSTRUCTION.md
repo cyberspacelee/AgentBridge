@@ -29,7 +29,7 @@ pnpm desktop:prepare
 pnpm test:desktop
 ```
 
-应用目录和分发包输出到 `code/desktop-release/`；本地命令不自动发布。GitHub Actions 的 Desktop 工作流在 PR 中只上传 Artifacts；手动运行或推送与 `code/desktop/package.json` 版本一致的 `v*` 标签，会在三平台全部成功后创建 GitHub Release，附带安装包和更新元数据。已有 Release 不覆盖，发布下一版本前需同步更新 `code/package.json` 和桌面版本号。桌面冒烟测试需要图形环境，Linux 无显示器环境可使用 `xvfb-run -a pnpm test:desktop`。分发配置包含三个平台，不代表 Windows/macOS 已完成实机验收或安装包已经签名、公证和发布。
+应用目录和分发包输出到 `code/desktop-release/`；本地命令不自动发布。GitHub Actions 的 Desktop 工作流在 PR 中只上传 Artifacts；手动运行或推送与 `code/desktop/package.json` 版本一致的 `v*` 标签，会在三平台全部成功后创建 GitHub Release，附带安装包和更新元数据。已有 Release 默认不覆盖；只有明确手动勾选 `replace_existing` 才会重新发布同一版本。常规发布下一版本前需同步更新 `code/package.json` 和桌面版本号。桌面冒烟测试需要图形环境，Linux 无显示器环境可使用 `xvfb-run -a pnpm test:desktop`。分发配置包含三个平台，不代表 Windows/macOS 已完成实机验收或安装包已经签名、公证和发布。
 
 #### PowerShell 一键安装与初始化
 

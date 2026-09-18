@@ -1,6 +1,6 @@
 # 接口与事件契约
 
-网关只有一套消息、交互和事件契约，以 code/shared/contracts.ts 的 Zod 请求定义和共享类型为准。引擎适配器负责原生协议转换；HTTP、SSE、Web/Desktop 与评测直接使用共享对象。所有 schemaVersion 与数据库版本为 1，不兼容历史格式，不提供迁移。
+网关只有一套消息、交互和事件契约，以 code/shared/contracts.ts 的 Zod 请求定义和共享类型为准。LLM proxy 负责 provider 的 client/upstream API 转换，引擎适配器负责 engine 原生协议转换；HTTP、SSE、Web/Desktop 与评测直接使用共享对象。所有 schemaVersion 与数据库版本为 1，不兼容历史格式，不提供迁移。
 
 ## 1. 公共约定
 
@@ -49,7 +49,7 @@ Desktop 默认引擎来自 settings.defaultAgent；创建会话的 engineId 优�
 | GET `/api/agents` | 无 | 四个 Agent 的启用、健康、已保存/已应用配置修订、能力、活动数量 |
 | POST `/api/agents/{id}/actions` | action: enable / disable / stop / apply | 202；按 Agent 排他执行、状态通过 agents.updated 和查询观察 |
 | GET/PUT `/api/settings` | PUT: settings、revision | 读取脱敏配置；校验引用、乐观并发，保存不自动应用资源更改 |
-| POST `/api/providers/{id}/test` | modelID | 对已保存连接发起一次受限模型请求 |
+| POST `/api/providers/{id}/test` | modelID | 对已保存 effective route 发起一次受限模型请求，覆盖已配置协议转换 |
 | POST `/api/agents/{id}/import` | file: 绝对路径 | 只读预览 providers、skills、mcp、warnings；不导入密钥 |
 | GET `/api/runtime` | 无 | instanceId、storeId、engine、health、storage、models、limits、interactionDefaults、capabilities |
 | GET `/api/tasks` | q、status、cursor、limit | TaskSummary 列表、nextCursor、snapshot 元数据 |
@@ -67,6 +67,7 @@ Desktop 默认引擎来自 settings.defaultAgent；创建会话的 engineId 优�
 | GET `/api/observability/series` | metric、from、to、stepSeconds | 允许指标集合的时间序列、单位、实际覆盖范围 |
 | GET `/api/observability/errors` | from、to、stage、code、cursor、limit | 可关联 Run 的近期异常 |
 | GET `/api/observability/runs/{runId}` | 无 | 日志、可观察 spans、trace 完整性与保留状态 |
+| GET `/api/observability/llm` | provider、model、protocol、conversion、from、to、cursor、limit | 有界 LLM 请求记录；token/cost 缺失保持 null |
 | GET `/health/live` | 无 | 网关存活，不调用模型 |
 | GET `/health/ready` | 无 | 存储、初始化与引擎前提可用；未就绪为 503 |
 | GET `/metrics` | 无 | Prometheus 文本格式 |
@@ -218,6 +219,6 @@ runtime.capabilities 描述模型列表、工具、费用、进程采样等实�
 
 受管安装契约定义在 `code/shared/runtimes.ts`，语义以 [运行时安装](RUNTIME_INSTALL.md) 为准。`GET /api/runtimes` 返回四个运行包视图；`POST /api/runtimes/:id/actions` 接受严格的 `{ action }`，动作有 `check`、`detect`、`install`、`update`、`uninstall`、`cancel`，返回 202 后轮询视图。逐 Agent 选择受管或外部来源；两种入口均拒绝覆盖修改外部 CLI；同一 Agent 的操作互斥，切换/卸载遵守现有生命周期准入。
 
-Run 新增可空 `runtimeVersion`，保存实际运行 CLI 版本，当前数据库直接定义此列，不提供历史迁移。Web/Desktop 所有 HTTP、SSE、产物与指标接口无需配对码、Cookie 或 Bearer token。网关监听与重启、自动化评测接口见 [网关 API](../../code/docs/GATEWAY_API.md)。
+Run 新增可空 `runtimeVersion`，保存实际运行 CLI 版本，当前数据库直接定义此列，不提供历史迁移。LLM proxy 记录 `llm.request.finished` 事件或有界 sidecar，不新增主 SQLite 表；`api` 表示 client protocol，`upstreamApi` 和 `conversion` 表示上游路由。Web/Desktop 所有 HTTP、SSE、产物与指标接口无需配对码、Cookie 或 Bearer token。网关监听与重启、自动化评测接口见 [网关 API](../../code/docs/GATEWAY_API.md)。
 
 系统与来源管理接口以 [Web/Desktop 统一运行](WEB_DESKTOP.md) 和 `code/shared/system.ts` 为准。

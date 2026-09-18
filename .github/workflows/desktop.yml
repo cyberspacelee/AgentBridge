@@ -2,6 +2,12 @@ name: Desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      replace_existing:
+        description: "Replace an existing release for this unchanged version"
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [master, main]
     tags: ["v*"]
@@ -139,14 +145,23 @@ jobs:
             echo "Tag must match desktop/package.json version: $tag" >&2
             exit 1
           fi
-          if git rev-parse --verify "refs/tags/$tag" > /dev/null 2>&1; then
+          if git rev-parse --verify "refs/tags/$tag" > /dev/null 2>&1 && [[ "$GITHUB_REF" == refs/tags/* ]]; then
             test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
           fi
           # Match electron-builder's GitHub-safe names in latest*.yml.
           for asset in release-assets/*; do
             if [[ "$asset" == *" "* ]]; then mv -- "$asset" "${asset// /-}"; fi
           done
-          gh release create "$tag" release-assets/* \
-            --target "$GITHUB_SHA" --title "AgentBridge $version" \
-            --generate-notes \
-            --notes "Desktop installers for Windows x64, Linux x64 and macOS arm64. Agent CLIs install on demand from the management page. These builds are not signed or notarized."
+          notes="Desktop installers for Windows x64, Linux x64 and macOS arm64. Agent CLIs install on demand from the management page. These builds are not signed or notarized."
+          if gh release view "$tag" > /dev/null 2>&1; then
+            if [[ "${{ inputs.replace_existing || false }}" != "true" ]]; then
+              echo "Release $tag already exists; set replace_existing=true for an intentional republish." >&2
+              exit 1
+            fi
+            gh release edit "$tag" --target "$GITHUB_SHA" --title "AgentBridge $version" --notes "$notes"
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* \
+              --target "$GITHUB_SHA" --title "AgentBridge $version" \
+              --generate-notes --notes "$notes"
+          fi

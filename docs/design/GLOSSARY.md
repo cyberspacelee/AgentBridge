@@ -30,6 +30,11 @@
 | 产物检查 | ArtifactValidation | 格式、结构或明确业务规则的验证记录 | 文件存在即全部业务通过 |
 | 模型引用 | ModelRef | providerID + modelID 的引擎无关标识 | engineId |
 | 模型服务方 | Provider / providerID | 提供模型 API 的服务配置标识 | Agent harness |
+| LLM 代理 | LlmProxy | 受网关管理的 loopback 模型请求代理；保存上游认证、路由和协议转换状态 | EngineAdapter、业务 API |
+| 客户端协议 | ClientProtocol | Agent engine 发给 LLM proxy 的协议，当前为 `openai-completions` 或 `openai-responses` | 上游协议 |
+| 上游协议 | UpstreamProtocol | LLM proxy 发给 provider 的协议 | 客户端协议 |
+| 协议转换 | ProtocolConversion | 按 provider 显式配置执行的 client/upstream 请求、响应和 SSE 映射 | 引擎原生协议转换 |
+| LLM 请求记录 | LlmRequestRecord | 一次上游模型请求的路由、状态、耗时和可得 usage 快照 | Run.usage、账单 |
 | 请求标识 | RequestId / requestId | 一次 HTTP 请求的日志关联标识 | 提交幂等键 |
 | 提交标识 | SubmissionId / submissionId | 同一业务提交在重试中保持不变的幂等键 | 每次重试重新生成的 requestId |
 | 领域事件 | DomainEvent | 一次已提交业务变化的事实 | 原生事件原文、前端命令 |

@@ -130,7 +130,7 @@ Electron 在 `127.0.0.1:0` 启动独立 Node 网关，等待 IPC 就绪消息再
 
 菜单“检查应用更新”使用 electron-updater，用户确认下载后再确认重启，重启前复用任务退出策略。GitHub 更新源来自 builder 配置，生产发布必须同时提供对应安装包和 latest*.yml/blockmap。macOS 还需要 ZIP 更新负载及有效签名；只有 DMG 无法完成 Squirrel.Mac 更新。[B7]
 
-默认 workflow 上传构件；推送匹配桌面版本的 `v*` 标签，或手动勾选 `publish`，在三平台全部成功后发布 GitHub Release。发布 job 单独获得 contents:write，构建和 PR 检查保持只读；已有 Release 不覆盖。流程不注入签名证书。Windows/macOS 构建、安装、中文/空格路径、Git Bash、权限和进程清理尚须在目标系统验收；Linux AppImage 构建及解包程序实测通过。已配置更新入口不等于已验证跨版本线上更新。若需正式分发，补齐平台签名/公证和两个版本之间的更新保留数据检查。
+默认 workflow 上传构件；推送匹配桌面版本的 `v*` 标签，或手动运行，在三平台全部成功后发布 GitHub Release。发布 job 单独获得 contents:write，构建和 PR 检查保持只读；已有 Release 默认不覆盖，手动 `replace_existing` 才允许明确的同版本重发布。流程不注入签名证书。Windows/macOS 构建、安装、中文/空格路径、Git Bash、权限和进程清理尚须在目标系统验收；Linux AppImage 构建及解包程序实测通过。已配置更新入口不等于已验证跨版本线上更新。若需正式分发，补齐平台签名/公证和两个版本之间的更新保留数据检查。
 
 ## 实测与边界
 

@@ -115,6 +115,21 @@ interface Log {
   runId: string | null
   sessionId: string | null
 }
+interface LlmRecord {
+  eventId: string
+  occurredAt: string
+  providerID: string
+  modelID: string | null
+  clientApi: string
+  upstreamApi: string
+  conversion: string
+  status: number
+  durationMs: number
+  ttftMs: number | null
+  stream: boolean
+  usage: { input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; costUsd: number | null } | null
+  error: string | null
+}
 
 export function Observability() {
   const { revision, runtime } = useGateway()
@@ -193,6 +208,11 @@ export function Observability() {
       : null,
     queryRevision,
     tab === "errors" ? `errors:${engine}:${window}:${stage}:${code}` : null
+  )
+  const llm = useQuery<{ items: LlmRecord[] }>(
+    tab === "tools" ? `/api/observability/llm?${range}&limit=100` : null,
+    queryRevision,
+    tab === "tools" ? `llm:${engine}:${window}` : null,
   )
   const data = overview.data
   return (
@@ -594,6 +614,45 @@ export function Observability() {
                   <Blank>该时间范围内暂无工具调用</Blank>
                 )}
               </div>
+              <section className="mt-8">
+                <div className="section-heading">
+                  <h2>LLM 请求记录</h2>
+                  <span className="text-xs text-muted-foreground">代理路由与上游 usage</span>
+                </div>
+                <Failure error={llm.error} />
+                {llm.data?.items.length ? (
+                  <Table className="stacked-table">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>时间</TableHead>
+                        <TableHead>Provider / 模型</TableHead>
+                        <TableHead>协议 / 转换</TableHead>
+                        <TableHead>状态 / 延迟</TableHead>
+                        <TableHead>Token</TableHead>
+                        <TableHead>错误</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {llm.data.items.map((item) => (
+                        <TableRow key={item.eventId}>
+                          <TableCell data-label="时间" className="text-xs">{date(item.occurredAt)}</TableCell>
+                          <TableCell data-label="Provider / 模型" className="max-w-sm break-all whitespace-normal">
+                            <strong>{item.providerID}</strong><div className="text-xs text-muted-foreground">{item.modelID ?? "未知模型"}</div>
+                          </TableCell>
+                          <TableCell data-label="协议 / 转换" className="text-xs">
+                            {item.clientApi} → {item.upstreamApi}<div className="text-muted-foreground">{item.conversion}</div>
+                          </TableCell>
+                          <TableCell data-label="状态 / 延迟">{item.status} · {duration(item.durationMs)}</TableCell>
+                          <TableCell data-label="Token" className="text-xs">
+                            {item.usage ? `${item.usage.input ?? "?"} / ${item.usage.output ?? "?"}` : "未提供"}
+                          </TableCell>
+                          <TableCell data-label="错误" className="max-w-sm break-words whitespace-normal text-destructive">{item.error ?? "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : !llm.loading && !llm.error ? <Blank>该时间范围内暂无 LLM 请求</Blank> : llm.loading ? <Skeleton className="h-48" /> : null}
+              </section>
             </>
           )}
         </TabsContent>

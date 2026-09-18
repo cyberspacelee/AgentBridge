@@ -23,6 +23,9 @@ export class Telemetry {
   private ready: Gauge;
   private records: Gauge<"kind">;
   private published: Counter<"type">;
+  private llmRequests: Counter<"provider" | "protocol" | "conversion" | "outcome">;
+  private llmTokens: Counter<"provider" | "kind">;
+  private llmDuration: Histogram<"protocol" | "conversion">;
   private unsubscribe: () => void;
   private timer: NodeJS.Timeout;
   private samples: {
@@ -99,8 +102,30 @@ export class Telemetry {
       labelNames: ["type"],
       registers,
     });
+    this.llmRequests = new Counter({
+      name: "agentbridge_llm_requests_total",
+      help: "LLM proxy requests",
+      labelNames: ["provider", "protocol", "conversion", "outcome"],
+      registers,
+    });
+    this.llmTokens = new Counter({
+      name: "agentbridge_llm_tokens_total",
+      help: "Reported LLM proxy tokens",
+      labelNames: ["provider", "kind"],
+      registers,
+    });
+    this.llmDuration = new Histogram({
+      name: "agentbridge_llm_request_duration_seconds",
+      help: "LLM proxy request duration",
+      labelNames: ["protocol", "conversion"],
+      buckets: [0.05, 0.1, 0.5, 1, 5, 15, 60, 120],
+      registers,
+    });
     this.unsubscribe = runtime.store.subscribe((events) => {
-      for (const event of events) this.published.inc({ type: event.type });
+      for (const event of events) {
+        this.published.inc({ type: event.type });
+        if (event.type === "llm.request.finished") this.recordLlm(event.properties);
+      }
     });
     this.sse = new Gauge({
       name: "agentbridge_sse_connections",
@@ -125,6 +150,20 @@ export class Telemetry {
       catch (error) { this.runtime.storageFailure(error, true); }
     }, 5000);
     this.timer.unref();
+  }
+  private recordLlm(value: unknown) {
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const provider = typeof record.providerID === "string" ? record.providerID : "unknown";
+    const protocol = typeof record.clientApi === "string" ? record.clientApi : "unknown";
+    const conversion = typeof record.conversion === "string" ? record.conversion : "none";
+    const status = typeof record.status === "number" ? record.status : 500;
+    this.llmRequests.inc({ provider, protocol, conversion, outcome: status >= 400 ? "error" : "success" });
+    this.llmDuration.observe({ protocol, conversion }, Number(record.durationMs ?? 0) / 1000);
+    if (!record.usage || typeof record.usage !== "object") return;
+    const usage = record.usage as Record<string, unknown>;
+    for (const [kind, value] of [["input", usage.input], ["output", usage.output], ["cache_read", usage.cacheRead], ["cache_write", usage.cacheWrite]] as const)
+      if (typeof value === "number" && Number.isFinite(value)) this.llmTokens.inc({ provider, kind }, value);
   }
   private recordFinished(run: Run) {
     this.finished.inc({ outcome: run.state });

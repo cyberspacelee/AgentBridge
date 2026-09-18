@@ -16,6 +16,7 @@
 | [统一术语](GLOSSARY.md) | 中文、英文、代码标识、单位和禁止混用的含义 |
 | [领域模型](DOMAIN.md) | 领域边界、实体关系、状态转换、不变量和数据生命周期 |
 | [接口契约](CONTRACTS.md) | 应用 API、评测协议边界、事件、错误、并发与幂等 |
+| [ADR-13：统一 LLM API 代理](ADR-13-LLM-API-PROXY.md) | provider 代理路由、Responses/Chat 转换、请求配置、usage 与页面同步 |
 | [前端设计](FRONTEND.md) | 信息架构、页面操作、交互状态、数据恢复和可访问性 |
 | [视觉与 Agent UI 规范](../../design.md) | 色彩、字体、布局、消息与 Tool 结果、人工交互及浅深色统一基线 |
 | [UI 整改方案](UI_REMEDIATION.md) | 当前实现差距、参考映射、文件级实施阶段和验收证据 |
@@ -52,6 +53,7 @@
 | ADR-10 | 本地有界观测 + Prometheus 指标 + OpenTelemetry 可选导出 | 沙箱独立可运行；部署有现成观测平台时可接入 |
 | ADR-11 | 应用 SSE 支持保留窗口内回放，缺口回到快照 | 页面刷新、断线和事件重复有明确恢复语义 |
 | ADR-12 | 整轮任务不自动重放；重启后未完成轮次明确失败 | 文件修改、删除、消息发送无法由网关保证 exactly-once |
+| ADR-13 | Agent engine 统一经 loopback LLM proxy 访问 provider；协议转换和请求级 usage 在 proxy 边界完成 | 隐藏上游密钥，统一路由与观测；保持 settings、数据库和应用版本不变 |
 
 新增持久化和回放属于本次完整方案的范围扩展。它们不意味着建设集群调度、跨引擎迁移或完整事件溯源系统。
 

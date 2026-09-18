@@ -20,7 +20,7 @@ AgentBridge
       运行诊断：链接到观测中的同一 Run
   Agent 管理 /agents
     Agent 详情 /agents/:id：模型、Skills、MCP、运行
-  共享资源 /agents/resources：模型连接、Skills、MCP
+  共享资源 /agents/resources：模型连接（含 LLM 代理）、Skills、MCP
   系统信息 /settings
   运行观测 /observability
     运行概览
@@ -34,6 +34,8 @@ AgentBridge
 搜索、筛选、分页、Agent／资源／观测标签和时间范围写入 URL。任务草稿只保存在当前页面状态，默认不将 prompt 和服务端路径写入 localStorage。Agent 引用与策略草稿按实例保存在 sessionStorage，切页和刷新可恢复，同字段远端冲突须明确处理；密钥表单不写入浏览器存储。主题偏好可持久化。
 
 Agent 配置流程与状态规则统一见 design.md 的“页面职责与交互约束”。保存保持 revision 乐观并发校验，应用／启用接收 202 后等待 Agent 快照确认；已有执行或排队任务时，生命周期操作明确告知影响。资源页按来源 Agent 返回对应标签。没有就绪 Agent 时，任务页显示配置入口，不能仅留下禁用按钮。
+
+共享资源中的 provider 编辑器在“协议与代理”折叠区维护 client protocol、upstream protocol、conversion、请求 headers 和 params。页面显示“Responses 原生 / Responses → Chat / Chat 直连”能力标识、保存修订与已应用修订、effective proxy route，并提供一次受限的连接与转换测试。密钥和敏感 header 只显示已配置状态，不写入浏览器存储。系统信息页只展示 proxy listener、ready、route 数和最近错误，不复制 provider 表单。
 
 ## 2. 会话
 
@@ -86,8 +88,8 @@ Agent 配置流程与状态规则统一见 design.md 的“页面职责与交互
 | 标签 | 必须展示 | 必须支持的定位操作 |
 | --- | --- | --- |
 | 运行概览 | live/ready、接收与终态速率、执行成功率、失败/超时/取消、队列与耗时趋势、持续异常 | 从错误或异常进入筛选后的 Run |
-| 引擎与资源 | 启用引擎和版本、进程/就绪/重启、网关 CPU/RSS/heap/事件循环、可得的引擎进程采样、并发配额、存储、SSE/背压/上游连接 | 按引擎阶段、资源饱和或连接错误定位时间段与失败轮次 |
-| 工具与用量 | 原生调用与工具耗时、工具失败、实际 token/cost、用量覆盖范围 | 按工具进入失败轮次，区分已报告与缺失用量 |
+| 引擎与资源 | 启用引擎和版本、LLM proxy ready/routes、进程/就绪/重启、网关 CPU/RSS/heap/事件循环、可得的引擎进程采样、并发配额、存储、SSE/背压/上游连接 | 按引擎阶段、proxy route、资源饱和或连接错误定位时间段与失败轮次 |
+| 工具与用量 | 原生调用与工具耗时、LLM 请求 route/协议/转换、实际 token/cost、用量覆盖范围 | 按 provider、model、conversion 或工具进入失败轮次，区分已报告与缺失用量 |
 | 异常与调用链 | 时间、阶段、类别过滤，日志、Run spans、工具跨度和错误原因 | 跳到任务详情指定 Run，并可返回原观测筛选 |
 
 观测以少量紧凑指标、趋势图和表格组织，页面分区不堆成卡片墙。图表采用成熟库，数据来自真实接口；图表提供单位、图例、时间范围以及表格或可读摘要。

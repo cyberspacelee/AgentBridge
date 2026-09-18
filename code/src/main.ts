@@ -10,14 +10,21 @@ import { GrokAdapter } from "./engines/grok/adapter.js";
 import { createServer } from "./gateway/server.js";
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
+import { LlmProxy, registerLlmProxy, unregisterLlmProxy } from "./llm-proxy/server.js";
+import { readSettings } from "./settings.js";
 export async function startGateway(config = readConfig()) {
+  const store = new Store(config.database, config.limits.maxEventBytes);
+  const proxy = new LlmProxy(config, () => readSettings(config), (record) => {
+    store.transaction(() => store.emit({ type: "llm.request.finished", properties: record }));
+  });
+  await proxy.start();
+  registerLlmProxy(config, proxy);
   const adapters = [
     new OpenCodeAdapter(config),
     new PiAdapter(config),
     new CodexAdapter(config),
     new GrokAdapter(config),
   ];
-  const store = new Store(config.database, config.limits.maxEventBytes);
   const runtime = new SessionRuntime(
     store,
     adapters.find((adapter) => adapter.id === config.engine)!,
@@ -25,6 +32,10 @@ export async function startGateway(config = readConfig()) {
     adapters.filter((adapter) => adapter.id !== config.engine),
   );
   const server = createServer(runtime);
+  server.addHook("onClose", async () => {
+    unregisterLlmProxy(config);
+    await proxy.close();
+  });
   runtime.onFatal = () => {
     // Reopen durable state only after native processes are stopped; never replay uncertain work.
     if (config.supervised && process.connected)
@@ -38,10 +49,13 @@ export async function startGateway(config = readConfig()) {
     await server.listen({ host: config.host, port: config.port });
   } catch (error) {
     await server.close();
+    unregisterLlmProxy(config);
+    await proxy.close();
     throw error;
   }
   return {
     server,
+    proxy,
     runtime,
     drain: () => {
       runtime.lifecycle = "draining";
@@ -62,7 +76,7 @@ if (
   process.once("disconnect", interruptStartup);
   process.on("message", startupMessage);
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, interruptStartup);
-  const { server, runtime, drain } = await startGateway();
+  const { server, proxy, runtime, drain } = await startGateway();
   process.removeListener("disconnect", interruptStartup);
   process.removeListener("message", startupMessage);
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.removeListener(signal, interruptStartup);
@@ -78,7 +92,9 @@ if (
           `${error instanceof Error ? error.message : "Gateway shutdown failed"}\n`,
         );
       })
-      .finally(() => {
+      .finally(async () => {
+        unregisterLlmProxy(runtime.config);
+        await proxy.close();
         if (process.connected) process.disconnect();
       }));
   };

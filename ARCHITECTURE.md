@@ -51,6 +51,8 @@ flowchart TB
     Runtime -. 采集 .-> Telemetry
     Adapter -. 采集 .-> Telemetry
     Runtime --> Adapter
+    Adapter --> LLMProxy[内置 LLM Proxy]
+    LLMProxy --> Upstream[Provider Upstream API]
     Adapter --> OC --> OCProcess
     Adapter --> Pi --> PiProcess
     Adapter -. 新增实现 .-> Future
@@ -65,7 +67,8 @@ flowchart TB
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
 | 前端应用 | 任务操作、过程与产物展示、整体指标与异常定位 | 模型调用、引擎进程、任务调度、判断任务成功 |
-| 协议接入层 | HTTP 参数和 schema 校验、状态码、响应序列化、SSE 连接、旧版协议转换 | 引擎原生接口、执行队列、业务工具 |
+| 协议接入层 | HTTP 参数和 schema 校验、状态码、响应序列化、SSE 连接、应用协议转换 | 引擎原生接口、执行队列、业务工具 |
+| LLM Proxy | provider 路由、上游认证、请求 headers/params、LLM client/upstream 协议转换、请求级 usage | Agent 会话状态、业务工具、引擎原生协议 |
 | 会话执行层 | 会话生命周期、逐会话队列、运行状态、标准快照、成功/失败/取消收尾、交互策略 | OpenCode 或 Pi 的事件名和字段 |
 | 引擎适配层 | 创建原生会话、目录和模型映射、发送与中止、原生消息和事件转换、交互回复 | 对外 HTTP 状态码、评测路由、网关队列 |
 | 进程管理 | 子进程启动、退出、超时、输出管道、停止和有限重启 | 消息语义、任务成功判定、工具业务 |
@@ -116,6 +119,10 @@ code/
       pi/
         adapter.ts              # RPC、会话进程映射
         events.ts               # 原生事件和消息翻译
+    llm-proxy/
+      router.ts                 # provider route snapshot 与 loopback endpoint
+      conversion.ts             # Responses/Chat JSON 与 SSE 映射
+      usage.ts                  # 请求级 usage、错误和延迟记录
     observability/
       metrics.ts                # 指标注册、采集与导出
       traces.ts                 # 执行与工具 span 关联
@@ -193,12 +200,14 @@ code/
 ### 5.1 三个稳定边界
 
 ```text
+Agent engine LLM API -> LLM Proxy -> upstream LLM API
 引擎原生协议 -> EngineAdapter -> 内部消息 / 事件 / 结果
 内部事件 -> SessionRuntime -> 领域转换、持久化快照与生命周期
 内部快照 / 事件 -> Gateway serializer -> 赛题 1.2 / 1.1
 ```
 
 - 原生协议差异在引擎适配器消化。例如模型结束、命令执行、工具结果翻译成内部语义。
+- LLM API 的 client/upstream 差异在 LLM Proxy 消化。例如 Responses 请求转为 Chat Completions，并将 JSON/SSE、tool call、reasoning 和 usage 转回 client 协议。
 - 赛题版本差异在协议接入层消化。例如事件包装、时间格式、状态码、字段别名。
 - 内部标准是本网关的契约，不直接复用 OpenCode SDK 类型。Pi 和未来 Agent 不需要模拟 OpenCode 的全部 API。
 - 上文的“标准消息快照”指内部标准数据；`info.finish=stop` 等具体 wire 字段由接入层序列化，完成依据仍由执行层统一掌握。

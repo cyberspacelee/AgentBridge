@@ -1,5 +1,5 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { mkdirSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import type {
@@ -45,14 +45,26 @@ export class Store {
   private pending: AppEvent[] = [];
   private committedActions: (() => void)[] = [];
   private listeners = new Set<(events: AppEvent[]) => void>();
+  private lockFile: string | null = null;
+  private lockFd: number | null = null;
   healthy = true;
 
   constructor(
     readonly filename: string,
     private eventByteLimit = 128 * 1024 * 1024,
   ) {
-    if (filename !== ":memory:")
+    if (filename !== ":memory:") {
       mkdirSync(path.dirname(filename), { recursive: true });
+      this.lockFile = `${filename}.lock`;
+      try {
+        this.lockFd = openSync(this.lockFile, "wx", 0o600);
+        writeFileSync(this.lockFd, `${process.pid}\n`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST")
+          throw new Error("Database is already in use by another AgentBridge gateway");
+        throw error;
+      }
+    }
     this.db = new DatabaseSync(filename, { timeout: 5000 });
     try {
       this.db.exec(
@@ -91,6 +103,7 @@ export class Store {
         );
     } catch (error) {
       this.db.close();
+      this.releaseLock();
       throw error;
     }
   }
@@ -109,22 +122,13 @@ export class Store {
 
   transaction<T>(action: () => T): T {
     if (this.active) {
-      const name = `nested_${this.pending.length}_${this.committedActions.length}`;
-      const pending = this.pending.length;
-      const actions = this.committedActions.length;
-      this.db.exec(`SAVEPOINT ${name}`);
-      try {
-        const result = action();
-        if (result && typeof result === "object" && "then" in result)
-          throw new Error("Store transactions must be synchronous");
-        this.db.exec(`RELEASE SAVEPOINT ${name}`);
-        return result;
-      } catch (error) {
-        this.db.exec(`ROLLBACK TO SAVEPOINT ${name}; RELEASE SAVEPOINT ${name}`);
-        this.pending.length = pending;
-        this.committedActions.length = actions;
-        throw error;
-      }
+      // Nested writes join the outer transaction. The caller may catch the
+      // nested error and continue; the outer transaction remains responsible
+      // for committing or rolling back the complete unit.
+      const result = action();
+      if (result && typeof result === "object" && "then" in result)
+        throw new Error("Store transactions must be synchronous");
+      return result;
     }
     this.db.exec("BEGIN IMMEDIATE");
     this.active = true;
@@ -436,5 +440,16 @@ export class Store {
   close() {
     this.listeners.clear();
     this.db.close();
+    this.releaseLock();
+  }
+  private releaseLock() {
+    if (this.lockFd !== null) {
+      closeSync(this.lockFd);
+      this.lockFd = null;
+    }
+    if (this.lockFile) {
+      try { unlinkSync(this.lockFile); } catch {}
+      this.lockFile = null;
+    }
   }
 }

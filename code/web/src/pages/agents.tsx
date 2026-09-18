@@ -337,7 +337,9 @@ function AgentsEditor({
                           {item.api === "openai-responses"
                             ? "Responses"
                             : "Chat Completions"}{" "}
-                          · {item.models.map((m) => m.id).join(", ")}
+                          · 上游 {item.upstreamApi === "openai-responses" ? "Responses" : "Chat Completions"}
+                          {item.conversion !== "none" ? ` · ${item.conversion}` : ""}
+                          {" · "}{item.models.map((m) => m.id).join(", ")}
                         </div>
                       </>
                     ) : "path" in item ? (

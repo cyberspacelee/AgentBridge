@@ -12,6 +12,7 @@ import { desktop } from "@/lib/desktop"
 import { DirectoryInput } from "@/components/directory-input"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Field,
   FieldError,
@@ -49,6 +50,21 @@ export function EntryEditor({
   const [protocol, setProtocol] = useState(
     provider?.api ?? "openai-completions"
   )
+  const [upstreamProtocol, setUpstreamProtocol] = useState(
+    provider?.upstreamApi ?? provider?.api ?? "openai-completions"
+  )
+  const [conversion, setConversion] = useState(
+    provider?.conversion ?? "none"
+  )
+  const [requestHeaders, setRequestHeaders] = useState(
+    Object.entries(provider?.request?.headers ?? {}).map(([name, value]) => ({
+      name,
+      value,
+    }))
+  )
+  const [requestParams, setRequestParams] = useState(
+    JSON.stringify(provider?.request?.params ?? {}, null, 2)
+  )
   const [models, setModels] = useState(
     provider?.models ?? [
       {
@@ -80,6 +96,10 @@ export function EntryEditor({
     baseUrl,
     key,
     protocol,
+    upstreamProtocol,
+    conversion,
+    requestHeaders,
+    requestParams,
     models,
     path,
     mcpType,
@@ -138,6 +158,14 @@ export function EntryEditor({
               baseUrl,
               apiKey: key,
               api: protocol,
+              upstreamApi: upstreamProtocol,
+              conversion,
+              request: {
+                headers: Object.fromEntries(
+                  requestHeaders.map((item) => [item.name.trim(), item.value])
+                ),
+                params: JSON.parse(requestParams),
+              },
               enabled,
               models: models.map((model) => ({
                 ...model,
@@ -255,6 +283,96 @@ export function EntryEditor({
                   ]}
                 />
                 {fieldError("api")}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="upstream-protocol">上游协议</FieldLabel>
+                <Choice
+                  id="upstream-protocol"
+                  label="上游协议"
+                  invalid={!!invalid.upstreamApi}
+                  value={upstreamProtocol}
+                  onChange={(value) => setUpstreamProtocol(value as typeof upstreamProtocol)}
+                  options={[
+                    { value: "openai-completions", label: "Chat Completions" },
+                    { value: "openai-responses", label: "Responses" },
+                  ]}
+                />
+                {fieldError("upstreamApi")}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="conversion">协议转换</FieldLabel>
+                <Choice
+                  id="conversion"
+                  label="协议转换"
+                  invalid={!!invalid.conversion}
+                  value={conversion}
+                  onChange={(value) => setConversion(value as typeof conversion)}
+                  options={[
+                    { value: "none", label: "原生直连" },
+                    { value: "responses-to-completions", label: "Responses → Chat" },
+                  ]}
+                />
+                {fieldError("conversion")}
+                {conversion !== "none" && (protocol !== "openai-responses" || upstreamProtocol !== "openai-completions") && (
+                  <FieldDescription>当前转换仅支持 client Responses 到上游 Chat Completions。</FieldDescription>
+                )}
+              </Field>
+              <FieldGroup>
+                <div className="settings-section-heading">
+                  <h2>上游请求头</h2>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busy || requestHeaders.length >= 32}
+                    onClick={() => setRequestHeaders([...requestHeaders, { name: "", value: "" }])}
+                  >
+                    <Plus />
+                    添加请求头
+                  </Button>
+                </div>
+                {requestHeaders.map((item, index) => (
+                  <div className="resource-key-value" key={index}>
+                    <Field>
+                      <FieldLabel htmlFor={`provider-header-name-${index}`}>名称 {index + 1}</FieldLabel>
+                      <Input
+                        id={`provider-header-name-${index}`}
+                        {...fieldProps("request.headers")}
+                        required
+                        value={item.name}
+                        onChange={(e) => setRequestHeaders(requestHeaders.map((row, i) => i === index ? { ...row, name: e.target.value } : row))}
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor={`provider-header-value-${index}`}>值 {index + 1}</FieldLabel>
+                      <Input
+                        id={`provider-header-value-${index}`}
+                        {...fieldProps("request.headers")}
+                        type="password"
+                        autoComplete="new-password"
+                        value={item.value}
+                        onChange={(e) => setRequestHeaders(requestHeaders.map((row, i) => i === index ? { ...row, value: e.target.value } : row))}
+                      />
+                    </Field>
+                    <IconButton type="button" label={`删除请求头 ${index + 1}`} onClick={() => setRequestHeaders(requestHeaders.filter((_, i) => i !== index))}>
+                      <Trash2 />
+                    </IconButton>
+                  </div>
+                ))}
+                {fieldError("request.headers")}
+              </FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="provider-request-params">上游请求参数 JSON</FieldLabel>
+                <Textarea
+                  id="provider-request-params"
+                  {...fieldProps("request.params")}
+                  value={requestParams}
+                  onChange={(e) => setRequestParams(e.target.value)}
+                  rows={5}
+                  spellCheck={false}
+                  placeholder={'{\n  "reasoning_effort": "medium"\n}'}
+                />
+                <FieldDescription>仅覆盖可选参数；model、消息/input、stream 和工具由引擎请求控制。</FieldDescription>
+                {fieldError("request.params")}
               </Field>
               <div className="settings-section-heading">
                 <h2>模型</h2>

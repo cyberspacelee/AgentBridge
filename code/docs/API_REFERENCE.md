@@ -57,6 +57,7 @@ Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参
 | GET | /api/observability/overview | [查询执行与资源汇总](#getoverview) |
 | GET | /api/observability/series | [查询时序指标](#getseries) |
 | GET | /api/observability/errors | [查询错误与警告日志](#listerrors) |
+| GET | /api/observability/llm | [查询 LLM 请求记录](#listllmrequests) |
 | GET | /api/observability/runs/{id} | [读取单轮诊断](#getrundiagnostics) |
 | GET | /metrics | [读取 Prometheus 指标](#getmetrics) |
 | GET | /api/docs.md | [下载完整 Markdown API 文档（供 Agent 使用）](#getapimarkdown) |
@@ -1242,7 +1243,7 @@ disable/apply 等待活动执行；stop 强制停止。202 后轮询 /api/agents
 
 **POST /api/providers/{id}/test — 测试已保存模型连接**
 
-id 为配置中的 provider ID；使用已保存的凭据发起真实模型请求。失败返回 502 MODEL_CONNECTION_ERROR，耗时单位毫秒。
+id 为配置中的 provider ID；通过已保存 effective route 发起真实模型请求，覆盖协议转换。失败返回 502 MODEL_CONNECTION_ERROR，耗时单位毫秒。
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -1311,6 +1312,11 @@ file 为主机上已存在的绝对 JSON/TOML 文件路径，大小不超过 1 M
 | providers[].baseUrl | string | 是 | format="uri" | — |
 | providers[].apiKey | string | 是 | default=""；maxLength=8192 | — |
 | providers[].api | string | 是 | default="openai-completions"；enum=["openai-completions","openai-responses"] | — |
+| providers[].upstreamApi | string | 否 | enum=["openai-completions","openai-responses"] | — |
+| providers[].conversion | string | 是 | default="none"；enum=["none","responses-to-completions"] | — |
+| providers[].request | object | 是 | default={"headers":{},"params":{}}；additionalProperties=false | — |
+| providers[].request.headers | Record<string, string> | 是 | default={}；propertyNames={"type":"string","minLength":1,"maxLength":128,"pattern":"^[!#$%&'*+\\-.^_`\|~0-9A-Za-z]+$"}；additionalProperties={"type":"string","maxLength":8192} | — |
+| providers[].request.params | Record<string, 任意 JSON> | 是 | default={}；propertyNames={"type":"string","minLength":1,"maxLength":128}；additionalProperties={} | — |
 | providers[].models | Array<object> | 是 | minItems=1；maxItems=100 | — |
 | providers[].models[].id | string | 是 | minLength=1；maxLength=200 | — |
 | providers[].models[].name | string | 是 | default=""；maxLength=200 | — |
@@ -1861,6 +1867,58 @@ pem 为有效的 CA 证书，最多 2 MiB；本接口 JSON 请求体上限 3 MiB
 | to | string | 是 | format="date-time" | — |
 
 
+### listllmrequests
+
+**GET /api/observability/llm — 查询 LLM 请求记录**
+
+查询 LLM 请求记录
+
+| 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| from | query | string | 否 | format="date-time" | 起始 UTC 时间（含边界）；省略为当前时间减 1 小时。 |
+| to | query | string | 否 | format="date-time" | 结束 UTC 时间（含边界）；省略为当前时间。from ≤ to，跨度最多 7 天。 |
+| engine | query | string | 否 | maxLength=100；pattern="^[a-zA-Z0-9_-]*$"；default="" | 按 Agent ID 筛选；空字符串表示全部。 |
+| provider | query | string | 否 | default="" | Provider ID。 |
+| model | query | string | 否 | default="" | 模型 ID。 |
+| protocol | query | string | 否 | default="" | client protocol。 |
+| conversion | query | string | 否 | default="" | 转换模式。 |
+| limit | query | integer | 否 | minimum=1；maximum=100；default=50 | 最多返回条数。 |
+
+请求体：无。
+
+| HTTP 状态码 | Content-Type | 响应类型 | 说明 |
+| --- | --- | --- | --- |
+| 200 | application/json | object | 成功 |
+| 400 | application/json | Error | 请求格式、字段、参数或业务约束无效 |
+| 403 | application/json | Error | Host/Origin 或路径、模型等访问约束不允许 |
+| 500 | application/json | Error | 内部操作失败 |
+
+
+| 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| items | Array<object> | 是 |  | — |
+| items[].eventId | string | 是 |  | — |
+| items[].occurredAt | string | 是 | format="date-time" | — |
+| items[].providerID | string \| null | 是 |  | — |
+| items[].modelID | string \| null | 是 |  | — |
+| items[].clientApi | string | 是 |  | — |
+| items[].upstreamApi | string | 是 |  | — |
+| items[].conversion | string | 是 |  | — |
+| items[].status | integer | 是 |  | — |
+| items[].durationMs | number | 是 |  | — |
+| items[].ttftMs | number \| null | 是 |  | — |
+| items[].stream | boolean | 是 |  | — |
+| items[].usage | object \| null | 是 |  | — |
+| items[].usage.分支1.input | number \| null | 是 |  | — |
+| items[].usage.分支1.output | number \| null | 是 |  | — |
+| items[].usage.分支1.cacheRead | number \| null | 是 |  | — |
+| items[].usage.分支1.cacheWrite | number \| null | 是 |  | — |
+| items[].usage.分支1.costUsd | number \| null | 是 |  | — |
+| items[].error | string \| null | 是 |  | — |
+| from | string | 是 | format="date-time" | — |
+| to | string | 是 | format="date-time" | — |
+
+
 ### getrundiagnostics
 
 **GET /api/observability/runs/{id} — 读取单轮诊断**
@@ -2170,6 +2228,11 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | providers[].baseUrl | string | 是 | format="uri" | — |
 | providers[].apiKey | string | 否 | default=""；maxLength=8192 | — |
 | providers[].api | string | 否 | default="openai-completions"；enum=["openai-completions","openai-responses"] | — |
+| providers[].upstreamApi | string | 否 | enum=["openai-completions","openai-responses"] | — |
+| providers[].conversion | string | 否 | default="none"；enum=["none","responses-to-completions"] | — |
+| providers[].request | object | 否 | default={"headers":{},"params":{}}；additionalProperties=false | — |
+| providers[].request.headers | Record<string, string> | 否 | default={}；propertyNames={"type":"string","minLength":1,"maxLength":128,"pattern":"^[!#$%&'*+\\-.^_`\|~0-9A-Za-z]+$"}；additionalProperties={"type":"string","maxLength":8192} | — |
+| providers[].request.params | Record<string, 任意 JSON> | 否 | default={}；propertyNames={"type":"string","minLength":1,"maxLength":128}；additionalProperties={} | — |
 | providers[].models | Array<object> | 是 | minItems=1；maxItems=100 | — |
 | providers[].models[].id | string | 是 | minLength=1；maxLength=200 | — |
 | providers[].models[].name | string | 否 | default=""；maxLength=200 | — |
@@ -2226,6 +2289,11 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | providers[].baseUrl | string | 是 | format="uri" | — |
 | providers[].apiKey | string | 是 | default=""；maxLength=8192 | — |
 | providers[].api | string | 是 | default="openai-completions"；enum=["openai-completions","openai-responses"] | — |
+| providers[].upstreamApi | string | 否 | enum=["openai-completions","openai-responses"] | — |
+| providers[].conversion | string | 是 | default="none"；enum=["none","responses-to-completions"] | — |
+| providers[].request | object | 是 | default={"headers":{},"params":{}}；additionalProperties=false | — |
+| providers[].request.headers | Record<string, string> | 是 | default={}；propertyNames={"type":"string","minLength":1,"maxLength":128,"pattern":"^[!#$%&'*+\\-.^_`\|~0-9A-Za-z]+$"}；additionalProperties={"type":"string","maxLength":8192} | — |
+| providers[].request.params | Record<string, 任意 JSON> | 是 | default={}；propertyNames={"type":"string","minLength":1,"maxLength":128}；additionalProperties={} | — |
 | providers[].models | Array<object> | 是 | minItems=1；maxItems=100 | — |
 | providers[].models[].id | string | 是 | minLength=1；maxLength=200 | — |
 | providers[].models[].name | string | 是 | default=""；maxLength=200 | — |
@@ -2709,6 +2777,10 @@ Token 用量与美元费用；null 表示未报告，不能当作 0。
 | limits | Record<string, number> | 是 | additionalProperties={"type":"number"} | — |
 | interactionDefaults | InteractionPolicy | 是 |  | — |
 | capabilities | Record<string, boolean> | 是 | additionalProperties={"type":"boolean"} | — |
+| llmProxy | object | 是 |  | — |
+| llmProxy.ready | boolean | 是 |  | — |
+| llmProxy.baseUrl | string \| null | 是 |  | — |
+| llmProxy.enabledProviders | integer | 是 |  | — |
 
 
 ### SettingsView

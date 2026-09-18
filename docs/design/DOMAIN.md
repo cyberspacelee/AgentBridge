@@ -11,6 +11,7 @@
 | 人机交互 | Permission、Question、策略和回复归属 | 待处理查询、自动/人工回复、过期 |
 | 产物 | Artifact、来源、访问范围、检查结果 | 登记、校验、下载、受限预览 |
 | 引擎管理 | EngineBinding、生命周期、健康、进程归属 | 原生执行与统一契约之间的转换 |
+| 模型访问 | Provider route、client/upstream protocol、转换结果、LLM request usage | 受控上游调用与请求级观测，不修改 Run 状态 |
 | 运行观测 | 指标、日志、trace、异常提示 | 查询和导出已发生事实，不控制任务状态 |
 
 这些边界位于同一服务中。执行层拥有业务状态的修改权；观测与前端只有投影和操作入口，不能各自维护可以反写的执行状态机。
@@ -22,6 +23,8 @@ flowchart LR
   App --> Domain[Domain 状态与不变量]
   App --> Store[SQLite 事务与查询]
   App --> Adapter[EngineAdapter 契约]
+  Adapter --> Proxy[LLM Proxy]
+  Proxy --> Provider[Provider API]
   Adapter --> OC[OpenCode HTTP / SSE]
   Adapter --> Pi[Pi JSONL / RPC]
   App --> Events[已提交事件发布]
@@ -204,7 +207,7 @@ TaskView 不接受直接赋值，按下列优先级计算：
 
 ## 7. 持久化与恢复
 
-默认 SQLite 存储以下记录：sessions、runs、messages、message_parts、tool_calls、interactions、artifacts、artifact_validations、submissions、engine_bindings、events。关系通过外键与唯一约束表达，JSON 仅用于实际可变的工具参数、结果和事件 payload。
+默认 SQLite 存储以下记录：sessions、runs、messages、message_parts、tool_calls、interactions、artifacts、artifact_validations、submissions、engine_bindings、events。LLM request usage 首期作为有界 `llm.request.finished` 事件或 sidecar 观测记录，不新增主表；关系通过外键与唯一约束表达，JSON 仅用于实际可变的工具参数、结果和事件 payload。
 
 事件是事务提交后的可靠通知记录，不是领域唯一数据源；不通过全量事件重放重建数据库。默认仅一个网关拥有一个数据目录，第二个写入实例启动失败。SQLite 放在本地磁盘，备份走一致性备份方式，不直接复制运行中的单个数据库文件而漏掉 WAL。
 

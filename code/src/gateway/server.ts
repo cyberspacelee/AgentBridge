@@ -28,6 +28,7 @@ import { Telemetry } from "../observability/metrics.js";
 import { agentConfiguration, diagnosticSecrets } from "../settings.js";
 import { agentIdSchema, defaultInteractionPolicy, agentActionSchema, runtimeSourceSchema } from "../../shared/settings.js";
 import { runtimeActionSchema } from "../../shared/runtimes.js";
+import { getLlmProxy } from "../llm-proxy/server.js";
 
 const id = (params: unknown) =>
   z.object({ id: z.string().min(1).max(300) }).parse(params).id;
@@ -248,6 +249,11 @@ export function createServer(runtime: SessionRuntime) {
       persistence: store.filename !== ":memory:",
       eventReplay: true,
       processMemory: false,
+    },
+    llmProxy: {
+      ready: Boolean(getLlmProxy(config)),
+      baseUrl: getLlmProxy(config)?.baseUrl ?? null,
+      enabledProviders: settings.view().settings.providers.filter((provider) => provider.enabled).length,
     },
   }));
 
@@ -766,6 +772,41 @@ export function createServer(runtime: SessionRuntime) {
       from: range.from,
       to: range.to,
     };
+  });
+  server.get("/api/observability/llm", async (request) => {
+    const range = timeRange.parse(request.query);
+    const query = z.object({
+      provider: z.string().max(100).default(""),
+      model: z.string().max(300).default(""),
+      protocol: z.string().max(40).default(""),
+      conversion: z.string().max(80).default(""),
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+    }).parse(request.query);
+    const rows = store.db.prepare(
+      `SELECT seq,occurredAt,sessionId,runId,properties FROM events
+       WHERE type='llm.request.finished' AND occurredAt>=? AND occurredAt<=?
+       AND (?='' OR json_extract(properties,'$.providerID')=? )
+       AND (?='' OR json_extract(properties,'$.modelID')=? )
+       AND (?='' OR json_extract(properties,'$.clientApi')=? )
+       AND (?='' OR json_extract(properties,'$.conversion')=? )
+       ORDER BY seq DESC LIMIT ?`,
+    ).all(
+      range.from,
+      range.to,
+      query.provider,
+      query.provider,
+      query.model,
+      query.model,
+      query.protocol,
+      query.protocol,
+      query.conversion,
+      query.conversion,
+      query.limit,
+    ).map((row) => {
+      const value = row as { seq: number; occurredAt: string; sessionId: string | null; runId: string | null; properties: string };
+      return { eventId: `${store.storeId}:${value.seq}`, occurredAt: value.occurredAt, sessionId: value.sessionId, runId: value.runId, ...JSON.parse(value.properties) };
+    });
+    return { items: rows, from: range.from, to: range.to };
   });
   server.get("/api/observability/runs/:id", async (request) => {
     const run = runtime.run(id(request.params));

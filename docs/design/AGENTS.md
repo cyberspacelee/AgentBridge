@@ -8,7 +8,7 @@
 
 ## 配置与所有权
 
-`AGENT_DATA_DIR/settings.json` 是唯一管理配置源，schemaVersion 为 1，包含 defaultAgent、agents、providers、skills、mcp。agents 保存 id、enabled、runtime（managed 或 external 命令）、model references、defaultModel、skillIds、mcpIds、interactionPolicy。模型连接只支持 OpenAI Chat Completions 与 Responses，包括名称、baseUrl、apiKey、模型列表。不提供模型服务登录、OAuth、订阅或账号发现；Web/Desktop 在本机和局域网直接访问，不使用实例配对或网关鉴权。
+`AGENT_DATA_DIR/settings.json` 是唯一管理配置源，schemaVersion 为 1，包含 defaultAgent、agents、providers、skills、mcp。agents 保存 id、enabled、runtime（managed 或 external 命令）、model references、defaultModel、skillIds、mcpIds、interactionPolicy。模型连接支持 OpenAI Chat Completions 与 Responses，包括名称、baseUrl、apiKey、模型列表，以及 client-facing `api`、可选 `upstreamApi`、显式 `conversion`、受限 request headers/params。Agent engine 默认经内置 loopback LLM proxy 访问 provider；上游地址和密钥不写入原生 engine 配置。详见 [ADR-13](ADR-13-LLM-API-PROXY.md)。不提供模型服务登录、OAuth、订阅或账号发现；Web/Desktop 在本机和局域网直接访问，不使用实例配对或网关鉴权。
 
 资源定义共享，启用引用归 Agent；没有 both、全局自动分发、用户原生配置目录编辑入口。保存时校验引用、重复项、默认模型归属与引擎协议支持。删除被引用资源须先解除引用。密钥脱敏返回，保持乐观并发 revision 校验。连接测试进行一次受限的真实模型请求，错误须脱敏。
 
@@ -33,7 +33,7 @@ Pi 保留逐会话 RPC，OpenCode 保留 HTTP/SSE。Codex 使用 app-server stdi
 - `/api/settings`：共享资源、Agent 配置、修订与脱敏密钥。
 - `/api/agents`：四个 Agent 的启用、健康、模型、能力、执行数、配置应用状态与目录。
 - `/api/agents/:id/actions`：enable、disable、stop、apply；操作状态可通过 Agent 列表与 SSE 更新观察。
-- `/api/providers/:id/test`：测试已保存连接及指定模型。
+- `/api/providers/:id/test`：通过已保存 effective route 测试指定模型，覆盖已配置协议转换。
 - `/api/agents/:id/import`：预览本机指定配置文件中的受支持资源；不写原生文件。
 - 任务模型列表仅来自受管且已应用的模型配置；不能使用未授权模型引用。
 
@@ -49,4 +49,4 @@ Pi 保留逐会话 RPC，OpenCode 保留 HTTP/SSE。Codex 使用 app-server stdi
 
 Desktop 不增加引擎启动参数；创建会话显式 engineId 优先，否则使用配置 defaultAgent。Web 命令行显式 --engine 只覆盖本次进程的默认引擎。会话固定引擎、工作目录和交互策略；首次输入为未命名会话生成标题。默认交互策略统一为 auto/auto，可在 Agent 配置或创建会话时设置 manual。
 
-Message、Interaction、AppEvent 在 shared/contracts.ts 唯一定义，原生协议转换只发生在 EngineAdapter。HTTP 查询直接返回领域快照；Web/Desktop/评测共同订阅 /event，不存在第二条应用事件流或评测 serializer。请求 agent 只支持 assistant，表示引擎默认助手，不作为引擎 ID。领域快照和事件保持相同字段；前端不自行转换旧字段。配置 schemaVersion、运行时清单、事件和数据库版本均为 1；历史配置、字段和数据库拒绝加载，不提供兼容或迁移。
+Message、Interaction、AppEvent 在 shared/contracts.ts 唯一定义。LLM provider 的 client/upstream 协议转换发生在 LLM proxy；引擎原生协议转换仍只发生在 EngineAdapter。HTTP 查询直接返回领域快照；Web/Desktop/评测共同订阅 /event，不存在第二条应用事件流或评测 serializer。请求 agent 只支持 assistant，表示引擎默认助手，不作为引擎 ID。领域快照和事件保持相同字段；前端不自行转换旧字段。配置 schemaVersion、运行时清单、事件和数据库版本均为 1；新增 provider 字段通过默认值解释，历史配置和数据库不迁移。

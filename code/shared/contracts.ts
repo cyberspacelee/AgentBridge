@@ -296,4 +296,9 @@ export interface RuntimeInfo {
   limits: Record<string, number>;
   interactionDefaults: InteractionPolicy;
   capabilities: Record<string, boolean>;
+  llmProxy?: {
+    ready: boolean;
+    baseUrl: string | null;
+    enabledProviders: number;
+  };
 }

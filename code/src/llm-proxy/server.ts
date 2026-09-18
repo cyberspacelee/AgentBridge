@@ -1,0 +1,481 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomBytes, randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
+import type { Config } from "../config.js";
+import type { Provider, Settings } from "../../shared/settings.js";
+
+type Api = "openai-completions" | "openai-responses";
+type ChatBody = Record<string, unknown>;
+type JsonObject = Record<string, unknown>;
+
+export interface LlmUsageRecord {
+  providerID: string;
+  modelID: string | null;
+  clientApi: Api;
+  upstreamApi: Api;
+  conversion: string;
+  status: number;
+  durationMs: number;
+  ttftMs: number | null;
+  stream: boolean;
+  usage: {
+    input: number | null;
+    output: number | null;
+    cacheRead: number | null;
+    cacheWrite: number | null;
+    costUsd: number | null;
+  } | null;
+  error: string | null;
+  occurredAt: string;
+}
+
+export class LlmProxyError extends Error {
+  constructor(
+    readonly code: "PROTOCOL_CONVERSION_UNSUPPORTED" | "PROXY_AUTHENTICATION_FAILED" | "PROVIDER_NOT_FOUND" | "INVALID_REQUEST" | "UPSTREAM_ERROR",
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
+
+function object(value: unknown): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new LlmProxyError("INVALID_REQUEST", "Request body must be a JSON object");
+  return value as JsonObject;
+}
+function text(value: unknown, field: string): string {
+  if (typeof value !== "string")
+    throw new LlmProxyError("INVALID_REQUEST", `${field} must be a string`);
+  return value;
+}
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function endpoint(api: Api): "responses" | "chat/completions" {
+  return api === "openai-responses" ? "responses" : "chat/completions";
+}
+function apiFromEndpoint(value: string): Api | null {
+  return value === "responses" ? "openai-responses" : value === "chat/completions" ? "openai-completions" : null;
+}
+function usageFromChat(value: unknown) {
+  const usage = value && typeof value === "object" ? value as JsonObject : {};
+  const prompt = optionalNumber(usage.prompt_tokens);
+  const completion = optionalNumber(usage.completion_tokens);
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === "object"
+    ? usage.prompt_tokens_details as JsonObject : {};
+  const completionDetails = usage.completion_tokens_details && typeof usage.completion_tokens_details === "object"
+    ? usage.completion_tokens_details as JsonObject : {};
+  return {
+    input: prompt,
+    output: completion,
+    cacheRead: optionalNumber(details.cached_tokens),
+    cacheWrite: optionalNumber(completionDetails.reasoning_tokens),
+    costUsd: null,
+  };
+}
+function usageFromResponse(value: unknown) {
+  const usage = value && typeof value === "object" ? value as JsonObject : {};
+  return {
+    input: optionalNumber(usage.input_tokens),
+    output: optionalNumber(usage.output_tokens),
+    cacheRead: optionalNumber(usage.input_tokens_details && typeof usage.input_tokens_details === "object"
+      ? (usage.input_tokens_details as JsonObject).cached_tokens : null),
+    cacheWrite: null,
+    costUsd: null,
+  };
+}
+
+function contentText(value: unknown, field: string): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `${field} cannot be represented as Chat content`);
+  return value.map((part) => {
+    const item = object(part);
+    if (item.type === "input_text" || item.type === "output_text" || item.type === "text") return text(item.text, `${field}.text`);
+    throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `${field} contains unsupported content type ${String(item.type)}`);
+  }).join("");
+}
+
+function responseTools(value: unknown): unknown[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new LlmProxyError("INVALID_REQUEST", "tools must be an array");
+  return value.map((tool) => {
+    const item = object(tool);
+    if (item.type !== "function") throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported tool type ${String(item.type)}`);
+    const fn = item.function && typeof item.function === "object" ? object(item.function) : item;
+    return {
+      type: "function",
+      function: {
+        name: text(fn.name, "tools.function.name"),
+        ...(typeof fn.description === "string" ? { description: fn.description } : {}),
+        parameters: fn.parameters ?? fn.input_schema ?? { type: "object", properties: {} },
+        ...(typeof fn.strict === "boolean" ? { strict: fn.strict } : {}),
+      },
+    };
+  });
+}
+
+export function responsesToChat(input: JsonObject, history: JsonObject[] = []): ChatBody {
+  const messages: JsonObject[] = [...history];
+  if (typeof input.instructions === "string") messages.push({ role: "system", content: input.instructions });
+  const items = typeof input.input === "string" ? [{ type: "message", role: "user", content: input.input }] : input.input;
+  if (!Array.isArray(items)) throw new LlmProxyError("INVALID_REQUEST", "input must be a string or array");
+  for (const raw of items) {
+    const item = object(raw);
+    switch (item.type) {
+      case "message": {
+        const role = item.role === "developer" ? "system" : item.role;
+        if (!["user", "assistant", "system"].includes(String(role))) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported message role ${String(role)}`);
+        messages.push({ role, content: contentText(item.content, "input.message.content") });
+        break;
+      }
+      case "function_call_output":
+        messages.push({ role: "tool", tool_call_id: text(item.call_id, "function_call_output.call_id"), content: contentText(item.output, "function_call_output.output") });
+        break;
+      case "function_call":
+        messages.push({ role: "assistant", content: null, tool_calls: [{ id: text(item.call_id, "function_call.call_id"), type: "function", function: { name: text(item.name, "function_call.name"), arguments: text(item.arguments, "function_call.arguments") } }] });
+        break;
+      default:
+        throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported input item type ${String(item.type)}`);
+    }
+  }
+  const result: ChatBody = {
+    model: text(input.model, "model"),
+    messages,
+    ...(input.stream === true ? { stream: true } : { stream: false }),
+  };
+  const tools = responseTools(input.tools);
+  if (tools) result.tools = tools;
+  if (input.max_output_tokens !== undefined) result.max_tokens = input.max_output_tokens;
+  if (input.temperature !== undefined) result.temperature = input.temperature;
+  if (input.top_p !== undefined) result.top_p = input.top_p;
+  const reasoning = input.reasoning && typeof input.reasoning === "object" ? object(input.reasoning) : undefined;
+  if (reasoning?.effort !== undefined) result.reasoning_effort = reasoning.effort;
+  const format = input.text && typeof input.text === "object" ? object(input.text).format : undefined;
+  if (format && typeof format === "object") {
+    const value = object(format);
+    if (value.type === "json_schema") result.response_format = { type: "json_schema", json_schema: { name: value.name ?? "response", description: value.description, schema: value.schema, strict: value.strict } };
+    else if (value.type === "json_object") result.response_format = { type: "json_object" };
+  }
+  return result;
+}
+
+function responseOutputFromChat(body: JsonObject, responseId = `resp_${randomUUID().replaceAll("-", "")}`): JsonObject {
+  const choice = Array.isArray(body.choices) && body.choices[0] && typeof body.choices[0] === "object" ? body.choices[0] as JsonObject : {};
+  const message = choice.message && typeof choice.message === "object" ? choice.message as JsonObject : {};
+  const output: JsonObject[] = [];
+  const content = typeof message.content === "string" ? message.content : "";
+  if (content) output.push({ type: "message", id: `msg_${randomUUID().replaceAll("-", "")}`, status: "completed", role: "assistant", content: [{ type: "output_text", text: content, annotations: [] }] });
+  const reasoning = typeof message.reasoning_content === "string" ? message.reasoning_content : "";
+  if (reasoning) output.unshift({ type: "reasoning", id: `rs_${randomUUID().replaceAll("-", "")}`, summary: [{ type: "summary_text", text: reasoning }] });
+  if (Array.isArray(message.tool_calls)) for (const raw of message.tool_calls) {
+    const tool = object(raw);
+    const fn = tool.function && typeof tool.function === "object" ? object(tool.function) : {};
+    output.push({ type: "function_call", id: text(tool.id, "tool_calls.id"), call_id: text(tool.id, "tool_calls.id"), name: text(fn.name, "tool_calls.function.name"), arguments: text(fn.arguments, "tool_calls.function.arguments"), status: "completed" });
+  }
+  return {
+    id: responseId,
+    object: "response",
+    created_at: Math.floor(Date.now() / 1000),
+    status: "completed",
+    model: typeof body.model === "string" ? body.model : undefined,
+    output,
+    output_text: content,
+    usage: (() => {
+      const value = usageFromChat(body.usage);
+      return {
+        input_tokens: value.input,
+        output_tokens: value.output,
+        total_tokens: value.input !== null && value.output !== null ? value.input + value.output : null,
+        input_tokens_details: value.cacheRead === null ? undefined : { cached_tokens: value.cacheRead },
+      };
+    })(),
+  };
+}
+
+export function chatToResponse(body: JsonObject, responseId?: string): JsonObject {
+  return responseOutputFromChat(body, responseId);
+}
+
+function assistantMessageFromResponse(response: JsonObject): JsonObject {
+  const output = Array.isArray(response.output) ? response.output : [];
+  const message = output.find((item) => item && typeof item === "object" && (item as JsonObject).type === "message") as JsonObject | undefined;
+  const calls = output
+    .filter((item) => item && typeof item === "object" && (item as JsonObject).type === "function_call")
+    .map((item) => {
+      const value = item as JsonObject;
+      return { id: value.call_id ?? value.id, type: "function", function: { name: value.name, arguments: value.arguments } };
+    });
+  const content = message && Array.isArray(message.content)
+    ? (message.content as unknown[]).map((part) => part && typeof part === "object" ? (part as JsonObject).text : "").filter((value): value is string => typeof value === "string").join("")
+    : String(response.output_text ?? "");
+  return { role: "assistant", content: content || null, ...(calls.length ? { tool_calls: calls } : {}) };
+}
+
+function appendSse(res: ServerResponse, event: string, data: JsonObject) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+async function convertChatStream(
+  body: ReadableStream<Uint8Array>,
+  res: ServerResponse,
+  responseId: string,
+  onDone: (body: JsonObject) => void,
+  onFirstToken: () => void,
+) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let textOutput = "";
+  let reasoningOutput = "";
+  let model = "unknown";
+  let usage: JsonObject | undefined;
+  let finishReason: unknown;
+  const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+  const announcedTools = new Set<number>();
+  const emitLine = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const raw = line.slice(5).trim();
+    if (!raw || raw === "[DONE]") return;
+    let chunk: JsonObject;
+    try { chunk = object(JSON.parse(raw)); } catch { return; }
+    if (typeof chunk.model === "string") model = chunk.model;
+    if (chunk.usage && typeof chunk.usage === "object") usage = object(chunk.usage);
+    const choice = Array.isArray(chunk.choices) && chunk.choices[0] && typeof chunk.choices[0] === "object" ? chunk.choices[0] as JsonObject : {};
+    if (choice.finish_reason !== undefined && choice.finish_reason !== null) finishReason = choice.finish_reason;
+    const delta = choice.delta && typeof choice.delta === "object" ? choice.delta as JsonObject : {};
+    if (typeof delta.content === "string") {
+      onFirstToken();
+      textOutput += delta.content;
+      appendSse(res, "response.output_text.delta", { type: "response.output_text.delta", response_id: responseId, output_index: 0, content_index: 0, delta: delta.content });
+    }
+    if (typeof delta.reasoning_content === "string") {
+      onFirstToken();
+      reasoningOutput += delta.reasoning_content;
+      appendSse(res, "response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", response_id: responseId, item_id: `rs_${responseId}`, output_index: 0, summary_index: 0, delta: delta.reasoning_content });
+    }
+    if (Array.isArray(delta.tool_calls)) for (const raw of delta.tool_calls) {
+      onFirstToken();
+      const call = object(raw);
+      const index = typeof call.index === "number" ? call.index : 0;
+      const fn = call.function && typeof call.function === "object" ? object(call.function) : {};
+      const current = toolCalls.get(index) ?? { id: typeof call.id === "string" ? call.id : `call_${index}`, name: typeof fn.name === "string" ? fn.name : "", arguments: "" };
+      if (typeof call.id === "string") current.id = call.id;
+      if (typeof fn.name === "string") current.name += fn.name;
+      if (typeof fn.arguments === "string") {
+        current.arguments += fn.arguments;
+        appendSse(res, "response.function_call_arguments.delta", { type: "response.function_call_arguments.delta", response_id: responseId, item_id: current.id, output_index: index, delta: fn.arguments });
+      }
+      toolCalls.set(index, current);
+      if (!announcedTools.has(index)) {
+        announcedTools.add(index);
+        appendSse(res, "response.output_item.added", { type: "response.output_item.added", response_id: responseId, output_index: index, item: { type: "function_call", id: current.id, call_id: current.id, name: current.name, arguments: "", status: "in_progress" } });
+      }
+    }
+  };
+  appendSse(res, "response.created", { type: "response.created", response: { id: responseId, object: "response", status: "in_progress", output: [] } });
+  for await (const chunk of Readable.fromWeb(body as never)) {
+    buffer += decoder.decode(chunk as Buffer, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) emitLine(line);
+  }
+  if (buffer) emitLine(buffer);
+  const response = responseOutputFromChat({ model, choices: [{ message: { content: textOutput, reasoning_content: reasoningOutput, tool_calls: [...toolCalls.values()].map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) } }], usage }, responseId);
+  response.status = finishReason === "length" ? "incomplete" : "completed";
+  for (const [index, call] of toolCalls) appendSse(res, "response.output_item.done", { type: "response.output_item.done", response_id: responseId, output_index: index, item: { type: "function_call", id: call.id, call_id: call.id, name: call.name, arguments: call.arguments, status: "completed" } });
+  appendSse(res, "response.completed", { type: "response.completed", response });
+  res.end();
+  onDone(response);
+}
+
+function mergeParams(body: ChatBody, params: Record<string, unknown>): ChatBody {
+  const protectedKeys = new Set(["model", "messages", "input", "stream", "instructions", "previous_response_id", "tools"]);
+  return Object.entries(params).reduce((result, [key, value]) => {
+    if (!protectedKeys.has(key)) result[key] = value;
+    return result;
+  }, { ...body });
+}
+
+async function readBody(req: IncomingMessage): Promise<JsonObject> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const value = Buffer.from(chunk as Uint8Array);
+    size += value.length;
+    if (size > 2 * 1024 * 1024) throw new LlmProxyError("INVALID_REQUEST", "LLM request body exceeds 2 MiB", 413);
+    chunks.push(value);
+  }
+  try { return object(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+  catch (error) { if (error instanceof LlmProxyError) throw error; throw new LlmProxyError("INVALID_REQUEST", "LLM request body must be valid JSON"); }
+}
+
+interface HistoryEntry { messages: JsonObject[]; bytes: number; expiresAt: number; }
+
+export class LlmProxy {
+  private server = createServer((req, res) => void this.handle(req, res));
+  private listening = false;
+  private readonly token = randomBytes(32).toString("base64url");
+  private readonly history = new Map<string, HistoryEntry>();
+  private port = 0;
+  constructor(
+    private readonly config: Pick<Config, "host">,
+    private readonly getSettings: () => Settings,
+    private readonly onRecord?: (record: LlmUsageRecord) => void,
+  ) {}
+  get baseUrl() { return `http://127.0.0.1:${this.port}`; }
+  get runtimeToken() { return this.token; }
+  providerBaseUrl(providerId: string) { return `${this.baseUrl}/llm/${encodeURIComponent(providerId)}/v1`; }
+  async start() {
+    if (this.listening) return;
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => { this.server.off("listening", onListening); reject(error); };
+      const onListening = () => { this.server.off("error", onError); const address = this.server.address(); this.port = typeof address === "object" && address ? address.port : 0; this.listening = true; resolve(); };
+      this.server.once("error", onError);
+      this.server.once("listening", onListening);
+      this.server.listen(0, "127.0.0.1");
+    });
+  }
+  async close() {
+    if (!this.listening) return;
+    await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    this.listening = false;
+  }
+  private cleanupHistory() {
+    const now = Date.now();
+    for (const [id, entry] of this.history) if (entry.expiresAt <= now) this.history.delete(id);
+    while (this.history.size > 100) this.history.delete(this.history.keys().next().value!);
+  }
+  private getHistory(id: string): JsonObject[] {
+    this.cleanupHistory();
+    const entry = this.history.get(id);
+    if (!entry) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "previous_response_id is unknown or expired");
+    return structuredClone(entry.messages);
+  }
+  private putHistory(id: string, messages: JsonObject[]) {
+    const copy = structuredClone(messages);
+    this.history.set(id, { messages: copy, bytes: Buffer.byteLength(JSON.stringify(copy)), expiresAt: Date.now() + 10 * 60 * 1000 });
+    this.cleanupHistory();
+    let total = 0;
+    for (const entry of this.history.values()) total += entry.bytes;
+    while (total > 2 * 1024 * 1024 && this.history.size) {
+      const first = this.history.keys().next().value!;
+      total -= this.history.get(first)?.bytes ?? 0;
+      this.history.delete(first);
+    }
+  }
+  private async handle(req: IncomingMessage, res: ServerResponse) {
+    const started = Date.now();
+    let providerID = "";
+    let modelID: string | null = null;
+    let clientApi: Api = "openai-completions";
+    let upstreamApi: Api = clientApi;
+    let conversion = "none";
+    let stream = false;
+    let status = 500;
+    let ttftMs: number | null = null;
+    let usage: LlmUsageRecord["usage"] = null;
+    let error: string | null = null;
+    const finish = () => this.onRecord?.({ providerID, modelID, clientApi, upstreamApi, conversion, status, durationMs: Date.now() - started, ttftMs, stream, usage, error, occurredAt: new Date().toISOString() });
+    try {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      const match = url.pathname.match(/^\/llm\/([^/]+)\/v1\/(responses|chat\/completions|models)$/);
+      if (!match) throw new LlmProxyError("INVALID_REQUEST", "Unknown LLM proxy route", 404);
+      if (req.headers.authorization !== `Bearer ${this.token}`) throw new LlmProxyError("PROXY_AUTHENTICATION_FAILED", "Invalid LLM proxy token", 401);
+      providerID = decodeURIComponent(match[1]!);
+      const provider = this.getSettings().providers.find((item) => item.id === providerID);
+      if (!provider || !provider.enabled) throw new LlmProxyError("PROVIDER_NOT_FOUND", "Provider is not enabled", 404);
+      if (match[2] === "models") {
+        if (req.method !== "GET") throw new LlmProxyError("INVALID_REQUEST", "Models endpoint only accepts GET", 405);
+        status = 200;
+        this.writeJson(res, status, { object: "list", data: provider.models.map((model) => ({ id: model.id, object: "model", owned_by: provider.id })) });
+        finish();
+        return;
+      }
+      if (req.method !== "POST") throw new LlmProxyError("INVALID_REQUEST", "LLM endpoints only accept POST", 405);
+      clientApi = apiFromEndpoint(match[2]!)!;
+      if (clientApi !== provider.api) throw new LlmProxyError("INVALID_REQUEST", `Provider expects ${endpoint(provider.api)}`, 400);
+      upstreamApi = provider.upstreamApi ?? provider.api;
+      conversion = provider.conversion ?? "none";
+      if (conversion === "none" && upstreamApi !== clientApi) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "Client and upstream protocols differ; configure an explicit conversion");
+      if (conversion !== "none" && !(clientApi === "openai-responses" && upstreamApi === "openai-completions" && conversion === "responses-to-completions")) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "Only Responses to Chat Completions conversion is supported");
+      const input = await readBody(req);
+      modelID = typeof input.model === "string" ? input.model : null;
+      stream = input.stream === true;
+      const model = provider.models.find((item) => item.id === modelID);
+      if (!model) throw new LlmProxyError("INVALID_REQUEST", "Unknown provider model", 400);
+      let outgoing = input;
+      let history: JsonObject[] = [];
+      if (conversion === "responses-to-completions") {
+        if (input.previous_response_id !== undefined) history = this.getHistory(text(input.previous_response_id, "previous_response_id"));
+        outgoing = responsesToChat(input, history);
+      }
+      outgoing = mergeParams(outgoing, provider.request?.params ?? {});
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      for (const [key, value] of Object.entries(provider.request?.headers ?? {})) if (!["authorization", "host", "content-length", "transfer-encoding"].includes(key.toLowerCase())) headers[key] = String(value);
+      if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+      const upstream = `${provider.baseUrl.replace(/\/$/, "")}/${endpoint(upstreamApi)}`;
+      const response = await fetch(upstream, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120000), headers, body: JSON.stringify(outgoing) });
+      status = response.status;
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`Upstream returned HTTP ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type") ?? "application/json";
+      if (conversion === "responses-to-completions") {
+        const responseId = `resp_${randomUUID().replaceAll("-", "")}`;
+        if (stream || contentType.includes("text/event-stream")) {
+          res.statusCode = status;
+          res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          if (!response.body) throw new Error("Upstream returned an empty stream");
+          await convertChatStream(response.body, res, responseId, (converted) => {
+            usage = usageFromResponse(converted.usage);
+            this.putHistory(responseId, [
+              ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
+              assistantMessageFromResponse(converted),
+            ]);
+          }, () => { if (ttftMs === null) ttftMs = Date.now() - started; });
+          status = 200;
+          finish();
+          return;
+        }
+        const body = object(await response.json());
+        const converted = chatToResponse(body, responseId);
+        usage = usageFromResponse(converted.usage);
+        this.putHistory(responseId, [
+          ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
+          assistantMessageFromResponse(converted),
+        ]);
+        status = 200;
+        this.writeJson(res, status, converted);
+        finish();
+        return;
+      }
+      const raw = contentType.includes("application/json") ? await response.clone().json().catch(() => null) as JsonObject | null : null;
+      res.statusCode = status;
+      res.setHeader("Content-Type", contentType);
+      if (response.body) Readable.fromWeb(response.body as never).pipe(res);
+      else res.end();
+      usage = raw ? usageFromResponse(raw.usage) : null;
+      ttftMs = Date.now() - started;
+      finish();
+    } catch (caught) {
+      error = caught instanceof LlmProxyError ? caught.code : "UPSTREAM_ERROR";
+      const proxyError = caught instanceof LlmProxyError ? caught : new LlmProxyError("UPSTREAM_ERROR", "Upstream model request failed", 502);
+      status = proxyError.status;
+      if (!res.headersSent) this.writeJson(res, status, { error: { code: proxyError.code, message: proxyError.message, type: "proxy_error" } });
+      else res.end();
+      finish();
+    }
+  }
+  private writeJson(res: ServerResponse, status: number, body: unknown) {
+    res.statusCode = status;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify(body));
+  }
+}
+
+const proxies = new WeakMap<object, LlmProxy>();
+export function registerLlmProxy(config: Config, proxy: LlmProxy) { proxies.set(config, proxy); }
+export function unregisterLlmProxy(config: Config) { proxies.delete(config); }
+export function getLlmProxy(config: Config) { return proxies.get(config); }

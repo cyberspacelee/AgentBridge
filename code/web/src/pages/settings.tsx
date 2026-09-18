@@ -109,6 +109,14 @@ export function Settings() {
                   <dt>配置版本</dt>
                   <dd>{settings.data.revision.slice(0, 12)}</dd>
                 </div>
+                <div>
+                  <dt>LLM 代理</dt>
+                  <dd>
+                    {runtime.llmProxy?.ready
+                      ? `运行中（${runtime.llmProxy.enabledProviders} 个 Provider）`
+                      : "未运行"}
+                  </dd>
+                </div>
               </dl>
               <Collapsible className="mt-4">
                 <CollapsibleTrigger

@@ -26,6 +26,7 @@ import {
 } from "../shared/settings.js";
 import type { Config } from "./config.js";
 import { GatewayError, errorDetail } from "./errors.js";
+import { getLlmProxy } from "./llm-proxy/server.js";
 
 const applied = new WeakMap<Config, Map<string, Settings>>();
 const object = (value: unknown) =>
@@ -162,6 +163,11 @@ export function diagnosticSecrets(config: Config): string[] {
       ...(applied.get(config)?.values() ?? []),
     ]) {
       values.push(...settings.providers.map((p) => p.apiKey));
+      for (const provider of settings.providers) {
+        values.push(...Object.values(provider.request?.headers ?? {}).map(String));
+        for (const value of Object.values(provider.request?.params ?? {}))
+          if (typeof value === "string") values.push(value);
+      }
       for (const m of settings.mcp)
         values.push(
           ...Object.values(
@@ -174,14 +180,43 @@ export function diagnosticSecrets(config: Config): string[] {
   }
   return values.filter(Boolean);
 }
+export function providerBaseUrl(
+  config: Config,
+  provider: Settings["providers"][number],
+) {
+  return getLlmProxy(config)?.providerBaseUrl(provider.id) ?? provider.baseUrl;
+}
+export function providerApiKey(
+  config: Config,
+  provider: Settings["providers"][number],
+) {
+  return getLlmProxy(config)?.runtimeToken ?? (provider.apiKey || "not-required");
+}
+const secretParameter = /(?:api[_-]?key|token|secret|password|authorization|credential)/i;
+function maskProviderParams(value: unknown, key = ""): unknown {
+  if (secretParameter.test(key)) return hiddenSecret;
+  if (Array.isArray(value)) return value.map((item) => maskProviderParams(item));
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.entries(value).map(([child, item]) => [child, maskProviderParams(item, child)]));
+  return value;
+}
+function restoreProviderParams(value: unknown, old: unknown, key = ""): unknown {
+  if (secretParameter.test(key) && value === hiddenSecret) return old;
+  if (Array.isArray(value)) return value.map((item, index) => restoreProviderParams(item, Array.isArray(old) ? old[index] : undefined));
+  if (value && typeof value === "object") {
+    const previous = old && typeof old === "object" && !Array.isArray(old) ? old as Record<string, unknown> : {};
+    return Object.fromEntries(Object.entries(value).map(([child, item]) => [child, restoreProviderParams(item, previous[child], child)]));
+  }
+  return value;
+}
 export function piProviders(config: Config) {
   return Object.fromEntries(
     engineSettings(config, "pi").providers.map((p) => [
       p.id,
       {
-        baseUrl: p.baseUrl,
+        baseUrl: providerBaseUrl(config, p),
         api: p.api,
-        apiKey: (p.apiKey || "not-required")
+        apiKey: providerApiKey(config, p)
           .replaceAll("$", () => "$$")
           .replace(/^!/, "$!"),
         models: p.models.map((m) => ({
@@ -262,7 +297,7 @@ export function opencodeEnvironment(config: Config) {
               : "@ai-sdk/openai-compatible",
           name: p.id,
           // The gateway owns the task deadline, including slow model responses.
-          options: { baseURL: p.baseUrl, apiKey: p.apiKey || "not-required", timeout: false, headerTimeout: false, chunkTimeout: false },
+          options: { baseURL: providerBaseUrl(config, p), apiKey: providerApiKey(config, p), timeout: false, headerTimeout: false, chunkTimeout: false },
           models: Object.fromEntries(
             p.models.map((m) => [
               m.id,
@@ -317,7 +352,7 @@ export function nativeEnvironment(config: Config, id: "codex" | "grok") {
     ...Object.fromEntries(
       settings.providers.map((p) => [
         `AGENT_BRIDGE_KEY_${p.id}`,
-        p.apiKey || "not-required",
+        providerApiKey(config, p),
       ]),
     ),
   };
@@ -524,7 +559,7 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
                   p.id,
                   {
                     name: p.id,
-                    base_url: p.baseUrl,
+                    base_url: providerBaseUrl(config, p),
                     env_key: `AGENT_BRIDGE_KEY_${p.id}`,
                     wire_api: "responses",
                     requires_openai_auth: false,
@@ -569,7 +604,7 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
                     `${p.id}/${m.id}`,
                     {
                       model: m.id,
-                      base_url: p.baseUrl,
+                      base_url: providerBaseUrl(config, p),
                       name: m.name || m.id,
                       env_key: `AGENT_BRIDGE_KEY_${p.id}`,
                       api_backend:
@@ -621,7 +656,12 @@ export class SettingsManager {
   view(): SettingsView {
     const settings = readSettings(this.config);
     const safe = structuredClone(settings);
-    for (const p of safe.providers) if (p.apiKey) p.apiKey = hiddenSecret;
+    for (const p of safe.providers) {
+      if (p.apiKey) p.apiKey = hiddenSecret;
+      for (const key of Object.keys(p.request?.headers ?? {}))
+        if (p.request!.headers[key]) p.request!.headers[key] = hiddenSecret;
+      p.request!.params = maskProviderParams(p.request?.params ?? {}) as typeof p.request.params;
+    }
     for (const m of safe.mcp) {
       const values =
         m.config.type === "local" ? m.config.environment : m.config.headers;
@@ -657,10 +697,14 @@ export class SettingsManager {
       return old;
     };
     for (const p of request.settings.providers)
-      p.apiKey = restore(
-        p.apiKey,
-        previous.providers.find((old) => old.id === p.id)?.apiKey,
-      );
+      {
+        const old = previous.providers.find((entry) => entry.id === p.id);
+        p.apiKey = restore(p.apiKey, old?.apiKey);
+        const oldHeaders = old?.request?.headers ?? {};
+        for (const key of Object.keys(p.request?.headers ?? {}))
+          p.request!.headers[key] = restore(p.request!.headers[key]!, oldHeaders[key]);
+        p.request!.params = restoreProviderParams(p.request?.params ?? {}, old?.request?.params) as typeof p.request.params;
+      }
     for (const m of request.settings.mcp) {
       const old = previous.mcp.find((entry) => entry.id === m.id)?.config;
       const values =
@@ -701,47 +745,51 @@ export class SettingsManager {
     const started = Date.now();
     try {
       const responses = provider.api === "openai-responses";
+      const proxy = getLlmProxy(this.config);
+      const requestBody = responses
+        ? {
+            model: modelID,
+            input: "Reply OK.",
+            max_output_tokens: 64,
+            ...(model.thinking === "off" ? { reasoning: { effort: "none" } } : {}),
+            store: false,
+          }
+        : {
+            model: modelID,
+            messages: [{ role: "user", content: "Reply OK." }],
+            max_tokens: 64,
+            ...(model.thinking === "off" ? { reasoning_effort: "none" } : {}),
+            stream: false,
+          };
       const result = await fetch(
-        `${provider.baseUrl.replace(/\/$/, "")}/${responses ? "responses" : "chat/completions"}`,
+        proxy
+          ? `${proxy.providerBaseUrl(provider.id)}/${responses ? "responses" : "chat/completions"}`
+          : `${provider.baseUrl.replace(/\/$/, "")}/${responses ? "responses" : "chat/completions"}`,
         {
           method: "POST",
           redirect: "error",
           signal: AbortSignal.timeout(30000),
           headers: {
             "Content-Type": "application/json",
-            ...(provider.apiKey
-              ? { Authorization: `Bearer ${provider.apiKey}` }
-              : {}),
+            ...(proxy
+              ? { Authorization: `Bearer ${proxy.runtimeToken}` }
+              : provider.apiKey
+                ? { Authorization: `Bearer ${provider.apiKey}` }
+                : {}),
           },
-          body: JSON.stringify(
-            responses
-              ? {
-                  model: modelID,
-                  input: "Reply OK.",
-                  max_output_tokens: 64,
-                  ...(model.thinking === "off" ? { reasoning: { effort: "none" } } : {}),
-                  store: false,
-                }
-              : {
-                  model: modelID,
-                  messages: [{ role: "user", content: "Reply OK." }],
-                  max_tokens: 64,
-                  ...(model.thinking === "off" ? { reasoning_effort: "none" } : {}),
-                  stream: false,
-                },
-          ),
+          body: JSON.stringify(requestBody),
         },
       );
       if (!result.ok) {
         await result.body?.cancel();
         throw new Error(`Provider returned HTTP ${result.status}`);
       }
-      const body = object(await result.json());
+      const responseBody = object(await result.json());
       if (
-        body.error ||
+        responseBody.error ||
         (responses
-          ? !Array.isArray(body.output) && typeof body.output_text !== "string"
-          : !Array.isArray(body.choices) || body.choices.length === 0)
+          ? !Array.isArray(responseBody.output) && typeof responseBody.output_text !== "string"
+          : !Array.isArray(responseBody.choices) || responseBody.choices.length === 0)
       )
         throw new Error("Provider returned an invalid model response");
       return { ok: true, durationMs: Date.now() - started, modelID };

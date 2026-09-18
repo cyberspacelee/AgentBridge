@@ -58,6 +58,24 @@ const httpUrl = z.url().refine((value) => {
     return false;
   }
 }, "Use an HTTP(S) URL without embedded credentials");
+const requestHeaderName = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/, "请求头名称无效");
+export const providerRequestSchema = z
+  .object({
+    headers: z
+      .record(requestHeaderName, z.string().max(8192))
+      .refine((value) => Object.keys(value).length <= 32, "请求头最多包含 32 个字段")
+      .default({}),
+    params: z
+      .record(z.string().min(1).max(128), z.unknown())
+      .refine((value) => Object.keys(value).length <= 100, "请求参数最多包含 100 个字段")
+      .default({}),
+  })
+  .strict()
+  .default({ headers: {}, params: {} });
 export const providerSchema = z
   .object({
     id: name,
@@ -66,6 +84,11 @@ export const providerSchema = z
     api: z
       .enum(["openai-completions", "openai-responses"])
       .default("openai-completions"),
+    upstreamApi: z
+      .enum(["openai-completions", "openai-responses"])
+      .optional(),
+    conversion: z.enum(["none", "responses-to-completions"]).default("none"),
+    request: providerRequestSchema,
     models: z
       .array(
         z
