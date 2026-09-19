@@ -192,7 +192,9 @@ export class Supervisor {
       this.testing = true;
       try {
         const env = networkEnvironment(settings, this.baseEnv);
-        for (const key of ["NODE_OPTIONS", "ELECTRON_RUN_AS_NODE"]) delete env[key];
+        delete env.NODE_OPTIONS;
+        if (this.options.spawnBackend) env.ELECTRON_RUN_AS_NODE = "1";
+        else delete env.ELECTRON_RUN_AS_NODE;
         const script = `const start=Date.now();try{const r=await fetch(process.argv[1],{signal:AbortSignal.timeout(10000)});await r.body?.cancel();console.log(JSON.stringify({status:r.status,durationMs:Date.now()-start,scope:"gateway"}));}catch(e){console.log(JSON.stringify({error:e.cause?.code||e.code||e.name}));}`;
         const { stdout } = await promisify(execFile)(this.node, ["--input-type=module", "-e", script, url.href], { env, cwd: this.directory, timeout: 15000, maxBuffer: 16384, windowsHide: true });
         const result = JSON.parse(stdout);
