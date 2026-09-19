@@ -1,13 +1,13 @@
 # Web 与 Desktop 统一运行
 
-更新：2026-09-08。当前版本不兼容历史配置、数据库或运行时清单，不提供迁移、导出转换或兼容入口；使用新数据目录重新配置。配置和数据库版本为 3，运行时清单和系统网络配置版本为 1。同一当前版本内的失败回滚和中断恢复保留。
+更新：2026-09-19。当前版本不兼容历史配置、数据库或运行时清单，不提供迁移、导出转换或兼容入口；使用新数据目录重新配置。配置和数据库版本为 3，运行时清单和系统网络配置版本为 1。同一当前版本内的失败回滚和中断恢复保留。
 
 ## 统一结果与保留的差异
 
 | 功能 | 当前共同实现 | 平台差异 |
 | --- | --- | --- |
 | Agent、模型、任务、审批、产物、观测 | 同一 React 页面、Fastify API、SessionRuntime、SQLite | 无业务分支 |
-| CLI 来源 | 每个 Agent 独立选择 managed 或 external；默认受管，安装不启用 | Desktop 自带 Node/npm，源码入口发现并校验主机 Node/npm |
+| CLI 来源 | 每个 Agent 独立选择 managed 或 external；默认受管，安装不启用 | Desktop 网关使用 Electron Node，受管安装首次按需下载 Node/npm |
 | 版本管理 | 实际检测文件与版本，检查最新版本，受管安装/更新/卸载，来源切换与回滚 | 外部程序始终不被覆盖或删除 |
 | 网络配置 | `host/network.mjs` 规范化代理、认证、绕过地址和 CA；`system.json` 保存修订与生效状态 | Electron 更新器使用自己的 Session 网络栈，并应用同一代理策略 |
 | 重启/退出 | `host/supervisor.mjs` 管理同一个 Node 后端，支持等待或停止任务 | Desktop 另有窗口、托盘和应用更新；Web 的退出结束启动器 |
@@ -29,13 +29,13 @@ flowchart LR
   Launcher[Web 启动器] --> Host[共用 Supervisor]
   Main[Electron main] --> Host
   Preload --> Main
-  Host --> Node[独立 Node 后端]
+  Host --> Node[Electron utility process 网关]
   Node --> API
   API --> Runtime[共用 SessionRuntime / RuntimeManager]
   Runtime --> CLI[四种 Agent CLI]
 ```
 
-业务前端不通过 Electron IPC 管理网络或 Agent。后端与 Supervisor 通过私有父子 IPC 通信，含请求 ID、并发上限、超时和断连拒绝。只接受固定的系统操作，不暴露任意命令执行接口。Node 使用独立进程组；后端失去父 IPC 后退出，Supervisor 和引擎启动器负责后代清理。任务恢复依赖已有状态机，不重新提交旧 Run。
+业务前端不通过 Electron IPC 管理网络或 Agent。后端与 Supervisor 通过私有 host control transport 通信：Web/CLI 使用 Node IPC，桌面 utility process 使用 `process.parentPort`，含请求 ID、并发上限、超时和断连拒绝。只接受固定的系统操作，不暴露任意命令执行接口。Agent 仍使用独立进程组；后端失去父连接后退出，Supervisor 和引擎启动器负责后代清理。任务恢复依赖已有状态机，不重新提交旧 Run。
 
 | 接口 | 语义 |
 | --- | --- |
@@ -69,9 +69,9 @@ Web/Desktop 本机与局域网接口不要求配对码、Cookie 或 Bearer token
 
 preload 每个系统能力提供一个明确方法，避免暴露 ipcRenderer 或通用 invoke；初始化和偏好持久化均为异步。依据 [Context Isolation](https://www.electronjs.org/docs/latest/tutorial/context-isolation) 和 [Performance](https://www.electronjs.org/docs/latest/tutorial/performance)。密码保护采用 [safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage) 的异步接口，并区分 Linux basic_text 与系统密钥存储。
 
-Node 后端继续作为独立 Node 进程运行：这样 Web 无需 Electron，桌面受管安装也使用相同且明确的 Node/npm。Electron 的 [utilityProcess](https://www.electronjs.org/docs/latest/api/utility-process) 适合依附 Electron 的 Node 工作进程，但不是本项目统一后端必须采用的方式。代理与 CA 在创建 Node 进程之前注入，遵循 [Node CLI 环境变量](https://nodejs.org/api/cli.html#node_use_env_proxy1) 的启动语义。
+Web/CLI 后端继续作为独立 Node 进程运行，桌面后端使用 Electron 的 [utilityProcess](https://www.electronjs.org/docs/latest/api/utility-process)；两者共享同一入口和 HTTP/SSE 业务协议。桌面只有在受管 Agent 需要 npm 时才下载独立 Node/npm，避免把 Electron 当作通用 CLI 运行时。代理与 CA 仍在进程启动前注入，遵循 [Node CLI 环境变量](https://nodejs.org/api/cli.html#node_use_env_proxy1) 的启动语义。
 
-构建时先清空后端输出，删除的旧模块不会进入分发包。Linux 的构建、开发态及搬到仓库外的包体冒烟测试验证共享 host 模块、内置 Node/npm、代理认证、循环连接、偏好、访问隔离与退出。Windows/macOS 的实机、密钥存储与签名更新仍需目标平台验收；不将 Linux 结果写成三平台实测。
+构建时先清空后端输出，删除的旧模块不会进入分发包。Linux 的构建、开发态及搬到仓库外的包体冒烟测试验证共享 host 模块、utility process、代理认证、循环连接、偏好、访问隔离与退出。Windows/macOS 的实机、密钥存储与签名更新仍需目标平台验收；不将 Linux 结果写成三平台实测。
 
 ## 统一运行基线验证（鉴权清理前的历史记录）
 

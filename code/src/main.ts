@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
 import { LlmProxy, registerLlmProxy, unregisterLlmProxy } from "./llm-proxy/server.js";
 import { readSettings } from "./settings.js";
+import { disconnectHost, hostConnected, onHostDisconnect, onHostMessage, sendHost } from "./host/control.js";
 export async function startGateway(config = readConfig()) {
   const store = new Store(config.database, config.limits.maxEventBytes);
   const proxy = new LlmProxy(config, () => readSettings(config), (record) => {
@@ -38,7 +39,7 @@ export async function startGateway(config = readConfig()) {
   });
   runtime.onFatal = () => {
     // Reopen durable state only after native processes are stopped; never replay uncertain work.
-    if (config.supervised && process.connected)
+    if (config.supervised && hostConnected())
       void hostRequest("lifecycle", { action: "restart", mode: "stop" }).catch(() => {
         runtime.log("error", "recovery", "RESTART_FAILED", "Automatic recovery failed; restart the gateway manually");
       });
@@ -67,18 +68,18 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
-  if (!process.connected || process.env.AGENT_SUPERVISED !== "true") throw new Error("请通过 pnpm start 或 pnpm dev 启动网关");
+  if (!hostConnected() || process.env.AGENT_SUPERVISED !== "true") throw new Error("请通过 pnpm start 或 pnpm dev 启动网关");
   let interrupted = false;
   const interruptStartup = () => { interrupted = true; };
   const startupMessage = (message: unknown) => {
     if (message && typeof message === "object" && "type" in message && ["shutdown", "drain"].includes(String(message.type))) interruptStartup();
   };
-  process.once("disconnect", interruptStartup);
-  process.on("message", startupMessage);
+  const removeDisconnect = onHostDisconnect(interruptStartup);
+  const removeMessage = onHostMessage(startupMessage);
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, interruptStartup);
   const { server, proxy, runtime, drain } = await startGateway();
-  process.removeListener("disconnect", interruptStartup);
-  process.removeListener("message", startupMessage);
+  removeDisconnect();
+  removeMessage();
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.removeListener(signal, interruptStartup);
   let closing: Promise<void> | undefined;
   let draining = false;
@@ -95,18 +96,18 @@ if (
       .finally(async () => {
         unregisterLlmProxy(runtime.config);
         await proxy.close();
-        if (process.connected) process.disconnect();
+        disconnectHost();
       }));
   };
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.on(signal, () => {
       void close();
     });
-  if (process.send) {
-    process.once("disconnect", () => {
+  if (hostConnected()) {
+    onHostDisconnect(() => {
       void close();
     });
-    process.on("message", (message: unknown) => {
+    onHostMessage((message: unknown) => {
       if (!message || typeof message !== "object" || !("type" in message))
         return;
       if (message.type === "shutdown") void close();
@@ -127,8 +128,8 @@ if (
       }
     });
     const address = server.server.address();
-    if (interrupted || !process.connected) void close();
+    if (interrupted || !hostConnected()) void close();
     else if (address && typeof address !== "string")
-      process.send({ type: "ready", url: gatewayUrl(runtime.config.host, address.port) });
+      sendHost({ type: "ready", url: gatewayUrl(runtime.config.host, address.port) });
   }
 }

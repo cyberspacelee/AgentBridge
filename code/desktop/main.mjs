@@ -17,6 +17,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { isWorkspaceUrl, externalUrl } from "./security.mjs";
+import { spawnUtilityBackend } from "./utility-process.mjs";
 import updater from "electron-updater";
 
 app.setName("AgentBridge");
@@ -55,22 +56,6 @@ let updateLogin;
 const resources = app.isPackaged
   ? process.resourcesPath
   : path.resolve(import.meta.dirname, "../.desktop-stage");
-const node =
-  process.env.AGENT_RUNTIME_NODE ??
-  path.join(
-    resources,
-    "node",
-    process.platform === "win32" ? "node.exe" : "bin/node",
-  );
-const npm =
-  process.env.AGENT_RUNTIME_NPM ??
-  path.join(
-    resources,
-    "node",
-    process.platform === "win32"
-      ? "node_modules/npm/bin/npm-cli.js"
-      : "lib/node_modules/npm/bin/npm-cli.js",
-  );
 const backend =
   process.env.AGENT_DESKTOP_BACKEND ??
   path.join(resources, "backend/dist/src/main.js");
@@ -344,12 +329,13 @@ async function createWindow() {
 async function launchBackend() {
   const secure = await safeStorage.isAsyncEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
   supervisor = new Supervisor({
-    node, args: [backend], directory: path.join(dataDirectory, "data"),
+    node: process.execPath, args: [], directory: path.join(dataDirectory, "data"),
+    spawnBackend: ({ env, cwd }) => spawnUtilityBackend({ modulePath: backend, cwd, env }),
     protection: secure ? "os" : "file",
     encrypt: secure ? (value) => safeStorage.encryptStringAsync(value) : undefined,
     decrypt: async (value) => (await safeStorage.decryptStringAsync(value)).result,
     // Desktop selects the saved Agent; do not inherit a shell-only engine override.
-    env: { AGENT_MANAGED_RUNTIMES: "true", AGENT_RUNTIME_NPM: npm, AGENT_ENGINE: undefined },
+    env: { AGENT_MANAGED_RUNTIMES: "true", AGENT_ENGINE: undefined },
     onReady: (url) => {
       const changed = origin && origin !== url;
       origin = url;

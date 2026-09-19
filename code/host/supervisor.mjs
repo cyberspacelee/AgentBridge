@@ -99,11 +99,14 @@ export class Supervisor {
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     this.unlock = await lockDirectory(this.directory);
-    const { stdout: nodeVersion } = await promisify(execFile)(this.node, ["-p", "process.versions.node"], { timeout: 10000, windowsHide: true });
-    const [major, minor] = nodeVersion.trim().split(".").map(Number);
-    if (!(major === 22 && minor >= 21 || major >= 24)) throw new Error("需要 Node.js >= 22.21（推荐项目打包使用的 Node.js 24）");
     this.baseEnv.AGENT_MANAGED_RUNTIMES ??= "true";
-    this.npm = await findNpm(this.node, this.baseEnv.AGENT_RUNTIME_NPM);
+    if (this.options.spawnBackend) this.npm = "";
+    else {
+      const { stdout: nodeVersion } = await promisify(execFile)(this.node, ["-p", "process.versions.node"], { timeout: 10000, windowsHide: true });
+      const [major, minor] = nodeVersion.trim().split(".").map(Number);
+      if (!(major === 22 && minor >= 21 || major >= 24)) throw new Error("需要 Node.js >= 22.21（推荐项目打包使用的 Node.js 24）");
+      this.npm = await findNpm(this.node, this.baseEnv.AGENT_RUNTIME_NPM);
+    }
     let stored;
     try { stored = JSON.parse(await readFile(this.filename, "utf8")); }
     catch (error) { if (error.code !== "ENOENT") throw new Error("系统配置损坏，原文件已保留，请从备份恢复。"); }
@@ -214,12 +217,21 @@ export class Supervisor {
     this.closing = false;
     const env = {
       ...networkEnvironment(this.applied, this.baseEnv),
-      AGENT_DATA_DIR: this.directory, AGENT_RUNTIME_NODE: this.node, AGENT_RUNTIME_NPM: this.npm,
+      AGENT_DATA_DIR: this.directory,
       AGENT_SUPERVISED: "true", AGENT_HOST: this.appliedGateway.host, AGENT_PORT: String(this.appliedGateway.port),
     };
+    if (!this.options.spawnBackend) {
+      env.AGENT_RUNTIME_NODE = this.node;
+      env.AGENT_RUNTIME_NPM = this.npm;
+    } else {
+      delete env.AGENT_RUNTIME_NODE;
+      delete env.AGENT_RUNTIME_NPM;
+    }
     if (this.url && this.appliedGateway.port === 0) env.AGENT_PORT = new URL(this.url).port || "80";
     delete env.NODE_OPTIONS; delete env.ELECTRON_RUN_AS_NODE;
-    const child = spawn(this.node, this.args, { env, cwd: this.options.cwd ?? this.directory, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    const child = this.options.spawnBackend
+      ? await this.options.spawnBackend({ env, cwd: this.options.cwd ?? this.directory, args: this.args, node: this.node })
+      : spawn(this.node, this.args, { env, cwd: this.options.cwd ?? this.directory, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] });
     this.child = child;
     let diagnostics = "";
     for (const stream of [child.stdout, child.stderr]) {
@@ -351,7 +363,12 @@ export class Supervisor {
   }
   async kill() {
     await this.cleanup();
-    if (!this.child?.pid || this.child.exitCode !== null) return;
+    if (!this.child || this.child.exitCode !== null) return;
+    if (this.child.killTree) {
+      this.child.killTree();
+      return;
+    }
+    if (!this.child.pid) return;
     if (process.platform === "win32") await promisify(execFile)("taskkill", ["/pid", String(this.child.pid), "/T", "/F"], { windowsHide: true }).catch(() => {});
     else { try { process.kill(-this.child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; } }
   }

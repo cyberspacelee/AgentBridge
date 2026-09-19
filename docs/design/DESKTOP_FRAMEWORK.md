@@ -7,7 +7,7 @@
 
 ## 建议
 
-**AgentBridge 首版桌面端采用 Electron，复用现有 React、TypeScript 网关与四个 CLI 适配器。** 已实现独立 Node 后端、沙箱窗口、托盘、原生目录选择和按需运行时管理。包体积优化采用生产依赖闭包、平台分包、locale 裁剪与默认不携带 CLI；Electron/Node 的基础成本仍存在，实测见下文。Tauri 保留为资源预算无法满足时的替代选项，没有建立双框架工程。
+**AgentBridge 首版桌面端采用 Electron，复用现有 React、TypeScript 网关与四个 CLI 适配器。** 已实现 utility process 网关、沙箱窗口、托盘、原生目录选择和按需运行时管理。包体积优化采用生产依赖闭包、平台分包、locale 裁剪与默认不携带 CLI；Electron 的基础成本仍存在，实测见下文。Tauri 保留为资源预算无法满足时的替代选项，没有建立双框架工程。
 
 本文按“Windows 10/11 优先、保留 Linux 开发能力、用户安装后可运行本地 Agent”评估；前两项来自现有设计基线，安装体验是本次分析假设。尚未明确的包体积、内存、离线安装和 macOS 支持要求，可能改变结论。
 
@@ -82,15 +82,15 @@ Electron 本身仍携带 Chromium；上述措施主要消除应用与运行包�
 Electron main（窗口、单实例、启动/退出、必要的原生操作）
   +-- BrowserWindow：现有 React 页面
   |     +-- 同源 HTTP/SSE --> 127.0.0.1:<实际端口>
-  +-- 独立后端进程：现有 Fastify + SessionRuntime + SQLite
+  +-- utility process：现有 Fastify + SessionRuntime + SQLite
         +-- Pi / OpenCode / Codex / Grok CLI 及各自工具进程
 ```
 
 前端继续使用现有 API；桌面 IPC 只处理选目录、显示文件位置等确有需要的原生操作。SQLite 和任务调度留在后端进程，避免同步存储操作阻塞窗口主进程。网页版本继续使用现有启动方式。
 
-结合外部 CLI 的运行需求，本次实现使用一套受管的独立 Node 同时承载网关和需要 Node 的 CLI。Node 24 LTS 是仓库的交付目标，实施时固定受测补丁版本；不增加第二套供网关使用的独立 Node。桌面与后端通过父子控制消息传递就绪地址及退出请求，前端业务继续走 HTTP/SSE。资源布局保持网关的模块、worker 和扩展查找语义。
+结合外部 CLI 的运行需求，桌面网关使用 Electron utility process，受管 Agent 需要 npm 时再下载一套 Node 24 LTS toolchain。桌面与后端通过父子控制消息传递就绪地址及退出请求，前端业务继续走 HTTP/SSE。资源布局保持网关的模块、worker 和扩展查找语义。
 
-**这是运行兼容性的选择，有额外 Node 磁盘成本。** Electron 内置 Node 无法从官方分发包中单独裁掉。`utilityProcess` 能承载网关，但不会自动在 PATH 提供 `node`、`npm` 或 `npx`。如果运行依赖清单证明可完全省去独立 Node，再验证 `utilityProcess.fork` 中的 `node:sqlite`、ESM、pino worker 和代理/CA 行为，并只保留一条生产启动路径。[E1] 不把 `ELECTRON_RUN_AS_NODE` 包装成通用 CLI 运行环境；这还影响 RunAsNode fuse 的安全配置。[E7]
+utility process 使用 Electron 内置 Node，受管安装的 Node/npm 只在用户数据目录存在并通过 SHA-256 校验后使用；不把 `ELECTRON_RUN_AS_NODE` 包装成通用 CLI 运行环境，也不让 CLI 依赖 Electron 的可执行文件。[E1][E7]
 
 Tauri 的可行替代架构是“Rust 窗口壳 + 固定版本 Node sidecar + 原有网关 + 同源 WebView”。由 Rust 侧启动受管 sidecar，不向页面开放任意 shell 命令。无需把整个后端迁到 Rust，也无需把所有 HTTP/SSE 改成 Tauri commands。[T1][T4]
 
@@ -98,25 +98,25 @@ Tauri 的可行替代架构是“Rust 窗口壳 + 固定版本 Node sidecar + �
 
 ### 构建和资源边界
 
-采用 Electron 44.2.0、electron-builder 26.15.3、electron-updater 6.8.9 和 Node 24.20.0，构建依赖固定在 pnpm 锁文件中。Agent CLI 独立从官方 latest/stable 解析；应用依赖固定不等于要求用户固定 CLI 版本。builder 默认网页已进入 v27，本项目使用 v26 schema 与配置，不套用 v27 的 `asar`/`nativeModules` 语法。[B4]
+采用 Electron 44.2.0、electron-builder 26.15.3、electron-updater 6.8.9，构建依赖固定在 pnpm 锁文件中。Node 24.20.0 只作为受管 Agent 安装的 toolchain 版本。Agent CLI 独立从官方 latest/stable 解析；应用依赖固定不等于要求用户固定 CLI 版本。builder 默认网页已进入 v27，本项目使用 v26 schema 与配置，不套用 v27 的 `asar`/`nativeModules` 语法。[B4]
 
 | 位置 | 实际职责 |
 | --- | --- |
-| `code/desktop/main.mjs` | 单实例、系统用户目录、托盘、窗口、网关子进程、退出和应用更新 |
+| `code/desktop/main.mjs` | 单实例、系统用户目录、托盘、窗口、utility process 网关、退出和应用更新 |
 | `code/desktop/preload.cjs`、`security.mjs` | 最小目录选择桥接、主题/侧栏偏好、受管页面来源与请求凭据边界 |
-| `code/tools/desktop-prepare.mjs` | 官方 Node SHA-256 校验、目标平台资源准备、pnpm production deploy、链接越界/非运行依赖检查 |
-| `code/desktop/builder.json` | ASAR 桌面壳；真实目录中的 Node/npm、网关、静态前端与 Pi 扩展；只保留中英文 locale |
+| `code/tools/desktop-prepare.mjs` | 目标平台资源准备、pnpm production deploy、链接越界/非运行依赖检查 |
+| `code/desktop/builder.json` | ASAR 桌面壳；独立 backend resource 由 utility process 加载；只保留中英文 locale |
 | `code/src/runtime/runtimes.ts` | 官方运行包解析、安装、取消、校验、探测、切换、回滚与卸载 |
 | `code/web/src/pages/runtime-installer.tsx` | Agent 详情“安装与版本”页签，版本、容量、错误和进度 |
 | `.github/workflows/desktop.yml` | Windows NSIS、Linux AppImage、macOS DMG/ZIP；上传构件，版本标签或手动 publish 触发 Release |
 
-桌面应用 manifest 仅声明 electron-updater。后端通过 `pnpm deploy --prod` 生成可搬移依赖闭包；Pi/OpenCode/pi-mcp-adapter 已从根包生产依赖移到源码开发依赖，基础包不含四个 CLI、测试、截图或构建工具。Node/npm 与后端放在 `extraResources`，不依赖系统全局 Node/npm，也不让外部 CLI 读取 ASAR 内的脚本。[E3][B1]
+桌面应用 manifest 仅声明 electron-updater。后端通过 `pnpm deploy --prod` 生成可搬移依赖闭包作为单一 backend resource；Pi/OpenCode/pi-mcp-adapter 已从根包生产依赖移到源码开发依赖，基础包不含四个 CLI、测试、截图、构建工具或独立 Node/npm。桌面 utility process 使用 Electron 自带 Node；受管 Agent 首次安装时才在用户数据目录下载并校验 Node/npm。[E3][B1]
 
-builder v26 的过滤器会排除复制来源根目录下的 `node_modules`，因此资源映射从 `.desktop-stage` 同时选择 `backend/**/*` 和 `node/**/*`，保留嵌套依赖目录。验收将整个应用复制到仓库外，保留相对软链、检查全部链接边界并清除 Node 模块搜索环境，防止打包缺依赖时借用开发目录产生假通过。
+backend resource 保留自己的生产依赖闭包，运行时不读取仓库或系统的 Node 模块目录。验收将整个应用复制到仓库外，保留相对软链、检查全部链接边界，防止打包缺依赖时借用开发目录产生假通过。
 
 ### 运行与安全边界
 
-Electron 在 `127.0.0.1:0` 启动独立 Node 网关，等待 IPC 就绪消息再打开已有 `/agents` 页面；HTTP/SSE 业务接口保持同源。桌面默认数据位于系统 appData 下的 `AgentBridge/data`，不写安装目录，`AGENT_DESKTOP_DATA_DIR` 可覆盖桌面数据根目录。Web 使用相同 Supervisor 与逐 Agent CLI 来源；当前边界见 [统一运行](WEB_DESKTOP.md)。
+Electron 在 `127.0.0.1:0` 启动 utility process 网关，等待 control transport 就绪消息再打开已有 `/agents` 页面；HTTP/SSE 业务接口保持同源。桌面默认数据位于系统 appData 下的 `AgentBridge/data`，不写安装目录，`AGENT_DESKTOP_DATA_DIR` 可覆盖桌面数据根目录。Web 使用相同 Supervisor 与逐 Agent CLI 来源；当前边界见 [统一运行](WEB_DESKTOP.md)。
 
 每次启动生成随机 token，只由主进程为受管窗口、精确网关 origin 注入 Authorization；API、SSE、静态资源、产物、metrics 均校验。token 不暴露给 renderer 或 CLI 子进程，也不会随外链发送。桌面网关收紧 Origin 校验，拒绝 Web 开发 origin 例外。renderer 启用 sandbox/contextIsolation，关闭 nodeIntegration，拒绝权限请求、webview、不可信导航和 IPC；HTTP/HTTPS 外链交由系统浏览器。产物使用原生保存对话框，不自动运行下载文件。[E2]
 
@@ -134,7 +134,7 @@ Electron 在 `127.0.0.1:0` 启动独立 Node 网关，等待 IPC 就绪消息再
 
 ## 实测与边界
 
-2026-09-08，Linux x64：基础包运行时不需要 PATH 中的开发 Node/npm；打包后实际网关使用 `resources/node/bin/node`，四个 Agent 初始均未安装。沙箱窗口、目录 IPC、主题与 SQLite 跨随机端口重启保留、SSE、托盘和退出均通过真实 Electron 测试。测试脚本为 `code/test/desktop-smoke.mjs`，截图位于 `code/artifacts/desktop/`。
+2026-09-19，Linux x64：基础包网关使用 Electron utility process，不再携带 `resources/node`；四个 Agent 初始均未安装，受管 npm toolchain 只在首次安装时下载。沙箱窗口、目录 IPC、主题与 SQLite 跨随机端口重启保留、SSE、托盘和退出均通过真实 Electron 测试。测试脚本为 `code/test/desktop-smoke.mjs`，截图位于 `code/artifacts/desktop/`。
 
 四个 CLI 均真实安装、执行版本命令与适配器协议握手、再卸载，未提交付费模型请求；[记录](../../code/artifacts/desktop/runtime-install-smoke.json)为本次下载到的版本，不是准入白名单。
 
@@ -145,7 +145,7 @@ Electron 在 `127.0.0.1:0` 启动独立 Node 网关，等待 IPC 就绪消息再
 | Codex | 0.153.4 | 334,978,735 |
 | Grok | 1.0.13 | 166,079,904 |
 
-本次 Linux x64 AppImage 为 **172.5 MiB**，解包程序为 **442.1 MiB**（按常规文件逻辑字节、去重 inode、不跟随软链计量），其中 Node/npm 约 133.7 MiB，后端资源约 32.3 MiB。完整大小、SHA-256 与检查条件见 [桌面验收记录](../../code/artifacts/desktop/verification.json)。按需安装可避免首次下载四套程序；全部安装后的总占用仍需加上相应程序、原生状态、模型资源与缓存。npm 安装阶段有 500ms 周期的 staging 大小检查，不提供文件系统级硬配额；网络下载阶段只有 Grok 提供可计算的字节百分比，npm 显示不确定进度。
+历史 Linux x64 产物为 **172.5 MiB**，其中 Node/npm 约 133.7 MiB。ADR-14 移除这部分基础包内容，运行时下载只发生在需要 npm 的受管 Agent 安装阶段；不把体积统计或大小阈值作为发布门禁。完整的历史证据仍见 [桌面验收记录](../../code/artifacts/desktop/verification.json)。
 
 没有同机 Tauri 等功能构件或完整多 Agent CPU/内存性能基准，不能声称 Electron 更快、更省内存，也不把协议握手当作全部模型/工具业务验收。后续比较须计入同一 Node、CLI、数据规模与 WebView2 安装前提。Windows/macOS 和线上签名更新属于剩余发布验收边界。
 

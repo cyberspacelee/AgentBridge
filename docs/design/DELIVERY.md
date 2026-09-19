@@ -82,10 +82,10 @@ Agent 启用/停用、资源创建编辑删除、默认模型分配、保存/应
 
 以下记录对应前次构件；当前 Web/Desktop 共享运行、数据格式及验收以 [统一运行](WEB_DESKTOP.md) 为准。
 
-桌面引入基于 `731d4d7`，分支 `research/desktop-tauri-vs-electron`。实现窗口/托盘/单实例、原生目录选择、独立 Node 网关、随机端口认证、受控退出、按需 CLI 管理、应用更新入口及三平台构建配置。
+桌面引入基于 `731d4d7`，分支 `research/desktop-tauri-vs-electron`。历史版本实现窗口/托盘/单实例、原生目录选择、独立 Node 网关、随机端口认证、受控退出、按需 CLI 管理、应用更新入口及三平台构建配置；当前运行时边界以 [ADR-14](ADR-14-DESKTOP-RUNTIME-AND-PACKAGING-REFACTOR.md) 为准。
 
 - 前次构建的类型、lint、生产构建与自动回归记录保留在下方构件证据中；当前版本不再支持数据库升级或历史数据迁移。
-- Linux 开发模式与最终打包后的 Electron 原生 smoke 通过：sandbox 开启，renderer 无 Node 权限，使用包内 Node，API/SSE 凭据隔离，目录选择，托盘关闭与退出，主题/SQLite 重启保留。
+- Linux 开发模式与最终打包后的 Electron 原生 smoke 通过：sandbox 开启，renderer 无 Node 权限，API/SSE 凭据隔离，目录选择，托盘关闭与退出，主题/SQLite 重启保留。当前桌面网关由 utility process 承载，包内 Node 仅在受管 Agent 安装时按需下载。
 - 四个官方 CLI 真实按需安装、版本/协议探测及卸载通过。Pi 0.85.1、OpenCode 1.18.29、Codex 0.153.4、Grok 1.0.13；未提交模型任务，不能代替供应商和工具业务验收。
 - 自动检查覆盖下载失败/取消、完整性错误、切换失败与中断恢复、等待活动任务、取消排队、卸载保留原生状态及 Agent 崩溃后进程组清理。
 

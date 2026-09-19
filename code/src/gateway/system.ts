@@ -13,10 +13,11 @@ import type { SessionRuntime } from "../runtime/sessions.js";
 import { GatewayError } from "../errors.js";
 import { validateCertificatePem } from "../../host/network.mjs";
 import { isWithin, validateDirectory } from "../runtime/artifacts.js";
+import { hostConnected, onHostDisconnect, onHostMessage, sendHost } from "../host/control.js";
 
 const { version } = createRequire(import.meta.url)(path.join(codeRoot, "package.json")) as { version: string };
 const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-process.on("message", (message: unknown) => {
+onHostMessage((message: unknown) => {
   if (!message || typeof message !== "object" || !("type" in message) || message.type !== "host:response") return;
   const parsed = z.object({ type: z.literal("host:response"), id: z.string(), value: z.unknown().optional(), error: z.string().optional() }).safeParse(message);
   if (!parsed.success) return;
@@ -27,15 +28,15 @@ process.on("message", (message: unknown) => {
   if (input.error) request.reject(new GatewayError("CONFIGURATION_ERROR", input.error, 409));
   else request.resolve(input.value);
 });
-process.on("disconnect", () => { for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new GatewayError("SERVICE_UNAVAILABLE", "启动管理器已断开", 503)); } pending.clear(); });
+onHostDisconnect(() => { for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new GatewayError("SERVICE_UNAVAILABLE", "启动管理器已断开", 503)); } pending.clear(); });
 export function hostRequest(method: string, payload: unknown = {}) {
-  if (!process.connected || !process.send) throw new GatewayError("SERVICE_UNAVAILABLE", "请通过 pnpm start、pnpm dev 或桌面入口启动服务", 503);
+  if (!hostConnected()) throw new GatewayError("SERVICE_UNAVAILABLE", "请通过 pnpm start、pnpm dev 或桌面入口启动服务", 503);
   if (pending.size >= 32) throw new GatewayError("RATE_LIMITED", "系统操作过多", 429);
   return new Promise<unknown>((resolve, reject) => {
     const id = randomUUID();
     const timer = setTimeout(() => { pending.delete(id); reject(new GatewayError("GATEWAY_TIMEOUT", "系统操作超时", 504)); }, 20000);
     pending.set(id, { resolve, reject, timer });
-    process.send!({ type: "host:request", id, method, payload }, (error) => { if (error) { clearTimeout(timer); pending.delete(id); reject(error); } });
+    sendHost({ type: "host:request", id, method, payload }, (error) => { if (error) { clearTimeout(timer); pending.delete(id); reject(error); } });
   });
 }
 export function systemRoutes(server: FastifyInstance<Server, IncomingMessage, ServerResponse, Logger>, runtime: SessionRuntime) {

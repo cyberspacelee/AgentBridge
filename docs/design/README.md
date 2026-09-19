@@ -12,6 +12,7 @@
 | [Agent 管理](AGENTS.md) | 统一配置、模型、Skills、MCP、原生目录隔离与动态启停 |
 | [运行时安装更新](RUNTIME_INSTALL.md) | 管理页面按需安装最新版、更新与卸载，记录实际版本和失败恢复规则，Web/Desktop 逐 Agent 来源管理已实现 |
 | [Web/Desktop 统一运行](WEB_DESKTOP.md) | 当前共享边界、系统接口、安全与生命周期；不兼容历史、不提供迁移 |
+| [ADR-14：桌面运行时与打包链路重构](ADR-14-DESKTOP-RUNTIME-AND-PACKAGING-REFACTOR.md) | Utility process、懒加载 Node toolchain、ASAR 资源边界与工作台重构 |
 | [桌面端框架选型与引入](DESKTOP_FRAMEWORK.md) | Electron/Tauri 比较、体积优化检索与本地证据、Electron 实现、构建和验证记录，Linux 已打包验收 |
 | [统一术语](GLOSSARY.md) | 中文、英文、代码标识、单位和禁止混用的含义 |
 | [领域模型](DOMAIN.md) | 领域边界、实体关系、状态转换、不变量和数据生命周期 |

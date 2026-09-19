@@ -6,6 +6,7 @@
   "directories": { "app": "desktop", "output": "desktop-release" },
   "files": [
     "main.mjs",
+    "utility-process.mjs",
     "preload.cjs",
     "security.mjs",
     "icon.png",
@@ -13,9 +14,14 @@
   ],
   "extraResources": [
     {
-      "from": ".desktop-stage",
-      "to": ".",
-      "filter": ["backend/**/*", "node/**/*", "!**/*.map"]
+      "from": ".desktop-stage/backend",
+      "to": "backend",
+      "filter": ["dist/**/*", "web/**/*", "docs/**/*", "tools/**/*", "package.json", "README.md"]
+    },
+    {
+      "from": ".desktop-stage/backend/node_modules",
+      "to": "backend/node_modules",
+      "filter": ["**/*", "!**/*.map"]
     },
     {
       "from": "tools",

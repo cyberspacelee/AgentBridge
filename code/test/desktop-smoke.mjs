@@ -2,7 +2,6 @@ import { navigate } from "./navigation.mjs";
 import assert from "node:assert/strict";
 import { cp, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { rootCertificates } from "node:tls";
 import path from "node:path";
@@ -41,8 +40,6 @@ env.AGENT_HOST = "127.0.0.1";
 env.AGENT_PORT = "0";
 env.AGENT_ENGINE = "grok"; // Desktop selection comes from settings, not a shell engine override.
 if (!executable) {
-  env.AGENT_RUNTIME_NODE = process.execPath;
-  env.AGENT_RUNTIME_NPM ??= path.resolve(path.dirname(process.execPath), process.platform === "win32" ? "node_modules/npm/bin/npm-cli.js" : "../lib/node_modules/npm/bin/npm-cli.js");
   env.AGENT_DESKTOP_BACKEND = path.join(code, "dist/src/main.js");
 } else {
   delete env.NODE_PATH;
@@ -107,20 +104,19 @@ try {
     const resources = await realpath(path.resolve(path.dirname(executable), process.platform === "darwin" ? "../Resources" : "resources"));
     for (const name of ["Initialize-AgentBridge.ps1", "initialize.mjs", "initialize.example.json", "INSTRUCTION.md"])
       assert.ok((await readFile(path.join(resources, "initialization", name))).length, `Packaged initialization file is missing: ${name}`);
-    const node = path.join(resources, process.platform === "win32" ? "node/node.exe" : "node/bin/node");
+    assert.equal(existsSync(path.join(resources, "node")), false, "Desktop must not bundle a second Node runtime");
+    assert.ok(existsSync(path.join(resources, "backend/dist/src/main.js")), "Packaged backend is missing");
     if (process.platform === "linux") {
       const parentPid = application.process().pid;
       const children = (await readFile(`/proc/${parentPid}/task/${parentPid}/children`, "utf8")).trim().split(/\s+/);
       const programs = await Promise.all(children.map((pid) => readlink(`/proc/${pid}/exe`).catch(() => "")));
-      assert.ok(programs.includes(node), "Gateway must use bundled Node");
+      assert.ok(programs.some((program) => program && path.basename(program).startsWith("agentbridge")), "Gateway utility process must be running");
     }
     for (const name of ["fastify", "pino", "zod", "cross-spawn", "which"]) {
       const dependency = await realpath(path.join(resources, "backend/node_modules", name));
       const relative = path.relative(resources, dependency);
       assert.ok(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative), `${name} must resolve inside the relocated package`);
     }
-    const probe = "const r=require('node:module').createRequire(process.argv[1]); const child=r('cross-spawn').sync(process.execPath,['-e','process.stdout.write(\"spawn-ok\")'],{encoding:'utf8'}); if(child.error)throw child.error; if(child.status!==0)throw new Error(child.stderr); process.stdout.write(child.stdout)";
-    assert.equal(execFileSync(node, ["-e", probe, path.join(resources, "backend/package.json")], { cwd: scratch, env, encoding: "utf8", timeout: 10000 }), "spawn-ok");
     for (const name of ["opencode-ai", "@earendil-works/pi-coding-agent", "@openai/codex", "pi-mcp-adapter"]) {
       assert.equal(existsSync(path.join(resources, "backend/node_modules", name)), false, `${name} must be installed on demand`);
     }

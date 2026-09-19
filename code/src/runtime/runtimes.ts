@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { chmod, cp, mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { agentIds, runtimeSourceSchema, type AgentId, type RuntimeSource } from "../../shared/settings.js";
 import type { RuntimeAction, RuntimeView } from "../../shared/runtimes.js";
@@ -22,6 +24,7 @@ const stableVersion = z.string().regex(/^\d+\.\d+\.\d+$/);
 const maxDownload = 512 * 1024 * 1024;
 const maxInstallation = 2 * 1024 * 1024 * 1024;
 const downloadTimeoutMs = 30 * 60 * 1000;
+const nodeToolchainVersion = "24.20.0";
 const timestamp = () => new Date().toISOString();
 // Windows may briefly lock runtime files after a CLI exits or while a scanner reads them.
 const removeOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 };
@@ -87,6 +90,7 @@ export class RuntimeManager {
   private operations = new Map<AgentId, { controller: AbortController; done: Promise<void> }>();
   private closed = false;
   private detections = new Map<AgentId, Partial<RuntimeView>>();
+  private toolchainInstall?: Promise<void>;
   private readonly dependencies: RuntimeDependencies;
   constructor(readonly config: Config, private hooks: Hooks, dependencies: Partial<RuntimeDependencies> = {}) {
     this.dependencies = { fetch, ...dependencies };
@@ -299,7 +303,7 @@ export class RuntimeManager {
   }
   private async response(url: string, signal: AbortSignal, method = "GET", timeoutMs = 120000) {
     const parsed = new URL(url);
-    if (!this.npmSource(url) && parsed.origin !== "https://storage.googleapis.com") throw new Error("Runtime source is not an allowed distribution URL");
+    if (!this.npmSource(url) && parsed.origin !== "https://storage.googleapis.com" && parsed.origin !== "https://nodejs.org") throw new Error("Runtime source is not an allowed distribution URL");
     const response = await this.dependencies.fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]), method, redirect: "error" });
     if (!response.ok) throw new Error(`Runtime source returned HTTP ${response.status}${response.status === 404 ? "; no artifact is available for this platform" : ""}`);
     return response;
@@ -371,13 +375,15 @@ export class RuntimeManager {
       await chmod(path.join(directory, command), 0o700); return command;
     }
     signal = AbortSignal.any([signal, AbortSignal.timeout(downloadTimeoutMs)]);
+    await this.ensureNodeToolchain(signal);
     const packageName = id === "opencode" ? opencodePackage() : packages[id];
     const dependencies: Record<string, string> = { [packageName]: release.version };
     if (id === "pi") {
       for (const name of ["pi-mcp-adapter", "typebox"]) dependencies[name] = (await this.npmRelease(name, signal)).version;
     }
     await writeFile(path.join(directory, "package.json"), JSON.stringify({ private: true, dependencies }));
-    const npm = this.config.runtimeNpm || createRequire(import.meta.url).resolve("npm/bin/npm-cli.js");
+    const npm = this.config.runtimeNpm;
+    if (!npm) throw new Error("找不到 npm toolchain，请重试受管运行时安装");
     const env = { ...process.env, PATH: `${path.dirname(this.config.runtimeNode)}${path.delimiter}${process.env.PATH ?? ""}`, npm_config_cache: path.join(directory, ".npm-cache"), npm_config_userconfig: path.join(directory, ".npmrc"), npm_config_globalconfig: path.join(directory, ".npmrc-global"), npm_config_registry: this.config.npmRegistry, npm_config_update_notifier: "false", npm_config_ignore_scripts: "true" };
     await writeFile(env.npm_config_userconfig, `registry=${this.config.npmRegistry}\nignore-scripts=true\n`);
     await writeFile(env.npm_config_globalconfig, "");
@@ -414,6 +420,64 @@ export class RuntimeManager {
     const command = path.join("node_modules", ".bin", id);
     if (!existsSync(path.join(directory, `${command}${process.platform === "win32" ? ".cmd" : ""}`))) throw new Error("Official package did not install a CLI for this platform");
     return `${command}${process.platform === "win32" ? ".cmd" : ""}`;
+  }
+
+  private async ensureNodeToolchain(signal: AbortSignal) {
+    if (this.config.runtimeNpm) return;
+    if (!process.versions.electron) throw new Error("找不到可用的 npm，请设置 AGENT_RUNTIME_NPM");
+    this.toolchainInstall ??= this.installNodeToolchain(signal).catch((error) => {
+      this.toolchainInstall = undefined;
+      throw error;
+    });
+    await this.toolchainInstall;
+  }
+
+  private async installNodeToolchain(signal: AbortSignal) {
+    const platform = process.platform === "win32" ? "win" : process.platform;
+    const extension = platform === "win" ? "zip" : "tar.gz";
+    const name = `node-v${nodeToolchainVersion}-${platform}-${process.arch}`;
+    const archiveName = `${name}.${extension}`;
+    const root = path.join(this.config.dataDirectory, "toolchain");
+    const target = path.join(root, name);
+    const node = path.join(target, platform === "win" ? "node.exe" : "bin/node");
+    const npm = path.join(target, platform === "win" ? "node_modules/npm/bin/npm-cli.js" : "lib/node_modules/npm/bin/npm-cli.js");
+    if (existsSync(node) && existsSync(npm)) {
+      this.config.runtimeNode = node;
+      this.config.runtimeNpm = npm;
+      return;
+    }
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const base = `https://nodejs.org/dist/v${nodeToolchainVersion}`;
+    const response = await this.dependencies.fetch(`${base}/SHASUMS256.txt`, { signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]) });
+    if (!response.ok) throw new Error(`Node toolchain checksum request failed (${response.status})`);
+    const expected = (await response.text()).split("\n").map((line) => line.trim().split(/\s+/)).find(([, file]) => file === archiveName)?.[0];
+    if (!expected || !/^[a-f0-9]{64}$/.test(expected)) throw new Error("Node toolchain checksum not found");
+    const archive = path.join(root, `${archiveName}.partial`);
+    const extracted = path.join(root, `${name}.extract`);
+    await rm(archive, { force: true });
+    await rm(extracted, removeOptions);
+    const archiveResponse = await this.dependencies.fetch(`${base}/${archiveName}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(downloadTimeoutMs)]) });
+    if (!archiveResponse.ok || !archiveResponse.body) throw new Error(`Node toolchain download failed (${archiveResponse.status})`);
+    await pipeline(Readable.fromWeb(archiveResponse.body as any), createWriteStream(archive));
+    const digest = createHash("sha256").update(await readFile(archive)).digest("hex");
+    if (digest !== expected) { await rm(archive, { force: true }); throw new Error("Node toolchain integrity verification failed"); }
+    await mkdir(extracted, { recursive: true });
+    try {
+      await this.command("tar", ["-xf", archive, "-C", extracted], root, signal, process.env, 5 * 60 * 1000);
+    } catch (error) {
+      if (platform !== "win") throw error;
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      await this.command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `Expand-Archive -LiteralPath ${quote(archive)} -DestinationPath ${quote(extracted)} -Force`], root, signal, process.env, 5 * 60 * 1000);
+    }
+    await rm(target, removeOptions);
+    await rename(path.join(extracted, name), target);
+    await rm(extracted, removeOptions);
+    await rm(archive, { force: true });
+    await rm(path.join(target, "include"), removeOptions);
+    await rm(path.join(target, "share/man"), removeOptions);
+    if (!existsSync(node) || !existsSync(npm)) throw new Error("Node toolchain archive is missing node/npm");
+    this.config.runtimeNode = node;
+    this.config.runtimeNpm = npm;
   }
   private async probe(id: AgentId, command: string, directory: string, signal: AbortSignal, expectedVersion: string, external = false) {
     if (this.dependencies.probe) return this.dependencies.probe(id, command, directory, signal);

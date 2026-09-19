@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import { engineError } from "../errors.js";
 import { within } from "../async.js";
+import { hostConnected, sendHost } from "../host/control.js";
 
 export function resolveExecutable(command: string) {
   const paths = path.isAbsolute(command) ? [command] : /[\\/]/.test(command) ? [path.resolve(command)] : (process.env.PATH ?? "").split(path.delimiter).flatMap((directory) => process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";")].map((extension) => path.join(directory, command + extension)) : [path.join(directory, command)]);
@@ -41,14 +42,14 @@ export function startProcess(
     windowsHide: true,
     detached: process.platform !== "win32",
   }) as ChildProcessWithoutNullStreams;
-  if (child.pid && process.connected) process.send?.({ type: "engine-started", pid: child.pid }, () => {});
+  if (child.pid && hostConnected()) sendHost({ type: "engine-started", pid: child.pid });
   child.once("exit", () => {
     if (child.pid && process.platform !== "win32") {
       try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") process.stderr.write("Engine descendant cleanup failed\n");
       }
     }
-    if (process.connected) process.send?.({ type: "engine-exited", pid: child.pid }, () => {});
+    if (hostConnected()) sendHost({ type: "engine-exited", pid: child.pid });
   });
   // Drain stderr and retain a bounded tail for startup/crash diagnostics.
   child.stderr.on("data", (chunk) => {

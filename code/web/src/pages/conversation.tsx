@@ -3,7 +3,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react"
 import {
@@ -23,8 +22,6 @@ import {
   Download,
   Eye,
   FileText,
-  History,
-  Send,
   ShieldCheck,
   MessageCircleQuestion,
   Square,
@@ -38,9 +35,10 @@ import type {
   Run,
   TaskDetail,
 } from "../../../shared/contracts"
-import { promptSchema } from "../../../shared/contracts"
 import { agentNames } from "@/lib/agent-draft"
 import { useGateway } from "@/lib/gateway"
+import { ConversationComposer } from "@/components/conversation-composer"
+import { ConversationContextPanel } from "@/components/conversation-context-panel"
 import {
   Questionnaire,
   QuestionnaireActions,
@@ -57,7 +55,7 @@ import {
   QuestionnaireTitle,
 } from "@/components/ui/questionnaire"
 import { AgentMessage } from "@/components/agent-message"
-import { api, submit, useQuery, useRequestSignal } from "@/lib/api"
+import { api, useQuery, useRequestSignal } from "@/lib/api"
 import {
   Blank,
   bytes,
@@ -69,10 +67,8 @@ import {
   Failure,
   IconButton,
   labels,
-  number,
   Status,
   ConfirmDialog,
-  Notice,
 } from "@/components/workspace-ui"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -95,11 +91,6 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupTextarea,
-} from "@/components/ui/input-group"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -332,7 +323,7 @@ export function Conversation() {
                       </Button>
                     )}
                   </Execution>
-                  <FollowUp
+                  <ConversationComposer
                     key={id}
                     sessionId={id}
                     disabled={
@@ -390,72 +381,7 @@ export function Conversation() {
               </Tabs>
             </div>
             <aside className="task-aside" aria-label="任务信息">
-              <h2>任务信息</h2>
-              <dl className="metadata">
-                <dt>工作目录</dt>
-                <dd className="font-mono">{detail.task.directory}</dd>
-                <dt>引擎</dt>
-                <dd>{detail.task.engineId}</dd>
-                <dt>{runFilter ? "执行模型" : "最近执行模型"}</dt>
-                <dd>
-                  {selected?.model
-                    ? `${selected.model.providerID} / ${selected.model.modelID}`
-                    : "引擎默认"}
-                </dd>
-                <dt>创建时间</dt>
-                <dd>{date(detail.task.createdAt)}</dd>
-                <dt>权限 / 反问</dt>
-                <dd>
-                  {detail.task.interactionPolicy.permission === "auto"
-                    ? "自动"
-                    : "人工"}{" "}
-                  /{" "}
-                  {detail.task.interactionPolicy.question === "auto"
-                    ? "自动"
-                    : "人工"}
-                </dd>
-                <dt>排队轮次</dt>
-                <dd>{detail.task.queuedCount}</dd>
-              </dl>
-              {selected && (
-                <>
-                  <h2 className="mt-8">
-                    {runFilter
-                      ? `执行 #${selected.sequence} 用量`
-                      : `最近执行 #${selected.sequence} 用量`}
-                  </h2>
-                  <dl className="metadata">
-                    <dt>接收时间</dt>
-                    <dd>{date(selected.acceptedAt)}</dd>
-                    <dt>本轮总时限</dt>
-                    <dd>
-                      {duration(
-                        Date.parse(selected.deadlineAt) -
-                          Date.parse(selected.acceptedAt)
-                      )}
-                    </dd>
-                    <dt>截止时间</dt>
-                    <dd>{date(selected.deadlineAt)}</dd>
-                    <dt>输入 Token</dt>
-                    <dd>{number(selected.usage?.input)}</dd>
-                    <dt>输出 Token</dt>
-                    <dd>{number(selected.usage?.output)}</dd>
-                    <dt>缓存读取 Token</dt>
-                    <dd>{number(selected.usage?.cacheRead)}</dd>
-                    <dt>费用 (USD)</dt>
-                    <dd>{number(selected.usage?.costUsd)}</dd>
-                    <dt>执行耗时</dt>
-                    <dd>
-                      {duration(
-                        selected.startedAt && selected.finishedAt
-                          ? Date.parse(selected.finishedAt) -
-                              Date.parse(selected.startedAt)
-                          : null
-                      )}
-                    </dd>
-                  </dl>
-                </>
-              )}
+              <ConversationContextPanel detail={detail} selected={selected} runFilter={runFilter} />
             </aside>
           </div>
         </>
@@ -493,42 +419,7 @@ export function Conversation() {
             <SheetTitle>任务信息</SheetTitle>
           </SheetHeader>
           <ScrollArea className="min-h-0 flex-1">
-            <dl className="metadata px-4 pb-4">
-              <dt>工作目录</dt>
-              <dd className="font-mono">{detail?.task.directory}</dd>
-              <dt>引擎</dt>
-              <dd>{detail?.task.engineId}</dd>
-              <dt>{runFilter ? "执行模型" : "最近执行模型"}</dt>
-              <dd>
-                {selected?.model
-                  ? `${selected.model.providerID} / ${selected.model.modelID}`
-                  : "引擎默认"}
-              </dd>
-              <dt>创建时间</dt>
-              <dd>{date(detail?.task.createdAt)}</dd>
-              <dt>排队轮次</dt>
-              <dd>{detail?.task.queuedCount}</dd>
-              <dt>输入 / 输出 Token</dt>
-              <dd>
-                {number(selected?.usage?.input)} /{" "}
-                {number(selected?.usage?.output)}
-              </dd>
-              <dt>{runFilter ? "所选执行接收时间" : "最近执行接收时间"}</dt>
-              <dd>{date(selected?.acceptedAt)}</dd>
-              <dt>本轮总时限</dt>
-              <dd>
-                {duration(
-                  selected
-                    ? Date.parse(selected.deadlineAt) -
-                        Date.parse(selected.acceptedAt)
-                    : null
-                )}
-              </dd>
-              <dt>截止时间</dt>
-              <dd>{date(selected?.deadlineAt)}</dd>
-              <dt>费用 (USD)</dt>
-              <dd>{number(selected?.usage?.costUsd)}</dd>
-            </dl>
+            {detail && <ConversationContextPanel detail={detail} selected={selected} runFilter={runFilter} />}
           </ScrollArea>
         </SheetContent>
       </Sheet>
@@ -730,109 +621,6 @@ function Execution({
     </div>
   )
 }
-function FollowUp({
-  sessionId,
-  disabled,
-  disabledReason,
-  run,
-  onAccepted,
-}: {
-  sessionId: string
-  disabled: boolean
-  disabledReason?: string
-  run?: Run
-  onAccepted: (runId: string) => void
-}) {
-  const requestSignal = useRequestSignal(sessionId)
-  const { runtime } = useGateway()
-  const [text, setText] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<Error>()
-  async function send(event: FormEvent) {
-    event.preventDefault()
-    if (busy || disabled) return
-    const signal = requestSignal()
-    setBusy(true)
-    setError(undefined)
-    try {
-      const input = promptSchema.parse({
-        parts: [{ type: "text", text }],
-      })
-      const result = await submit(input, runtime!.storeId, sessionId, signal)
-      signal.throwIfAborted()
-      setText("")
-      onAccepted(result.runId)
-    } catch (e) {
-      if (!signal.aborted) setError(e as Error)
-    } finally {
-      if (!signal.aborted) setBusy(false)
-    }
-  }
-  return (
-    <form className="follow-up" onSubmit={send}>
-      <Field>
-        <FieldLabel htmlFor="follow-up" className="sr-only">
-          追加任务
-        </FieldLabel>
-        <InputGroup>
-          <InputGroupTextarea
-            id="follow-up"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                (e.ctrlKey || e.metaKey) &&
-                !e.nativeEvent.isComposing
-              ) {
-                e.preventDefault()
-                e.currentTarget.form?.requestSubmit()
-              }
-            }}
-            rows={1}
-            required
-            disabled={disabled || busy}
-            placeholder="发送消息，或补充要求"
-          />
-          <InputGroupAddon align="inline-end">
-            <IconButton
-              label={busy ? "正在提交" : "提交新一轮"}
-              type="submit"
-              variant="default"
-              disabled={disabled || busy || !text.trim()}
-            >
-              <Send />
-            </IconButton>
-          </InputGroupAddon>
-        </InputGroup>
-      </Field>
-      <Failure error={error} />
-      {disabledReason && <Notice title={disabledReason} />}
-      <div className="follow-up-actions">
-        <span className="text-xs text-muted-foreground">
-          {run && ["running", "queued", "stopping"].includes(run.state)
-            ? "新一轮将在当前执行后排队"
-            : (run?.model?.modelID ?? "引擎默认模型")}
-        </span>
-        <div className="flex flex-wrap gap-2">
-          {run && ["failed", "timed_out", "cancelled"].includes(run.state) && (
-            <Button
-              variant="outline"
-              disabled={disabled || busy}
-              onClick={() =>
-                setText(run.inputParts.map((p) => p.text).join("\n"))
-              }
-            >
-              <History data-icon="inline-start" />
-              填入上轮要求
-            </Button>
-          )}
-        </div>
-      </div>
-    </form>
-  )
-}
-
 function InteractionRow({
   interaction: i,
   onReply,
