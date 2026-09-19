@@ -4,9 +4,10 @@ import { utilityProcess } from "electron";
 // Keep Supervisor independent from Electron. This adapter exposes the small
 // ChildProcess surface Supervisor already uses for a backend process.
 export function spawnUtilityBackend({ modulePath, args = [], cwd, env }) {
+  const cleanEnv = Object.fromEntries(Object.entries(env ?? {}).filter(([, value]) => value !== undefined));
   const processHandle = utilityProcess.fork(modulePath, args, {
     cwd,
-    env,
+    env: cleanEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   const child = new EventEmitter();
