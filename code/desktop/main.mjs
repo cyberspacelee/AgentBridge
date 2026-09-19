@@ -342,11 +342,12 @@ async function launchBackend() {
       if (changed && window && !window.isDestroyed()) void window.loadURL(`${origin}/settings`);
     },
     onNetwork: async (settings) => { appliedNetwork = settings; await configureUpdateProxy(); },
+    onOutput: (line, stream) => process.stderr.write(`[backend:${stream}] ${line}`),
     onExit: (code, closing) => {
       if (!closing) dialog.showErrorBox("AgentBridge 后台已停止", `退出状态：${code}`);
       quitting = true; finishQuit();
     },
-    onError: (error) => dialog.showErrorBox("后台操作失败", error.message),
+    onError: (error) => { process.stderr.write(`Backend error: ${error.message}\n`); void dialog.showErrorBox("后台操作失败", error.message); },
   });
   await supervisor.initialize();
   appliedNetwork = supervisor.applied;
@@ -468,11 +469,12 @@ else {
         ]),
       );
     } catch (error) {
+      process.stderr.write(`Desktop startup failed: ${error?.stack ?? error}\n`);
       quitting = true;
       await supervisor?.kill();
       await supervisor?.release();
       dialog.showErrorBox("AgentBridge 启动失败", error.message);
-      app.quit();
+      app.exit(1);
     }
   });
 }
