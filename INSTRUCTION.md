@@ -4,7 +4,7 @@
 
 ### Electron 桌面端
 
-桌面基础包包括 Electron、工作台、网关和独立 Node/npm，不默认携带 Pi、OpenCode、Codex CLI 或 Grok Build。安装后的应用无需全局 Node/npm 即可启动网关、下载和运行受管 CLI。Windows 的 Pi bash 工具仍需要 Git for Windows；用户配置的其他 MCP 命令按其要求准备。
+桌面基础包包括 Electron、工作台和网关，不默认携带 Node/npm、Pi、OpenCode、Codex CLI 或 Grok Build。安装后的应用使用 Electron 自带运行时启动网关，受管 CLI 按需下载独立运行时。Windows 的 Pi bash 工具仍需要 Git for Windows；用户配置的其他 MCP 命令按其要求准备。
 
 Windows 可下载 `AgentBridge-<版本>-windows-x64-deploy.zip`，解压后由 PowerShell 一次完成安装 EXE、导入 JSON/Skill、安装或复制 CLI 和启用 Agent。也可单独运行 EXE 手动安装，再在应用中配置。以下 pnpm 命令用于从源码构建。
 
@@ -15,7 +15,7 @@ pnpm install --frozen-lockfile
 pnpm desktop:dev
 ```
 
-此命令会构建前后端、下载并校验内置 Node 运行环境，再打开桌面工作台。首次准备构建和首次安装 CLI 需要网络。修改源码后重新运行命令会重新构建。
+此命令会构建前后端并打开桌面工作台。首次准备构建和首次安装 CLI 需要网络。修改源码后重新运行命令会重新构建。
 
 ```sh
 # 当前主机平台与架构的应用目录
@@ -54,7 +54,7 @@ deploy/
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 -Start
 ```
 
-脚本自动识别同目录唯一的 `AgentBridge*.exe` 安装器（不包括 `agentbridge.exe`），以当前用户静默安装到 `%LOCALAPPDATA%\Programs\AgentBridge`，等待安装成功，再使用内置 Node/npm 初始化。安装期间不启动工作台；指定目录已有 `agentbridge.exe` 时复用，不重装或升级。自动导入同目录 `settings.json`、可选 `system.json`、`skills.zip`/`skills/`、`runtimes.zip`/`runtimes/`；同类 ZIP 和目录同时存在时需显式指定。缺少 runtime 包时联网安装配置中指定的受管 CLI；提供 runtime 包时只使用本地包，不回退下载。
+脚本自动识别同目录唯一的 `AgentBridge*.exe` 安装器（不包括 `agentbridge.exe`），以当前用户静默安装到 `%LOCALAPPDATA%\Programs\AgentBridge`，等待安装成功，再使用系统 Node.js/npm 初始化；如部署包仍包含 `resources\node`，会优先使用它。安装期间不启动工作台；指定目录已有 `agentbridge.exe` 时复用，不重装或升级。自动导入同目录 `settings.json`、可选 `system.json`、`skills.zip`/`skills/`、`runtimes.zip`/`runtimes/`；同类 ZIP 和目录同时存在时需显式指定。缺少 runtime 包时联网安装配置中指定的受管 CLI；提供 runtime 包时只使用本地包，不回退下载。
 
 脚本将已登记的 Skill 及附件复制到业务数据目录并改写引用，再按 `settings.json` 的 `enabled` 值启用 Agent。`-Start` 只在全部成功后启动桌面应用；不加此参数时，完成后自行打开应用即可。部署 ZIP 不包含真实凭据、用户配置或办公 Skill，需要自行提供。已有应用必须先通过菜单/托盘退出；安装器失败、JSON/资源校验失败或初始化失败均返回非零退出码，不执行 `-Start`。
 

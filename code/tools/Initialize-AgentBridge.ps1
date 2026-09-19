@@ -54,6 +54,30 @@ function ConvertTo-ExtendedPath([string] $AbsolutePath) {
     return '\\?\' + $AbsolutePath
 }
 
+function Find-NodeToolchain([string] $Resources) {
+    $bundledNode = Join-Path $Resources 'node\node.exe'
+    $bundledNpm = Join-Path $Resources 'node\node_modules\npm\bin\npm-cli.js'
+    if ((Test-Path -LiteralPath $bundledNode -PathType Leaf) -and (Test-Path -LiteralPath $bundledNpm -PathType Leaf)) {
+        return @{ Node = $bundledNode; Npm = $bundledNpm }
+    }
+    $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+    $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    $node = if ($nodeCommand) { $nodeCommand.Source } else { '' }
+    $npmCandidates = @()
+    if ($node) {
+        $nodeDirectory = Split-Path -Parent $node
+        $npmCandidates += Join-Path $nodeDirectory 'node_modules\npm\bin\npm-cli.js'
+        $npmCandidates += Join-Path (Split-Path -Parent $nodeDirectory) 'lib\node_modules\npm\bin\npm-cli.js'
+    }
+    if ($npmCommand) {
+        $npmDirectory = Split-Path -Parent $npmCommand.Source
+        $npmCandidates += Join-Path $npmDirectory 'node_modules\npm\bin\npm-cli.js'
+    }
+    $npm = $npmCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $node -or -not $npm) { throw 'Missing Node.js/npm. Install Node.js 22+ or provide resources\node in the deployment bundle.' }
+    return @{ Node = $node; Npm = $npm }
+}
+
 # Extract only regular files into a fresh directory; never trust ZIP entry paths.
 function Expand-InputDirectory([string] $InputPath, [string] $FolderName) {
     if (-not $InputPath) { return '' }
@@ -136,8 +160,9 @@ try {
         $exe = Install-Application $InstallerPath $InstallDirectory
     }
     $resources = Join-Path (Split-Path -Parent $exe) 'resources'
-    $node = Join-Path $resources 'node\node.exe'
-    $npm = Join-Path $resources 'node\node_modules\npm\bin\npm-cli.js'
+    $toolchain = Find-NodeToolchain $resources
+    $node = $toolchain.Node
+    $npm = $toolchain.Npm
     $backend = Join-Path $resources 'backend'
     $helper = Join-Path $PSScriptRoot 'initialize.mjs'
     if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { $helper = Join-Path $resources 'initialization\initialize.mjs' }
