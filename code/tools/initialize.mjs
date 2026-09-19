@@ -101,7 +101,7 @@ export async function copySkills(source, directory, skills) {
   }
 }
 
-export async function readSystem(filename, gatewaySchema, defaultGateway, validateNetworkSettings) {
+export async function readSystem(filename, gatewaySchema, defaultGateway, validateNetworkSettings, llmProxySchema, defaultLlmProxy) {
   const input = await readInput(filename);
   if (input?.schemaVersion !== 1 || !input.network || input.applying !== false)
     throw new Error("Expected a current, idle system.json with schemaVersion 1");
@@ -109,7 +109,8 @@ export async function readSystem(filename, gatewaySchema, defaultGateway, valida
     throw new Error("System proxy password is encrypted for the source machine; provide network.proxyPassword in the deployment file instead");
   const gateway = gatewaySchema.parse(input.gateway ?? defaultGateway);
   const network = validateNetworkSettings(input.network);
-  return { gateway, network };
+  const llmProxy = llmProxySchema && defaultLlmProxy ? llmProxySchema.parse(input.llmProxy ?? defaultLlmProxy) : undefined;
+  return { gateway, network, ...(llmProxy ? { llmProxy } : {}) };
 }
 
 export function assertCompatible(previous, next) {
@@ -260,9 +261,9 @@ async function main() {
   const { SettingsManager, readSettings } = await moduleAt("dist/src/settings.js");
   let system;
   if (values.system) {
-    const { gatewaySchema, defaultGateway } = await moduleAt("dist/host/gateway.mjs");
+    const { gatewaySchema, defaultGateway, llmProxySchema, defaultLlmProxy } = await moduleAt("dist/host/gateway.mjs");
     const { validateNetworkSettings } = await moduleAt("dist/host/network.mjs");
-    system = await readSystem(values.system, gatewaySchema, defaultGateway, validateNetworkSettings);
+    system = await readSystem(values.system, gatewaySchema, defaultGateway, validateNetworkSettings, llmProxySchema, defaultLlmProxy);
   }
   const supervisor = new Supervisor({
     node: process.execPath, args: [path.join(backendRoot, "dist/src/main.js")], directory,
@@ -289,6 +290,7 @@ async function main() {
     } });
     if (system) {
       supervisor.gateway = supervisor.appliedGateway = system.gateway;
+      if (system.llmProxy) supervisor.llmProxy = supervisor.appliedLlmProxy = system.llmProxy;
       supervisor.settings = supervisor.applied = system.network;
       supervisor.error = null;
       await supervisor.persist(false);

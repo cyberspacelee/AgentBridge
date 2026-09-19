@@ -173,7 +173,11 @@ test("unified configuration isolates four native directories, snapshots applied 
     assert.equal(settingsSchema.safeParse(invalid).success, false);
     const chatCodex = structuredClone(next);
     chatCodex.providers[0]!.api = "openai-completions";
+    assert.equal(settingsSchema.safeParse(chatCodex).success, true);
+    chatCodex.agents.find((agent) => agent.id === "codex")!.modelApi = "openai-responses";
     assert.equal(settingsSchema.safeParse(chatCodex).success, false);
+    chatCodex.providers[0]!.conversion = "responses-to-completions";
+    assert.equal(settingsSchema.safeParse(chatCodex).success, true);
     assert.equal(
       settingsSchema.safeParse({ piConfigDirectory: skill }).success,
       false,

@@ -313,8 +313,11 @@ export function EntryEditor({
                   ]}
                 />
                 {fieldError("conversion")}
-                {conversion !== "none" && (protocol !== "openai-responses" || upstreamProtocol !== "openai-completions") && (
-                  <FieldDescription>当前转换仅支持 client Responses 到上游 Chat Completions。</FieldDescription>
+                {conversion === "responses-to-completions" && upstreamProtocol === "openai-completions" && (
+                  <FieldDescription>Responses 请求会转换为上游 Chat Completions；Chat Completions 请求继续直连上游。</FieldDescription>
+                )}
+                {conversion !== "none" && upstreamProtocol !== "openai-completions" && (
+                  <FieldDescription>当前转换仅支持上游 Chat Completions。</FieldDescription>
                 )}
               </Field>
               <FieldGroup>
@@ -330,6 +333,7 @@ export function EntryEditor({
                     添加请求头
                   </Button>
                 </div>
+                <FieldDescription>保存后请求头、请求参数、API Key 和上游地址会对下一次 LLM 请求立即生效。</FieldDescription>
                 {requestHeaders.map((item, index) => (
                   <div className="resource-key-value" key={index}>
                     <Field>

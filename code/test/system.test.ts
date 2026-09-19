@@ -12,8 +12,8 @@ import { RuntimeManager } from "../src/runtime/runtimes.js";
 import { readSettings, SettingsManager } from "../src/settings.js";
 import { readConfig } from "../src/config.js";
 import { createServer } from "node:net";
-import { gatewaySchema, gatewayUrl, defaultGateway } from "../host/gateway.mjs";
-import type { GatewayView } from "../shared/system.js";
+import { gatewaySchema, gatewayUrl, defaultGateway, defaultLlmProxy, llmProxySchema } from "../host/gateway.mjs";
+import type { GatewayView, LlmProxyView } from "../shared/system.js";
 
 async function eventually(check: () => Promise<boolean>) {
   for (let i = 0; i < 100; i++) { if (await check().catch(() => false)) return; await delay(100); }
@@ -53,6 +53,19 @@ test("gateway settings persist, change listener and roll back an occupied port",
     assert.equal(url, `http://127.0.0.1:${port}`);
     assert.equal(host.gatewayView().restartRequired, false);
     assert.equal((await (await fetch(url + "/api/runtime")).json()).storeId, first.storeId);
+    assert.deepEqual(defaultLlmProxy, { host: "127.0.0.1", port: 0 });
+    assert.equal(llmProxySchema.safeParse({ host: "127.0.0.1", port: 65536 }).success, false);
+    const proxyView = await (await fetch(url + "/api/system/llm-proxy")).json() as LlmProxyView;
+    assert.deepEqual(proxyView.settings, defaultLlmProxy);
+    const proxyPortServer = createServer();
+    await new Promise<void>((resolve) => proxyPortServer.listen(0, "127.0.0.1", resolve));
+    const proxyPort = (proxyPortServer.address() as { port: number }).port;
+    await new Promise<void>((resolve) => proxyPortServer.close(() => resolve()));
+    const proxySave = await (await fetch(url + "/api/system/llm-proxy", { method: "PUT", headers, body: JSON.stringify({ revision: proxyView.revision, settings: { host: "127.0.0.1", port: proxyPort } }) })).json() as LlmProxyView;
+    assert.equal(proxySave.restartRequired, true);
+    await host.stop("wait", true);
+    assert.equal(host.llmProxyView().restartRequired, false);
+    assert.match(((await (await fetch(host.url! + "/api/runtime")).json()).llmProxy.baseUrl as string), new RegExp(`:${proxyPort}$`));
     for (const address of Object.values(os.networkInterfaces()).flat()) {
       if (address?.family === "IPv4" && !address.internal) assert.equal((await fetch(`http://${address.address}:${port}/api/settings`)).status, 200);
     }

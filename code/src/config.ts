@@ -1,4 +1,4 @@
-import { gatewaySchema, defaultGateway } from "../host/gateway.mjs";
+import { gatewaySchema, defaultGateway, llmProxySchema, defaultLlmProxy } from "../host/gateway.mjs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -63,6 +63,10 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
       .min(0)
       .max(65535)
       .parse(values.port ?? env.AGENT_PORT ?? defaultGateway.port),
+    llmProxy: llmProxySchema.parse({
+      host: env.AGENT_LLM_PROXY_HOST ?? defaultLlmProxy.host,
+      port: z.coerce.number().int().min(0).max(65535).parse(env.AGENT_LLM_PROXY_PORT ?? defaultLlmProxy.port),
+    }),
     dataDirectory: path.resolve(env.AGENT_DATA_DIR ?? ".agentbridge"),
     database:
       env.AGENT_STORAGE === "memory"

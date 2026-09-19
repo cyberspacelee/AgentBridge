@@ -49,3 +49,12 @@ export interface GatewayView {
   urls: string[];
   error: string | null;
 }
+export interface LlmProxySettings { host: string; port: number }
+export interface LlmProxyView {
+  settings: LlmProxySettings;
+  appliedSettings: LlmProxySettings;
+  revision: string;
+  appliedRevision: string;
+  restartRequired: boolean;
+  error: string | null;
+}

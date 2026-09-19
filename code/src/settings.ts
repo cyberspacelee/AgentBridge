@@ -105,6 +105,7 @@ export function engineSettings(
       .filter((p) => p.enabled)
       .map((p) => ({
         ...p,
+        ...(agent?.modelApi ? { api: agent.modelApi } : {}),
         models: p.models.filter((m) =>
           agent?.models.some(
             (r) => r.providerID === p.id && r.modelID === m.id,
@@ -561,7 +562,7 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
                     name: p.id,
                     base_url: providerBaseUrl(config, p),
                     env_key: `AGENT_BRIDGE_KEY_${p.id}`,
-                    wire_api: "responses",
+                    wire_api: (agent.modelApi ?? scoped.providers[0]?.api) === "openai-responses" ? "responses" : "chat",
                     requires_openai_auth: false,
                   },
                 ]),

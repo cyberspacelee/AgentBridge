@@ -1,5 +1,5 @@
 import { useContext, useState, type FormEvent } from "react"
-import type { GatewayView, SystemView } from "../../../shared/system"
+import type { GatewayView, LlmProxyView, SystemView } from "../../../shared/system"
 import { api, useQuery } from "@/lib/api"
 import { GatewayContext } from "@/lib/gateway"
 import { desktop } from "@/lib/desktop"
@@ -17,6 +17,85 @@ export function GatewaySettingsPanel({ system }: { system?: SystemView }) {
     <Failure error={query.error} />
     {query.data && <GatewayForm key={`${runtime?.instanceId}:${query.data.appliedRevision}`} initial={query.data} />}
   </section>
+}
+
+export function LlmProxySettingsPanel({ system }: { system?: SystemView }) {
+  const { revision, runtime } = useContext(GatewayContext)
+  const query = useQuery<LlmProxyView>(system?.capabilities.gateway ? "/api/system/llm-proxy" : null, revision)
+  return <section aria-label="LLM 代理" className="flex min-w-0 flex-col gap-4">
+    <Failure error={query.error} />
+    {query.data && <LlmProxyForm key={`${runtime?.instanceId}:${query.data.appliedRevision}`} initial={query.data} />}
+  </section>
+}
+
+function LlmProxyForm({ initial }: { initial: LlmProxyView }) {
+  const [view, setView] = useState(initial)
+  const [host, setHost] = useState(initial.settings.host)
+  const [port, setPort] = useState(String(initial.settings.port))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<Error>()
+  const [confirm, setConfirm] = useState(false)
+  const dirty = host !== view.settings.host || port !== String(view.settings.port)
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(undefined)
+    try {
+      setView(await api<LlmProxyView>("/api/system/llm-proxy", {
+        method: "PUT", body: JSON.stringify({ revision: view.revision, settings: { host, port: Number(port) } }),
+      }))
+    } catch (error) { setError(error as Error) }
+    finally { setBusy(false) }
+  }
+  async function restart(mode: "wait" | "stop") {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await api("/api/system/lifecycle", { method: "POST", body: JSON.stringify({ action: "restart", mode }) })
+      setConfirm(false)
+    } catch (error) { setError(error as Error) }
+    finally { setBusy(false) }
+  }
+  return <>
+    <form onSubmit={save}>
+      <Card>
+        <CardHeader>
+          <CardTitle><h2>LLM 代理</h2></CardTitle>
+          <CardDescription>为需要协议转换的 Agent 提供本机 OpenAI 兼容入口；Provider 的请求头、参数、密钥和上游地址保存后对下一次请求立即生效。</CardDescription>
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col gap-4">
+          <Failure error={error ?? (initial.error ? new Error(initial.error) : undefined)} />
+          <FieldGroup className="sm:grid sm:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="llm-proxy-host">监听地址</FieldLabel>
+              <Input id="llm-proxy-host" required value={host} disabled={busy} onChange={(event) => setHost(event.target.value)} />
+              <FieldDescription>127.0.0.1 供本机 Agent 使用；0.0.0.0 开放监听到局域网。远程 Agent 仍需单独部署代理。</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="llm-proxy-port">代理端口</FieldLabel>
+              <Input id="llm-proxy-port" type="number" min={0} max={65535} step={1} required value={port} disabled={busy} onChange={(event) => setPort(event.target.value)} />
+              <FieldDescription>固定端口方便 Agent 配置；0 表示自动分配。</FieldDescription>
+            </Field>
+          </FieldGroup>
+          {view.restartRequired && <p role="status" className="text-sm text-muted-foreground">LLM 代理监听设置已保存，重启服务后生效；重启也会应用其他待生效的系统配置。</p>}
+        </CardContent>
+        <CardFooter className="flex-wrap gap-2">
+          <Button type="submit" disabled={busy || !dirty}>保存代理设置</Button>
+          <Button type="button" variant="outline" disabled={busy || dirty || !view.restartRequired} onClick={() => setConfirm(true)}>重启服务应用</Button>
+        </CardFooter>
+      </Card>
+    </form>
+    <Dialog open={confirm} onOpenChange={setConfirm}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>重启服务应用 LLM 代理设置</DialogTitle><DialogDescription>连接会短暂中断。可等待任务完成，或停止任务后重启。</DialogDescription></DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={() => setConfirm(false)}>取消</Button>
+          <Button variant="outline" disabled={busy} onClick={() => void restart("stop")}>停止任务并重启</Button>
+          <Button disabled={busy} onClick={() => void restart("wait")}>等待任务完成后重启</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>
 }
 
 function GatewayForm({ initial }: { initial: GatewayView }) {

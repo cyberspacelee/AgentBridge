@@ -85,8 +85,16 @@ test("Responses requests convert to Chat, preserve tools, cache previous_respons
     assert.equal(second.status, 200);
     assert.equal((requests[0]!.messages as unknown[]).length, 2);
     assert.equal((requests[1]!.messages as unknown[]).length, 4);
-    assert.equal(records.length, 2);
+    const chat = await fetch(`${proxy.providerBaseUrl("test")}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${proxy.runtimeToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "direct" }] }),
+    });
+    assert.equal(chat.status, 200);
+    assert.equal(Array.isArray((await chat.json() as Record<string, unknown>).choices), true);
+    assert.equal(records.length, 3);
     assert.equal(records[0]!.conversion, "responses-to-completions");
+    assert.equal(records[2]!.conversion, "none");
     assert.deepEqual(records[0]!.usage, { input: 7, output: 3, cacheRead: 2, cacheWrite: null, costUsd: null });
   } finally {
     await proxy.close();

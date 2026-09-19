@@ -8,6 +8,11 @@ type Api = "openai-completions" | "openai-responses";
 type ChatBody = Record<string, unknown>;
 type JsonObject = Record<string, unknown>;
 
+function proxyUrl(host: string, port: number) {
+  const address = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  return `http://${address.includes(":") ? `[${address}]` : address}:${port}`;
+}
+
 export interface LlmUsageRecord {
   providerID: string;
   modelID: string | null;
@@ -318,11 +323,12 @@ export class LlmProxy {
   private readonly history = new Map<string, HistoryEntry>();
   private port = 0;
   constructor(
-    private readonly config: Pick<Config, "host">,
+    private readonly config: { llmProxy?: Config["llmProxy"] },
     private readonly getSettings: () => Settings,
     private readonly onRecord?: (record: LlmUsageRecord) => void,
   ) {}
-  get baseUrl() { return `http://127.0.0.1:${this.port}`; }
+  private get listener() { return this.config.llmProxy ?? { host: "127.0.0.1", port: 0 }; }
+  get baseUrl() { return proxyUrl(this.listener.host, this.port); }
   get runtimeToken() { return this.token; }
   providerBaseUrl(providerId: string) { return `${this.baseUrl}/llm/${encodeURIComponent(providerId)}/v1`; }
   async start() {
@@ -332,7 +338,7 @@ export class LlmProxy {
       const onListening = () => { this.server.off("error", onError); const address = this.server.address(); this.port = typeof address === "object" && address ? address.port : 0; this.listening = true; resolve(); };
       this.server.once("error", onError);
       this.server.once("listening", onListening);
-      this.server.listen(0, "127.0.0.1");
+      this.server.listen(this.listener.port, this.listener.host);
     });
   }
   async close() {
@@ -393,11 +399,13 @@ export class LlmProxy {
       }
       if (req.method !== "POST") throw new LlmProxyError("INVALID_REQUEST", "LLM endpoints only accept POST", 405);
       clientApi = apiFromEndpoint(match[2]!)!;
-      if (clientApi !== provider.api) throw new LlmProxyError("INVALID_REQUEST", `Provider expects ${endpoint(provider.api)}`, 400);
       upstreamApi = provider.upstreamApi ?? provider.api;
-      conversion = provider.conversion ?? "none";
-      if (conversion === "none" && upstreamApi !== clientApi) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "Client and upstream protocols differ; configure an explicit conversion");
-      if (conversion !== "none" && !(clientApi === "openai-responses" && upstreamApi === "openai-completions" && conversion === "responses-to-completions")) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "Only Responses to Chat Completions conversion is supported");
+      const configuredConversion = provider.conversion ?? "none";
+      const convertingResponses = configuredConversion === "responses-to-completions" && clientApi === "openai-responses" && upstreamApi === "openai-completions";
+      const directRequest = configuredConversion === "none" && clientApi === upstreamApi;
+      const compatibleRequest = directRequest || convertingResponses || (configuredConversion === "responses-to-completions" && clientApi === "openai-completions" && upstreamApi === "openai-completions");
+      if (!compatibleRequest) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "Unsupported client/upstream protocol route");
+      conversion = convertingResponses ? configuredConversion : "none";
       const input = await readBody(req);
       modelID = typeof input.model === "string" ? input.model : null;
       stream = input.stream === true;
@@ -405,7 +413,7 @@ export class LlmProxy {
       if (!model) throw new LlmProxyError("INVALID_REQUEST", "Unknown provider model", 400);
       let outgoing = input;
       let history: JsonObject[] = [];
-      if (conversion === "responses-to-completions") {
+      if (convertingResponses) {
         if (input.previous_response_id !== undefined) history = this.getHistory(text(input.previous_response_id, "previous_response_id"));
         outgoing = responsesToChat(input, history);
       }
@@ -421,7 +429,7 @@ export class LlmProxy {
         throw new Error(`Upstream returned HTTP ${response.status}`);
       }
       const contentType = response.headers.get("content-type") ?? "application/json";
-      if (conversion === "responses-to-completions") {
+      if (convertingResponses) {
         const responseId = `resp_${randomUUID().replaceAll("-", "")}`;
         if (stream || contentType.includes("text/event-stream")) {
           res.statusCode = status;

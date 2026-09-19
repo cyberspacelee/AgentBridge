@@ -80,6 +80,7 @@ pnpm start --host 0.0.0.0 --port 6217
 | --- | --- |
 | `AGENT_ENGINE` | 初始化默认 Agent，支持 `pi`、`opencode`、`codex`、`grok`；保存后由 settings.json 管理 |
 | `AGENT_HOST` / `AGENT_PORT` | Web/Desktop 默认 `127.0.0.1` / `6217`；Web CLI > 环境变量 > system.json 已保存网关配置 |
+| `AGENT_LLM_PROXY_HOST` / `AGENT_LLM_PROXY_PORT` | LLM 代理监听地址 / 端口；默认 `127.0.0.1` / `0`（自动分配），也可在“系统信息 → LLM 代理”配置；修改后重启服务生效 |
 | `AGENT_DATA_DIR` | 源码模式默认当前目录下 `.agentbridge`，存放 SQLite、日志和引擎数据 |
 | `AGENT_DESKTOP_DATA_DIR` | 桌面用户数据根目录，业务数据位于其 `data/` 子目录 |
 | `AGENT_MANAGED_RUNTIMES=false` | 仅初始化时选择外部来源，保存后由每个 Agent 的 runtime 配置管理 |

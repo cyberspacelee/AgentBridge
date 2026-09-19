@@ -774,6 +774,7 @@ function AgentsEditor({
               )}
             </div>
           </div>
+          <p className="text-sm text-muted-foreground">模型、Skills 和 MCP 保存后需点击“保存并应用”才会更新原生 Agent；正在执行的任务完成后才会重启该 Agent，当前任务继续使用已应用版本。</p>
           {state.error && <Failure error={new Error(state.error)} />}
           <AgentEditor
             key={selected.id}
@@ -1065,7 +1066,13 @@ function AgentEditor({
               ? "已保存待应用"
               : "配置已生效"
   const availableModels = settings.providers
-    .filter((p) => agent.id !== "codex" || p.api === "openai-responses")
+    .filter((p) => {
+      const clientApi = draft.modelApi ?? p.api
+      const upstreamApi = p.upstreamApi ?? p.api
+      return (clientApi === upstreamApi && p.conversion === "none") ||
+        (clientApi === "openai-completions" && upstreamApi === "openai-completions" && p.conversion === "responses-to-completions") ||
+        (clientApi === "openai-responses" && upstreamApi === "openai-completions" && p.conversion === "responses-to-completions")
+    })
     .flatMap((p) =>
       p.models.map((m) => ({
         providerID: p.id,
@@ -1074,6 +1081,10 @@ function AgentEditor({
         enabled: p.enabled,
       }))
     )
+  const selectedProvider = draft.models[0]
+    ? settings.providers.find((p) => p.id === draft.models[0]!.providerID)
+    : undefined
+  const modelApi = draft.modelApi ?? selectedProvider?.api ?? "openai-completions"
   const options = availableModels
     .filter(
       (m) =>
@@ -1285,7 +1296,7 @@ function AgentEditor({
           </Field>
           <section className="settings-section">
             <div className="settings-section-heading">
-              <h2>可用模型{agent.id === "codex" ? " · Responses" : ""}</h2>
+              <h2>可用模型</h2>
               {availableModels.length > 0 && (
                 <Button
                   variant="outline"
@@ -1347,8 +1358,28 @@ function AgentEditor({
                 }
               >
                 暂无兼容模型
-                {agent.id === "codex" ? " · 需要 Responses 协议" : ""}
               </Blank>
+            )}
+            {availableModels.length > 0 && (
+              <Field className="mt-6 max-w-xl">
+                <FieldLabel>Agent 请求协议</FieldLabel>
+                <Choice
+                  label="Agent 请求协议"
+                  value={modelApi}
+                  disabled={busy}
+                  options={[
+                    { value: "openai-completions", label: "Chat Completions" },
+                    { value: "openai-responses", label: "Responses" },
+                  ]}
+                  onChange={(value) =>
+                    setDraft({
+                      ...draft,
+                      modelApi: value as "openai-completions" | "openai-responses",
+                    })
+                  }
+                />
+                <p className="text-sm text-muted-foreground">每个 Agent 独立选择请求协议；选择 Responses 时，Provider 必须支持 Responses 或配置 Responses → Chat 转换。</p>
+              </Field>
             )}
             {availableModels.length > 0 && (
               <Field className="mt-6 max-w-xl">

@@ -1,4 +1,4 @@
-import { gatewaySchema } from "../../host/gateway.mjs";
+import { gatewaySchema, llmProxySchema } from "../../host/gateway.mjs";
 import { createRequire } from "node:module";
 import { codeRoot } from "../engines/tool-instructions.js";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
@@ -48,6 +48,8 @@ export function systemRoutes(server: FastifyInstance<Server, IncomingMessage, Se
   }));
   server.get("/api/system/gateway", async () => hostRequest("gateway.get"));
   server.put("/api/system/gateway", async (request) => hostRequest("gateway.save", z.object({ settings: gatewaySchema, revision: z.string().length(64) }).strict().parse(request.body)));
+  server.get("/api/system/llm-proxy", async () => hostRequest("llm-proxy.get"));
+  server.put("/api/system/llm-proxy", async (request) => hostRequest("llm-proxy.save", z.object({ settings: llmProxySchema, revision: z.string().length(64) }).strict().parse(request.body)));
   server.get("/api/system/network", async () => hostRequest("network.get"));
   server.put("/api/system/network", async (request) => hostRequest("network.save", z.object({ settings: networkInputSchema, revision: z.string().length(64) }).strict().parse(request.body)));
   server.post("/api/system/network/test", async (request) => hostRequest("network.test", z.object({ settings: networkInputSchema, url: z.string().url().max(4096) }).strict().parse(request.body)));

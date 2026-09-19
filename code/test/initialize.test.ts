@@ -8,7 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { findNpm, Supervisor } from "../host/supervisor.mjs";
 import { defaultNetworkSettings, validateNetworkSettings } from "../host/network.mjs";
-import { gatewaySchema, defaultGateway } from "../host/gateway.mjs";
+import { gatewaySchema, defaultGateway, defaultLlmProxy } from "../host/gateway.mjs";
 import { settingsSchema, agentIds } from "../shared/settings.js";
 import { readProfile, readSystem, assertCompatible, copySkills, copyRuntimes, initializeRuntimes } from "../tools/initialize.mjs";
 
@@ -70,6 +70,8 @@ test("initialization CLI starts through linked paths, preserves network/listener
       const system = JSON.parse(await readFile(systemFile, "utf8"));
       assert.deepEqual(system.gateway, saved ? { host: "192.0.2.1", port: 43210 } : { host: "127.0.0.1", port: 6217 });
       assert.deepEqual(system.appliedGateway, system.gateway);
+      assert.deepEqual(system.llmProxy, defaultLlmProxy);
+      assert.deepEqual(system.appliedLlmProxy, system.llmProxy);
       if (saved) assert.equal(system.network.npmRegistry, "https://registry.npmmirror.com/");
       const settings = settingsSchema.parse(JSON.parse(await readFile(path.join(data, "settings.json"), "utf8")));
       assert.equal(settings.defaultAgent, "codex");
@@ -107,7 +109,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
     }
     const systemFile = path.join(assets, "system.json");
     const network = { ...defaultNetworkSettings, mode: "direct", npmRegistry: "https://registry.npmmirror.com/" };
-    const system = { schemaVersion: 1, gateway: { host: "localhost", port: 0 }, network, appliedNetwork: defaultNetworkSettings, applying: false, error: null };
+    const system = { schemaVersion: 1, gateway: { host: "localhost", port: 0 }, llmProxy: { host: "localhost", port: 0 }, network, appliedNetwork: defaultNetworkSettings, applying: false, error: null };
     await writeFile(systemFile, "\uFEFF" + JSON.stringify(system));
     const profile = settingsSchema.parse({ defaultAgent: "codex", skills: [{ id: "office", path: "C:\\source machine\\skills\\office" }] });
     await writeFile(filename, JSON.stringify(profile));
@@ -132,6 +134,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       assert.equal(saved.runTimeoutMs, 2700000);
       assert.equal(await readFile(path.join(saved.skills[0]!.path, "assets/template.txt"), "utf8"), "template");
       assert.deepEqual(JSON.parse(await readFile(path.join(root, "data/system.json"), "utf8")).gateway, system.gateway);
+      assert.deepEqual(JSON.parse(await readFile(path.join(root, "data/system.json"), "utf8")).llmProxy, system.llmProxy);
 
       // Automatic sidecar discovery and the helper shipped inside the installed application.
       const bundle = path.join(directory, "deployment bundle");
@@ -153,6 +156,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
         assert.equal(saved.skills[0]!.path, path.join(automatic, "data/skills/office"));
         assert.equal(await readFile(path.join(saved.skills[0]!.path, "assets/template.txt"), "utf8"), "template");
         assert.deepEqual(JSON.parse(await readFile(path.join(automatic, "data/system.json"), "utf8")).gateway, system.gateway);
+        assert.deepEqual(JSON.parse(await readFile(path.join(automatic, "data/system.json"), "utf8")).llmProxy, system.llmProxy);
       }
     }
 
@@ -183,6 +187,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       assert.deepEqual(saved.agents.filter((agent) => agent.enabled).map((agent) => agent.id), ["codex"]);
       const imported = JSON.parse(await readFile(path.join(offline, "system.json"), "utf8"));
       assert.deepEqual(imported.gateway, system.gateway);
+      assert.deepEqual(imported.llmProxy, system.llmProxy);
       assert.deepEqual(imported.network, imported.appliedNetwork);
       assert.equal(imported.network.npmRegistry, network.npmRegistry);
     }

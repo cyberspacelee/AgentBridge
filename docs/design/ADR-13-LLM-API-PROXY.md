@@ -52,6 +52,7 @@ provider 配置增加可选字段，旧配置按默认值解释：
 - `api` 是 client-facing protocol，生成给 engine 的配置只使用它。
 - `upstreamApi` 是上游协议，缺省为 `api`。
 - `conversion` 只允许 `none` 或 `responses-to-completions`，缺省为 `none`；只有明确配置转换时才转换。
+- 配置 `responses-to-completions` 且上游为 Chat Completions 时，Responses 请求执行转换，Chat Completions 请求继续直连上游；因此同一连接可供 Codex 和其他 Agent 复用。
 - `request.headers` 和 `request.params` 在 proxy 请求边界合并；禁止覆盖路由、认证、`content-length` 等受保护字段，并限制键名、值大小和 JSON 深度。
 - 路由、认证、`model`、消息/input、`stream` 和协议版本由 proxy/协议转换器控制；其余允许字段按“客户端请求值 → provider 配置覆盖值”合并，配置不能覆盖 `stream` 和正文必需字段。
 - `apiKey`、敏感 header 和敏感参数在 API、日志、事件和页面回显中脱敏；页面只显示是否已配置。
@@ -78,6 +79,8 @@ provider 配置增加可选字段，旧配置按默认值解释：
 4. `/api/providers/:id/test` 测试保存后的 effective route，覆盖 pass-through 和已配置转换；错误脱敏。
 
 proxy 必须在 engine adapter 启动前 ready；配置保存沿用现有 revision/apply 生命周期，engine apply 后使用对应的代理地址和 client protocol。代理每次请求读取已保存的 provider 路由，保存后的新请求立即使用新配置，运行中的原生进程仍由现有 apply 机制控制。
+
+代理监听地址和端口属于 system.json 的系统级配置，与网关监听配置分开保存，默认使用独立的 loopback 随机端口；修改后通过服务重启应用，网关端口无需跟随变化。Provider 的请求头、参数、密钥和上游地址不重启代理，保存后下一次请求直接读取新值。
 
 共享资源页的 provider editor 增加“协议与代理”折叠区：client protocol、upstream protocol、conversion、headers/params 编辑器、转换能力提示、连接测试、effective route 和保存/应用状态。系统设置只展示 proxy 运行状态，不复制 provider 编辑入口。
 

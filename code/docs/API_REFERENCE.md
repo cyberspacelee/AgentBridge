@@ -36,6 +36,8 @@ Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参
 | GET | /api/system | [读取系统信息](#getsystem) |
 | GET | /api/system/gateway | [读取监听配置](#getgatewaysettings) |
 | PUT | /api/system/gateway | [保存监听配置](#savegatewaysettings) |
+| GET | /api/system/llm-proxy | [读取 LLM 代理监听配置](#getllmproxysettings) |
+| PUT | /api/system/llm-proxy | [保存 LLM 代理监听配置](#savellmproxysettings) |
 | GET | /api/system/network | [读取网络配置](#getnetworksettings) |
 | PUT | /api/system/network | [保存网络配置](#savenetworksettings) |
 | POST | /api/system/network/test | [测试网络连接](#testnetwork) |
@@ -1599,6 +1601,72 @@ revision 原样使用 GET 返回值。保存后调用 lifecycle restart 生效�
 | 504 | application/json | Error | 执行或系统操作超时 |
 
 
+### getllmproxysettings
+
+**GET /api/system/llm-proxy — 读取 LLM 代理监听配置**
+
+读取 LLM 代理监听配置
+
+路径/查询/额外请求头参数：无。
+
+请求体：无。
+
+| HTTP 状态码 | Content-Type | 响应类型 | 说明 |
+| --- | --- | --- | --- |
+| 200 | application/json | LlmProxyView | 成功 |
+| 400 | application/json | Error | 请求格式、字段、参数或业务约束无效 |
+| 403 | application/json | Error | Host/Origin 或路径、模型等访问约束不允许 |
+| 409 | application/json | Error | 修订/操作冲突、过期回复、执行取消；检查当前状态后重试 |
+| 429 | application/json | Error | 请求或资源达到限制 |
+| 500 | application/json | Error | 内部操作失败 |
+| 503 | application/json | Error | Agent/服务未就绪、维护中或连接已达上限 |
+| 504 | application/json | Error | 执行或系统操作超时 |
+
+
+### savellmproxysettings
+
+**PUT /api/system/llm-proxy — 保存 LLM 代理监听配置**
+
+revision 原样使用 GET 返回值。保存后调用 lifecycle restart 生效；port=0 自动分配。LLM 代理默认仅监听本机回环地址，供本机 Agent 使用。
+
+路径/查询/额外请求头参数：无。
+
+请求体：必填，Content-Type: application/json；类型：object。
+
+
+| 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| revision | string | 是 | minLength=64；maxLength=64 | — |
+| settings | LlmProxySettings | 是 |  | — |
+
+请求示例：
+
+
+```json
+{
+  "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "settings": {
+    "host": "127.0.0.1",
+    "port": 0
+  }
+}
+```
+
+
+| HTTP 状态码 | Content-Type | 响应类型 | 说明 |
+| --- | --- | --- | --- |
+| 200 | application/json | LlmProxyView | 成功 |
+| 400 | application/json | Error | 请求格式、字段、参数或业务约束无效 |
+| 403 | application/json | Error | Host/Origin 或路径、模型等访问约束不允许 |
+| 409 | application/json | Error | 修订/操作冲突、过期回复、执行取消；检查当前状态后重试 |
+| 413 | application/json | Error | JSON 请求体超过大小限制（默认 1 MiB） |
+| 415 | application/json | Error | 不支持的请求 Content-Type |
+| 429 | application/json | Error | 请求或资源达到限制 |
+| 500 | application/json | Error | 内部操作失败 |
+| 503 | application/json | Error | Agent/服务未就绪、维护中或连接已达上限 |
+| 504 | application/json | Error | 执行或系统操作超时 |
+
+
 ### getnetworksettings
 
 **GET /api/system/network — 读取网络配置**
@@ -2211,6 +2279,7 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | agents[].runtime | object | 是 | additionalProperties=false | — |
 | agents[].runtime.mode | string | 是 | enum=["managed","external"] | — |
 | agents[].runtime.command | string | 否 | minLength=1；maxLength=4096 | — |
+| agents[].modelApi | string | 否 | enum=["openai-completions","openai-responses"] | — |
 | agents[].models | Array<object> | 否 | default=[]；maxItems=200 | — |
 | agents[].models[].providerID | string | 是 | minLength=1；maxLength=100 | — |
 | agents[].models[].modelID | string | 是 | minLength=1；maxLength=300 | — |
@@ -2272,6 +2341,7 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | agents[].runtime | object | 是 | additionalProperties=false | — |
 | agents[].runtime.mode | string | 是 | enum=["managed","external"] | — |
 | agents[].runtime.command | string | 否 | minLength=1；maxLength=4096 | — |
+| agents[].modelApi | string | 否 | enum=["openai-completions","openai-responses"] | — |
 | agents[].models | Array<object> | 是 | default=[]；maxItems=200 | — |
 | agents[].models[].providerID | string | 是 | minLength=1；maxLength=100 | — |
 | agents[].models[].modelID | string | 是 | minLength=1；maxLength=300 | — |
@@ -2351,6 +2421,17 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 
 
 ### GatewaySettings
+
+
+
+
+| 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| host | string \| string \| string | 是 | format="ipv4"；pattern="^(?:(?:25[0-5]\|2[0-4][0-9]\|1[0-9][0-9]\|[1-9][0-9]\|[0-9])\\.){3}(?:25[0-5]\|2[0-4][0-9]\|1[0-9][0-9]\|[1-9][0-9]\|[0-9])$"；format="ipv6"；pattern="^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\|([0-9a-fA-F]{1,4}:){1,7}:\|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}\|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}\|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}\|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}\|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})\|:((:[0-9a-fA-F]{1,4}){1,7}\|:))$"；const="localhost" | — |
+| port | integer | 是 | minimum=0；maximum=65535 | — |
+
+
+### LlmProxySettings
 
 
 
@@ -2830,6 +2911,21 @@ Token 用量与美元费用；null 表示未报告，不能当作 0。
 | restartRequired | boolean | 是 |  | — |
 | url | string \| null | 是 |  | — |
 | urls | Array<string> | 是 |  | — |
+| error | string \| null | 是 |  | — |
+
+
+### LlmProxyView
+
+
+
+
+| 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| settings | LlmProxySettings | 是 |  | — |
+| appliedSettings | LlmProxySettings | 是 |  | — |
+| revision | string | 是 |  | — |
+| appliedRevision | string | 是 |  | — |
+| restartRequired | boolean | 是 |  | — |
 | error | string \| null | 是 |  | — |
 
 

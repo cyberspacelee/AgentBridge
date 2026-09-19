@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { gatewaySchema } from "../../host/gateway.mjs";
+import { gatewaySchema, llmProxySchema } from "../../host/gateway.mjs";
 import {
   createSessionSchema, createTaskSchema, submitRunSchema, promptSchema,
   interactionReplySchema, modelSchema, policySchema, runStates,
@@ -52,6 +52,7 @@ const schemas: Record<string, Schema> = {
   NetworkInput: json(networkInputSchema),
   NetworkSettings: json(networkSchema, "output"),
   GatewaySettings: json(gatewaySchema),
+  LlmProxySettings: json(llmProxySchema),
   Usage: described(object({ input: nullable(num), output: nullable(num), cacheRead: nullable(num), cacheWrite: nullable(num), costUsd: nullable(num), source: enumeration("reported", "estimated") }), "Token 用量与美元费用；null 表示未报告，不能当作 0。"),
   Snapshot: object({ storeId: str, instanceId: str, revision: int, cursor: str, capturedAt: date }),
   AcceptedRun: object({ submissionId: str, taskId: described(str, "与 sessionId 相同。"), sessionId: str, runId: str, acceptedAt: date }),
@@ -104,6 +105,7 @@ const schemas: Record<string, Schema> = {
   SystemView: object({ storeId: str, version: str, nodeVersion: str, nodePath: str, npmPath: nullable(str),
     capabilities: object({ gateway: bool, network: bool, restart: bool, directories: bool, certificates: bool }), maintenance: enumeration("ready", "draining", "stopping") }),
   GatewayView: object({ settings: ref("GatewaySettings"), appliedSettings: ref("GatewaySettings"), revision: str, appliedRevision: str, restartRequired: bool, url: nullable(str), urls: array(str), error: nullable(str) }),
+  LlmProxyView: object({ settings: ref("LlmProxySettings"), appliedSettings: ref("LlmProxySettings"), revision: str, appliedRevision: str, restartRequired: bool, error: nullable(str) }),
   NetworkView: object({ settings: ref("NetworkSettings"), hasPassword: bool, restartRequired: bool, revision: str, appliedRevision: str, protection: enumeration("os", "file"), error: nullable(str) }),
   DirectoryView: object({ directory: nullable(str), parent: nullable(str), entries: array(object({ name: str, path: str })), truncated: bool }),
   RuntimeLog: object({ id: int, occurredAt: date, level: str, stage: str, code: nullable(str), message: str, sessionId: nullable(str), runId: nullable(str), traceId: nullable(str) }),
@@ -236,6 +238,8 @@ operation("get", "/api/runtime", "getRuntimeInfo", "系统", "读取引擎、模
 operation("get", "/api/system", "getSystem", "系统", "读取系统信息", ref("SystemView"));
 operation("get", "/api/system/gateway", "getGatewaySettings", "系统", "读取监听配置", ref("GatewayView"), { errors: [409, 429, 503, 504] });
 operation("put", "/api/system/gateway", "saveGatewaySettings", "系统", "保存监听配置", ref("GatewayView"), { input: object({ revision: { type: "string", minLength: 64, maxLength: 64 }, settings: ref("GatewaySettings") }), errors: [409, 429, 504], description: "revision 原样使用 GET 返回值。保存后调用 lifecycle restart 生效；port=0 自动分配，0.0.0.0/:: 监听全部对应网卡。改址后按 url/urls 重连。", example: { revision: "a".repeat(64), settings: { host: "127.0.0.1", port: 6217 } } });
+operation("get", "/api/system/llm-proxy", "getLlmProxySettings", "系统", "读取 LLM 代理监听配置", ref("LlmProxyView"), { errors: [409, 429, 503, 504] });
+operation("put", "/api/system/llm-proxy", "saveLlmProxySettings", "系统", "保存 LLM 代理监听配置", ref("LlmProxyView"), { input: object({ revision: { type: "string", minLength: 64, maxLength: 64 }, settings: ref("LlmProxySettings") }), errors: [409, 429, 504], description: "revision 原样使用 GET 返回值。保存后调用 lifecycle restart 生效；port=0 自动分配。LLM 代理默认仅监听本机回环地址，供本机 Agent 使用。", example: { revision: "a".repeat(64), settings: { host: "127.0.0.1", port: 0 } } });
 operation("get", "/api/system/network", "getNetworkSettings", "系统", "读取网络配置", ref("NetworkView"), { errors: [409, 429, 503, 504] });
 operation("put", "/api/system/network", "saveNetworkSettings", "系统", "保存网络配置", ref("NetworkView"), { input: object({ revision: { type: "string", minLength: 64, maxLength: 64 }, settings: ref("NetworkInput") }), errors: [409, 429, 504], description: "完整 settings 与上一 GET 的 revision 必填。保存后重启生效；proxyPassword 省略保留、空字符串清除。" });
 operation("post", "/api/system/network/test", "testNetwork", "系统", "测试网络连接", object({ status: int, durationMs: num, scope: { type: "string", const: "gateway" } }), { input: object({ settings: ref("NetworkInput"), url: { type: "string", format: "uri", maxLength: 4096 } }), errors: [409, 429, 504], description: "使用草稿 settings 测试，不保存。url 必须为不含凭据的 HTTP(S) 地址；返回目标 HTTP 状态和耗时（毫秒）。" });

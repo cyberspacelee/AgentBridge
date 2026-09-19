@@ -7,7 +7,7 @@ import { access, mkdir, readFile, writeFile, appendFile, stat, rename, realpath,
 import { constants } from "node:fs";
 import path from "node:path";
 import { networkInterfaces } from "node:os";
-import { gatewaySchema, gatewayUrl, defaultGateway } from "./gateway.mjs";
+import { gatewaySchema, gatewayUrl, defaultGateway, llmProxySchema, defaultLlmProxy } from "./gateway.mjs";
 import { defaultNetworkSettings, validateNetworkSettings, networkEnvironment } from "./network.mjs";
 
 const revision = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -95,6 +95,11 @@ export class Supervisor {
     }
     this.gateway = gatewaySchema.parse({ ...defaultGateway, ...this.gatewayOverrides });
     this.appliedGateway = this.gateway;
+    this.llmProxyOverrides = {};
+    if (this.baseEnv.AGENT_LLM_PROXY_HOST !== undefined) this.llmProxyOverrides.host = this.baseEnv.AGENT_LLM_PROXY_HOST;
+    if (this.baseEnv.AGENT_LLM_PROXY_PORT !== undefined) this.llmProxyOverrides.port = Number(this.baseEnv.AGENT_LLM_PROXY_PORT);
+    this.llmProxy = llmProxySchema.parse({ ...defaultLlmProxy, ...this.llmProxyOverrides });
+    this.appliedLlmProxy = this.llmProxy;
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -114,6 +119,8 @@ export class Supervisor {
       if (!stored || stored.schemaVersion !== 1 || !stored.network || !stored.appliedNetwork || typeof stored.applying !== "boolean" || !(stored.error === null || typeof stored.error === "string")) throw new Error("系统配置版本不受支持，原文件已保留。");
       this.gateway = gatewaySchema.parse({ ...this.gateway, ...stored.gateway, ...this.gatewayOverrides });
       this.appliedGateway = stored.applying ? gatewaySchema.parse({ ...this.gateway, ...stored.appliedGateway, ...this.gatewayOverrides }) : this.gateway;
+      this.llmProxy = llmProxySchema.parse({ ...this.llmProxy, ...stored.llmProxy, ...this.llmProxyOverrides });
+      this.appliedLlmProxy = stored.applying ? llmProxySchema.parse({ ...this.llmProxy, ...stored.appliedLlmProxy, ...this.llmProxyOverrides }) : this.llmProxy;
       this.settings = await this.decode(stored.network);
       this.applied = await this.decode(stored.appliedNetwork);
       if (!stored.applying) {
@@ -144,7 +151,7 @@ export class Supervisor {
     return { ...plain, encryptedPassword: encrypted.toString("base64") };
   }
   async persist(applying) {
-    await atomicJson(this.filename, { schemaVersion: 1, gateway: this.gateway, appliedGateway: this.appliedGateway, network: await this.encode(this.settings), appliedNetwork: await this.encode(this.applied), applying, error: this.error });
+    await atomicJson(this.filename, { schemaVersion: 1, gateway: this.gateway, appliedGateway: this.appliedGateway, llmProxy: this.llmProxy, appliedLlmProxy: this.appliedLlmProxy, network: await this.encode(this.settings), appliedNetwork: await this.encode(this.applied), applying, error: this.error });
   }
   view() {
     const { proxyPassword, ...settings } = this.settings;
@@ -156,6 +163,9 @@ export class Supervisor {
       : [];
     const port = this.url ? Number(new URL(this.url).port || 80) : this.appliedGateway.port;
     return { settings: this.gateway, appliedSettings: this.appliedGateway, revision: revision(this.gateway), appliedRevision: revision(this.appliedGateway), restartRequired: revision(this.gateway) !== revision(this.appliedGateway), url: this.url ?? null, urls: [...new Set([gatewayUrl(this.appliedGateway.host, port), ...hosts.map((host) => gatewayUrl(host, port))])], error: this.error };
+  }
+  llmProxyView() {
+    return { settings: this.llmProxy, appliedSettings: this.appliedLlmProxy, revision: revision(this.llmProxy), appliedRevision: revision(this.appliedLlmProxy), restartRequired: revision(this.llmProxy) !== revision(this.appliedLlmProxy), error: this.error };
   }
   async request(method, payload) {
     if (method === "gateway.get") return this.gatewayView();
@@ -169,6 +179,19 @@ export class Supervisor {
         await this.persist(false);
         return this.gatewayView();
       } catch (error) { this.gateway = previous; throw error; }
+      finally { this.saving = false; }
+    }
+    if (method === "llm-proxy.get") return this.llmProxyView();
+    if (method === "llm-proxy.save") {
+      if (this.saving || this.operation) throw new Error("已有系统配置操作正在进行");
+      if (payload.revision !== revision(this.llmProxy)) throw new Error("LLM Proxy 设置已被修改，请刷新后重试");
+      this.saving = true;
+      const previous = this.llmProxy;
+      try {
+        this.llmProxy = llmProxySchema.parse(payload.settings);
+        await this.persist(false);
+        return this.llmProxyView();
+      } catch (error) { this.llmProxy = previous; throw error; }
       finally { this.saving = false; }
     }
     if (method === "network.get") return this.view();
@@ -221,6 +244,8 @@ export class Supervisor {
       ...networkEnvironment(this.applied, this.baseEnv),
       AGENT_DATA_DIR: this.directory,
       AGENT_SUPERVISED: "true", AGENT_HOST: this.appliedGateway.host, AGENT_PORT: String(this.appliedGateway.port),
+      AGENT_LLM_PROXY_HOST: this.appliedLlmProxy.host,
+      AGENT_LLM_PROXY_PORT: String(this.appliedLlmProxy.port),
     };
     if (!this.options.spawnBackend) {
       env.AGENT_RUNTIME_NODE = this.node;
@@ -316,10 +341,12 @@ export class Supervisor {
     if (!restart) { await this.release(); return; }
     const previous = this.applied;
     const previousGateway = this.appliedGateway;
+    const previousLlmProxy = this.appliedLlmProxy;
     const previousUrl = this.url;
     if (revision(this.gateway) !== revision(this.appliedGateway)) this.url = undefined;
     this.appliedGateway = this.gateway;
     this.applied = this.settings;
+    this.appliedLlmProxy = this.llmProxy;
     try {
       await this.options.onNetwork?.(this.applied);
       await this.start();
@@ -331,6 +358,7 @@ export class Supervisor {
       this.error = "新系统配置启动失败，已恢复之前生效的配置。请检查监听地址、端口占用和网络配置。";
       this.applied = previous;
       this.appliedGateway = previousGateway;
+      this.appliedLlmProxy = previousLlmProxy;
       this.url = previousUrl;
       try {
         await this.options.onNetwork?.(this.applied);

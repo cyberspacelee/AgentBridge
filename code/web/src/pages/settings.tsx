@@ -21,7 +21,7 @@ import {
   CollapsibleContent,
 } from "@/components/ui/collapsible"
 import { Skeleton } from "@/components/ui/skeleton"
-import { GatewaySettingsPanel } from "./gateway-settings"
+import { GatewaySettingsPanel, LlmProxySettingsPanel } from "./gateway-settings"
 import { NetworkSettingsPanel } from "./network-settings"
 import { TimeoutSettingsPanel } from "./timeout-settings"
 
@@ -53,6 +53,7 @@ export function Settings() {
         </Button>
       </div>
       <GatewaySettingsPanel system={system.data} />
+      <LlmProxySettingsPanel system={system.data} />
       <NetworkSettingsPanel />
       {currentSettings && runtime && (
         <TimeoutSettingsPanel

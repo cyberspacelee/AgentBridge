@@ -9,6 +9,7 @@ export const runTimeoutSetting = z.number().int().min(60000).max(24 * 60 * 60 * 
 export const agentIds = ["pi", "opencode", "codex", "grok"] as const;
 export const agentIdSchema = z.enum(agentIds);
 export type AgentId = z.infer<typeof agentIdSchema>;
+export const llmApiSchema = z.enum(["openai-completions", "openai-responses"]);
 export const modelRefSchema = z
   .object({
     providerID: z.string().min(1).max(100),
@@ -22,6 +23,7 @@ export const agentSchema = z
     id: agentIdSchema,
     enabled: z.boolean().default(false),
     runtime: runtimeSourceSchema,
+    modelApi: llmApiSchema.optional(),
     models: z.array(modelRefSchema).max(200).default([]),
     defaultModel: modelRefSchema.nullable().default(null),
     contextCompaction: z.enum(["default", "enabled"]).default("default"),
@@ -81,9 +83,7 @@ export const providerSchema = z
     id: name,
     baseUrl: httpUrl,
     apiKey: z.string().max(8192).default(""),
-    api: z
-      .enum(["openai-completions", "openai-responses"])
-      .default("openai-completions"),
+    api: llmApiSchema.default("openai-completions"),
     upstreamApi: z
       .enum(["openai-completions", "openai-responses"])
       .optional(),
@@ -193,12 +193,29 @@ export const settingsSchema = z
         );
         if (!provider?.models.some((entry) => entry.id === model.modelID))
           issue(["agents", index, "models"], "Unknown model reference");
-        if (agent.id === "codex" && provider?.api !== "openai-responses")
+        const clientApi = agent.modelApi ?? provider?.api;
+        const upstreamApi = provider?.upstreamApi ?? provider?.api;
+        const compatible =
+          !!provider &&
+          ((clientApi === upstreamApi && provider.conversion === "none") ||
+            (clientApi === "openai-completions" &&
+              upstreamApi === "openai-completions" &&
+              provider.conversion === "responses-to-completions") ||
+            (clientApi === "openai-responses" &&
+              upstreamApi === "openai-completions" &&
+              provider.conversion === "responses-to-completions"));
+        if (!compatible)
           issue(
             ["agents", index, "models"],
-            "Codex 需要使用 Responses 协议的模型连接",
+            "Agent 请求协议与模型连接的上游协议不兼容，请启用对应转换",
           );
       }
+      const clientApis = new Set(agent.models.map((model) => {
+        const provider = value.providers.find((entry) => entry.id === model.providerID);
+        return agent.modelApi ?? provider?.api;
+      }));
+      if (clientApis.size > 1)
+        issue(["agents", index, "modelApi"], "同一 Agent 的模型必须使用同一请求协议");
       if (
         agent.defaultModel &&
         !agent.models.some(
