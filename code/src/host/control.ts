@@ -10,6 +10,10 @@ export function hostConnected() {
   return Boolean(parentPort || process.connected);
 }
 
+export function isUtilityProcess() {
+  return Boolean(parentPort);
+}
+
 export function sendHost(message: unknown, callback?: (error?: Error | null) => void) {
   if (parentPort) {
     try {

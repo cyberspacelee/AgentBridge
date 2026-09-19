@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
 import { LlmProxy, registerLlmProxy, unregisterLlmProxy } from "./llm-proxy/server.js";
 import { readSettings } from "./settings.js";
-import { disconnectHost, hostConnected, onHostDisconnect, onHostMessage, sendHost } from "./host/control.js";
+import { disconnectHost, hostConnected, isUtilityProcess, onHostDisconnect, onHostMessage, sendHost } from "./host/control.js";
 export async function startGateway(config = readConfig()) {
   const store = new Store(config.database, config.limits.maxEventBytes);
   const proxy = new LlmProxy(config, () => readSettings(config), (record) => {
@@ -97,6 +97,7 @@ if (
         unregisterLlmProxy(runtime.config);
         await proxy.close();
         disconnectHost();
+        if (isUtilityProcess()) process.exit(0);
       }));
   };
   for (const signal of ["SIGINT", "SIGTERM"] as const)
