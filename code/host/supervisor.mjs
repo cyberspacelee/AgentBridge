@@ -302,7 +302,7 @@ export class Supervisor {
       catch (error) { this.closing = false; this.restarting = false; this.operation = null; throw error; }
     }
     const child = this.child;
-    if (child?.pid && child.exitCode === null && child.signalCode === null) {
+    if (child && child.exitCode === null && child.signalCode === null) {
       await new Promise((resolve) => {
         child.once("exit", resolve);
         if (child.connected) child.send({ type: mode === "wait" ? "drain" : "shutdown" }, () => {});
@@ -325,7 +325,7 @@ export class Supervisor {
     } catch (error) {
       const failedChild = this.child;
       await this.kill();
-      if (failedChild?.pid && failedChild.exitCode === null && failedChild.signalCode === null) await new Promise((resolve) => failedChild.once("exit", resolve));
+      if (failedChild && failedChild.exitCode === null && failedChild.signalCode === null) await new Promise((resolve) => failedChild.once("exit", resolve));
       this.error = "新系统配置启动失败，已恢复之前生效的配置。请检查监听地址、端口占用和网络配置。";
       this.applied = previous;
       this.appliedGateway = previousGateway;
