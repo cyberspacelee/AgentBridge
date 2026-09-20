@@ -210,7 +210,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       assert.ok(!stdout.includes("installing runtime"));
       const saved = settingsSchema.parse(JSON.parse(await readFile(path.join(offline, "settings.json"), "utf8")));
       assert.equal(saved.skills[0]!.path, path.join(offline, "skills/office"));
-      assert.deepEqual(saved.agents.filter((agent) => agent.enabled).map((agent) => agent.id), []);
+      assert.deepEqual(saved.agents.filter((agent) => agent.enabled).map((agent) => agent.id), ["codex"]);
       const imported = JSON.parse(await readFile(path.join(offline, "system.json"), "utf8"));
       assert.deepEqual(imported.gateway, system.gateway);
       assert.deepEqual(imported.llmProxy, system.llmProxy);
@@ -222,7 +222,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       await restarted.initialize();
       const url = await restarted.start();
       const { agents } = await (await fetch(url + "/api/agents")).json();
-      assert.equal(agents.find((agent: { id: string }) => agent.id === "codex").health.status, "disabled");
+      assert.equal(agents.find((agent: { id: string }) => agent.id === "codex").health.status, "ready");
     } finally { await restarted.stop(); }
     if (process.platform === "win32") {
       // Exercise the native executable that triggered EPERM after --version on Windows.

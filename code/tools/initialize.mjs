@@ -226,7 +226,7 @@ async function main() {
     if (values.skills) await copySkills(values.skills, directory, skills);
     const manager = new SettingsManager(config);
     manager.save({ revision: manager.view().revision, settings: {
-      ...settings, agents: settings.agents.map((agent) => ({ ...agent, enabled: false })),
+      ...settings,
     } });
     if (system) {
       supervisor.gateway = supervisor.appliedGateway = system.gateway;
