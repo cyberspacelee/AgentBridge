@@ -75,7 +75,7 @@ function Find-NodeToolchain([string] $Resources) {
         if ($npmCommand) { $npmCandidates += Join-Path (Split-Path -Parent $npmCommand.Source) 'node_modules\npm\bin\npm-cli.js' }
         $npm = $npmCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
         if ($npm) {
-            Write-Host "Using Node.js $version: $nodeCandidate"
+            Write-Host "Using Node.js ${version}: $nodeCandidate"
             return @{ Node = $nodeCandidate; Npm = $npm }
         }
     }
