@@ -1,10 +1,9 @@
 import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { parseArgs, isDeepStrictEqual } from "node:util";
+import { parseArgs } from "node:util";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
 
 async function readInput(filename) {
   return JSON.parse((await readFile(filename, "utf8")).replace(/^\uFEFF/, ""), (_key, value) =>
@@ -114,18 +113,8 @@ export async function readSystem(filename, gatewaySchema, defaultGateway, valida
   return { gateway, network, ...(llmProxy ? { llmProxy } : {}) };
 }
 
-export function assertCompatible(previous, next) {
-  const empty = !previous.providers.length && !previous.skills.length && !previous.mcp.length &&
-    previous.runTimeoutMs === undefined &&
-    previous.agents.every((agent) => !agent.enabled && !agent.models.length && !agent.skillIds.length && !agent.mcpIds.length);
-  // Initialization can resume its own configuration; editing existing profiles belongs in the app.
-  const comparable = (settings) => ({ ...settings, agents: settings.agents.map(({ enabled, runtime, ...agent }) => agent) });
-  if (!empty && !isDeepStrictEqual(comparable(previous), comparable(next)))
-    throw new Error("Existing settings differ from this profile. Use the app to edit them, or select a new data directory.");
-}
-
 // Caller holds the target instance lock. Source must be a stopped instance or a snapshot.
-export async function copyRuntimes(source, directory, agents, verify, log = console.log) {
+export async function copyRuntimes(source, directory, agents, verify = null, log = console.log) {
   const sourceRoot = await realpath(source);
   const readOptional = async (file) => readFile(file, "utf8").catch((error) => {
     if (error.code !== "ENOENT") throw error;
@@ -152,10 +141,11 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
       const candidateRaw = await readOptional(path.join(sourceRoot, candidate, "manifest.json"));
       if (candidateRaw !== null) { sourceId = candidate; raw = candidateRaw; break; }
     }
-    if (!sourceId) throw new Error(`${id}: runtime manifest is missing (accepted names: ${sourceIds.join(", ")})`);
+    if (!sourceId) continue;
     const sourceFile = path.join(sourceRoot, sourceId, "manifest.json");
     const manifest = JSON.parse(raw);
     const current = manifest.current;
+    if (!current) continue;
     if (manifest.schemaVersion !== 1 || !current || manifest.rollback || manifest.sourceRollback || manifest.operation || manifest.uninstallPending ||
         !/^\d+\.\d+\.\d+$/.test(current.version) || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(current.directory) ||
         typeof current.command !== "string" || !current.command || path.win32.isAbsolute(current.command) || path.posix.isAbsolute(current.command) || current.command.split(/[\\/]/).includes("..") ||
@@ -176,8 +166,10 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
       await cp(version, destination, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true });
       const command = path.join(destination, current.command);
       if (!(await lstat(await realpath(command))).isFile()) throw new Error(`${id}: runtime executable is missing`);
-      log(`${id}: checking copied runtime ${current.version}...`);
-      await verify(command, current.version);
+      if (verify) {
+        log(`${id}: checking copied runtime ${current.version}...`);
+        await verify(command, current.version);
+      }
       if (await readFile(sourceFile, "utf8") !== raw) throw new Error(`${id}: source changed during copying; retry with the source app closed`);
       const temporary = path.join(target, `manifest-${uuid}.tmp`);
       try {
@@ -188,48 +180,6 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
       log(`${id}: copied runtime ${current.version}`);
     } finally {
       if (!committed) await rm(destination, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    }
-  }
-}
-
-export async function initializeRuntimes(request, agents, log = console.log, localOnly = false) {
-  const wait = async (route, key, id, allowError = false) => {
-    const deadline = Date.now() + 30 * 60 * 1000;
-    for (;;) {
-      const item = (await request(route))[key].find((entry) => entry.id === id);
-      if (!item) throw new Error(`Missing status for ${id}`);
-      if (!item.operation) {
-        if (item.error && !allowError) throw new Error(`${id}: ${item.error}`);
-        return item;
-      }
-      if (Date.now() >= deadline) throw new Error(`${id}: initialization timed out`);
-      await delay(500);
-    }
-  };
-  for (const agent of agents) {
-    const id = agent.id;
-    const current = await wait("/api/runtimes", "runtimes", id, true);
-    if (agent.runtime.mode === "managed") {
-      if (!current.managedVersion || (current.managed && !current.usable)) {
-        if (localOnly) throw new Error(`${id}: local runtime is missing or unusable; no download was attempted`);
-        log(`${id}: installing runtime...`);
-        await request(`/api/runtimes/${id}/actions`, { action: "install" });
-        const installed = await wait("/api/runtimes", "runtimes", id);
-        if (!installed.managedVersion || (installed.managed && !installed.usable)) throw new Error(`${id}: runtime installation did not complete`);
-      } else log(`${id}: runtime already installed; skipping download`);
-    }
-    if (agent.runtime.mode === "external" || !current.managed) {
-      log(`${id}: checking runtime source...`);
-      await request(`/api/runtimes/${id}/source`, agent.runtime, "PUT");
-      const bound = await wait("/api/runtimes", "runtimes", id);
-      if (bound.managed !== (agent.runtime.mode === "managed") || !bound.usable)
-        throw new Error(`${id}: runtime source is not usable`);
-    }
-    if (agent.enabled) {
-      log(`${id}: enabling...`);
-      await request(`/api/agents/${id}/actions`, { action: "enable" });
-      const enabled = await wait("/api/agents", "agents", id);
-      if (enabled.health.status !== "ready") throw new Error(`${id}: Agent is not ready`);
     }
   }
 }
@@ -249,23 +199,6 @@ async function main() {
   }
   const skills = structuredClone(settings.skills);
   if (values.skills) for (const skill of settings.skills) skill.path = path.join(directory, "skills", skill.id);
-  const selected = [];
-  const hasRuntime = async (root, id) => {
-    for (const name of runtimeNames(id)) {
-      const manifest = await readInput(path.join(root, name, "manifest.json")).catch((error) => {
-        if (error.code !== "ENOENT") throw error;
-        return null;
-      });
-      if (manifest && manifest.schemaVersion !== 1) throw new Error(`${id}: unsupported runtime manifest`);
-      if (manifest?.current) return true;
-    }
-    return false;
-  };
-  for (const agent of requested) {
-    // A saved settings.json includes all Agents, even those never installed.
-    if (!runtimesPath || agent.enabled || (agent.runtime.mode === "managed" &&
-        (await hasRuntime(runtimesPath, agent.id) || await hasRuntime(path.join(directory, "runtimes"), agent.id)))) selected.push(agent);
-  }
   const { Supervisor } = await moduleAt("dist/host/supervisor.mjs");
   const { readConfig } = await moduleAt("dist/src/config.js");
   const { SettingsManager, readSettings } = await moduleAt("dist/src/settings.js");
@@ -290,13 +223,10 @@ async function main() {
     const previous = readSettings(config);
     if (settings.runTimeoutMs === undefined && previous.runTimeoutMs !== undefined)
       settings.runTimeoutMs = previous.runTimeoutMs;
-    assertCompatible(previous, settings);
     if (values.skills) await copySkills(values.skills, directory, skills);
     const manager = new SettingsManager(config);
-    // Validate skill directories and save atomically before any CLI download or execution.
     manager.save({ revision: manager.view().revision, settings: {
-      ...settings, agents: settings.agents.map((agent) => ({ ...agent, enabled: false,
-        runtime: selected.includes(agent) ? previous.agents.find((item) => item.id === agent.id).runtime : agent.runtime })),
+      ...settings, agents: settings.agents.map((agent) => ({ ...agent, enabled: false })),
     } });
     if (system) {
       supervisor.gateway = supervisor.appliedGateway = system.gateway;
@@ -306,39 +236,9 @@ async function main() {
       await supervisor.persist(false);
     }
     if (runtimesPath) {
-      const { startProcess, stopProcess } = await moduleAt("dist/src/engines/process.js");
-      const { within } = await moduleAt("dist/src/async.js");
-      await copyRuntimes(runtimesPath, directory, selected, async (command, expected) => {
-        cancellation.signal.throwIfAborted();
-        const child = startProcess(command, ["--version"], path.dirname(command), { ...process.env, AGENT_RUNTIME_NODE: process.execPath });
-        let output = "";
-        child.stdout.on("data", (chunk) => { output = (output + chunk).slice(-8192); });
-        child.stderr.on("data", (chunk) => { output = (output + chunk).slice(-8192); });
-        try {
-          await within(new Promise((resolve, reject) => {
-            child.once("error", reject);
-            child.once("exit", (code) => code === 0 ? resolve() : reject(new Error("Copied runtime cannot run on this machine; check OS, CPU architecture and dependencies")));
-          }), 15000);
-          if (output.match(/\d+\.\d+\.\d+/)?.[0] !== expected) throw new Error("Copied runtime version does not match its manifest");
-          cancellation.signal.throwIfAborted();
-        } finally { await stopProcess(child, 5000); }
-      });
+      await copyRuntimes(runtimesPath, directory, requested);
     }
-    console.log("Configuration saved. Starting temporary local gateway...");
-    // initialize() persists gateway settings; override only this temporary listener afterward.
-    supervisor.appliedGateway = { host: "127.0.0.1", port: 0 };
-    const origin = await supervisor.start();
-    cancellation.signal.throwIfAborted();
-    const request = async (route, body, method = body ? "POST" : "GET") => {
-      const response = await fetch(`${origin}${route}`, {
-        method, headers: { "Content-Type": "application/json" },
-        ...(body ? { body: JSON.stringify(body) } : {}), redirect: "error", signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(60000)]),
-      });
-      if (!response.ok) throw new Error(`${method} ${route}: HTTP ${response.status}; inspect the application logs`);
-      return response.json();
-    };
-    await initializeRuntimes(request, selected, console.log, !!runtimesPath);
-    console.log("Initialization complete. You can now open AgentBridge.");
+    console.log("Initialization complete. Runtime files, configuration and skills are ready.");
   } finally {
     await supervisor.stop();
     process.removeListener("SIGINT", interrupted);

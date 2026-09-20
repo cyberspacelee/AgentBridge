@@ -10,7 +10,7 @@ import { findNpm, Supervisor } from "../host/supervisor.mjs";
 import { defaultNetworkSettings, validateNetworkSettings } from "../host/network.mjs";
 import { gatewaySchema, defaultGateway, defaultLlmProxy } from "../host/gateway.mjs";
 import { settingsSchema, agentIds } from "../shared/settings.js";
-import { readProfile, readSystem, assertCompatible, copySkills, copyRuntimes, initializeRuntimes } from "../tools/initialize.mjs";
+import { readProfile, readSystem, copySkills, copyRuntimes } from "../tools/initialize.mjs";
 
 const powershell = process.env.AGENT_TEST_POWERSHELL ?? (process.platform === "win32" ? "powershell.exe" : undefined);
 test("PowerShell ZIP extraction rejects unsafe paths and preserves asset layouts", { skip: !powershell }, async () => {
@@ -210,7 +210,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       assert.ok(!stdout.includes("installing runtime"));
       const saved = settingsSchema.parse(JSON.parse(await readFile(path.join(offline, "settings.json"), "utf8")));
       assert.equal(saved.skills[0]!.path, path.join(offline, "skills/office"));
-      assert.deepEqual(saved.agents.filter((agent) => agent.enabled).map((agent) => agent.id), ["codex"]);
+      assert.deepEqual(saved.agents.filter((agent) => agent.enabled).map((agent) => agent.id), []);
       const imported = JSON.parse(await readFile(path.join(offline, "system.json"), "utf8"));
       assert.deepEqual(imported.gateway, system.gateway);
       assert.deepEqual(imported.llmProxy, system.llmProxy);
@@ -222,7 +222,7 @@ test("initialization CLI starts through linked paths, preserves network/listener
       await restarted.initialize();
       const url = await restarted.start();
       const { agents } = await (await fetch(url + "/api/agents")).json();
-      assert.equal(agents.find((agent: { id: string }) => agent.id === "codex").health.status, "ready");
+      assert.equal(agents.find((agent: { id: string }) => agent.id === "codex").health.status, "disabled");
     } finally { await restarted.stop(); }
     if (process.platform === "win32") {
       // Exercise the native executable that triggered EPERM after --version on Windows.
@@ -265,7 +265,7 @@ test("deployment system files reject old, interrupted and machine-encrypted sett
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("initialization expands secrets safely, resolves skill paths, rejects conflicts, and resumes failed installs", async () => {
+test("initialization expands secrets safely and resolves skill paths", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-initialize-"));
   const filename = path.join(directory, "profile.json");
   const envKey = "AGENTBRIDGE_INITIALIZE_TEST_SECRET";
@@ -284,9 +284,6 @@ test("initialization expands secrets safely, resolves skill paths, rejects confl
     assert.equal(settings.skills[0].path, path.join(directory, "skills/office"));
     assert.equal(settings.agents.length, 5);
     assert.deepEqual(selected.map((agent: { id: string }) => agent.id), ["pi"]);
-    assertCompatible(settingsSchema.parse({}), settings);
-    assertCompatible({ ...settings, agents: settings.agents.map((agent: object) => ({ ...agent, enabled: false })) }, settings);
-    assert.throws(() => assertCompatible(settings, { ...settings, providers: [] }), /Existing settings differ/);
     delete process.env[envKey];
     await assert.rejects(readProfile(filename, settingsSchema, agentIds), /Missing environment variable/);
     await writeFile(filename, JSON.stringify({ agents: [{ id: "pi" }, { id: "pi" }] }));
@@ -294,48 +291,6 @@ test("initialization expands secrets safely, resolves skill paths, rejects confl
     await writeFile(filename, JSON.stringify({ agents: [{ id: "pi", skillIds: ["missing"] }] }));
     await assert.rejects(readProfile(filename, settingsSchema, agentIds));
 
-    const actions: string[] = [];
-    let installed = false;
-    let fail = false;
-    const request = async (route: string, body?: { action?: string }) => {
-      if (body) {
-        actions.push(body.action!);
-        if (body.action === "install") installed = !fail;
-        return {};
-      }
-      if (route === "/api/runtimes") return { runtimes: [{ id: "pi", operation: null, managed: true, usable: installed, managedVersion: installed ? "1.0.0" : null, error: installed ? null : "previous installation interrupted" }] };
-      return { agents: [{ id: "pi", operation: null, health: { status: "ready" } }] };
-    };
-    await initializeRuntimes(request, selected, () => {});
-    assert.deepEqual(actions, ["install", "enable"]);
-    actions.length = 0;
-    await initializeRuntimes(request, selected, () => {});
-    assert.deepEqual(actions, ["enable"]);
-    installed = false; fail = true; actions.length = 0;
-    await assert.rejects(initializeRuntimes(request, selected, () => {}), /installation interrupted/);
-    assert.deepEqual(actions, ["install"]); // Never enable after a failed installation.
-    actions.length = 0;
-    await assert.rejects(initializeRuntimes(request, selected, () => {}, true), /no download was attempted/);
-    assert.deepEqual(actions, []);
-
-    for (const mode of ["external", "managed"]) {
-      let usable = false;
-      let bound = false;
-      const bindRequest = async (route: string, body?: { action?: string }, method?: string) => {
-        if (body) {
-          if (method === "PUT") { assert.equal(route, "/api/runtimes/pi/source"); bound = true; }
-          else actions.push(body.action!);
-          return {};
-        }
-        return { runtimes: [{ id: "pi", operation: null, managed: bound && mode === "managed", usable, managedVersion: "1.0.0", error: null }] };
-      };
-      const agents = [{ ...selected[0], enabled: false, runtime: { mode, ...(mode === "external" ? { command: "pi" } : {}) } }];
-      await assert.rejects(initializeRuntimes(bindRequest, agents, () => {}, true), /source is not usable/);
-      assert.deepEqual(actions, []); // No download or enable after failed source verification.
-      bound = false; usable = true;
-      await initializeRuntimes(bindRequest, agents, () => {}, true);
-      assert.ok(bound);
-    }
   } finally {
     if (previousEnv === undefined) delete process.env[envKey]; else process.env[envKey] = previousEnv;
     await rm(directory, { recursive: true, force: true });
