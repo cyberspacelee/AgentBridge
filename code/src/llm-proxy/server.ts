@@ -267,6 +267,15 @@ function responseOutputFromChat(body: JsonObject, responseId = `resp_${randomUUI
     const fn = tool.function && typeof tool.function === "object" ? object(tool.function) : {};
     output.push({ type: "function_call", id: text(tool.id, "tool_calls.id"), call_id: text(tool.id, "tool_calls.id"), name: text(fn.name, "tool_calls.function.name"), arguments: text(fn.arguments, "tool_calls.function.arguments"), status: "completed" });
   }
+  const chatUsage = usageFromChat(body.usage);
+  const usage = chatUsage.input !== null && chatUsage.output !== null
+    ? {
+        input_tokens: chatUsage.input,
+        output_tokens: chatUsage.output,
+        total_tokens: chatUsage.input + chatUsage.output,
+        ...(chatUsage.cacheRead === null ? {} : { input_tokens_details: { cached_tokens: chatUsage.cacheRead } }),
+      }
+    : undefined;
   return {
     id: responseId,
     object: "response",
@@ -275,15 +284,7 @@ function responseOutputFromChat(body: JsonObject, responseId = `resp_${randomUUI
     model: typeof body.model === "string" ? body.model : undefined,
     output,
     output_text: content,
-    usage: (() => {
-      const value = usageFromChat(body.usage);
-      return {
-        input_tokens: value.input,
-        output_tokens: value.output,
-        total_tokens: value.input !== null && value.output !== null ? value.input + value.output : null,
-        input_tokens_details: value.cacheRead === null ? undefined : { cached_tokens: value.cacheRead },
-      };
-    })(),
+    ...(usage ? { usage } : {}),
   };
 }
 

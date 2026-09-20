@@ -213,6 +213,15 @@ test("Responses namespace tools flatten for Chat Completions", () => {
   assert.deepEqual(body.tools, [{ type: "function", function: { name: "mcp__server__lookup", description: "Find data", parameters: { type: "object" } } }]);
 });
 
+test("Responses completed omits incomplete Chat usage", () => {
+  assert.equal("usage" in chatToResponse({ model: "m", choices: [{ message: { content: "ok" } }], usage: {} }), false);
+  assert.deepEqual((chatToResponse({ model: "m", choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 4, completion_tokens: 2 } }).usage as Record<string, unknown>), {
+    input_tokens: 4,
+    output_tokens: 2,
+    total_tokens: 6,
+  });
+});
+
 test("upstream validation errors preserve the provider response message", async () => {
   const upstream = createServer((_req, res) => {
     res.statusCode = 422;
