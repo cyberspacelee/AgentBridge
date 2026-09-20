@@ -57,6 +57,20 @@ function text(value: unknown, field: string): string {
 function optionalNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
+async function upstreamFailure(response: Response): Promise<string> {
+  const body = await response.text().catch(() => "");
+  if (!body) return `Upstream returned HTTP ${response.status}`;
+  let detail = body.replace(/\s+/g, " ").trim();
+  try {
+    const parsed = JSON.parse(body) as JsonObject;
+    const upstreamError = parsed.error && typeof parsed.error === "object" ? parsed.error as JsonObject : parsed;
+    if (typeof upstreamError.message === "string") detail = upstreamError.message;
+    else if (typeof upstreamError.code === "string") detail = upstreamError.code;
+  } catch {
+    // Keep a short plain-text response for non-JSON OpenAI-compatible servers.
+  }
+  return `Upstream returned HTTP ${response.status}: ${detail.slice(0, 2000)}`;
+}
 function endpoint(api: Api): "responses" | "chat/completions" {
   return api === "openai-responses" ? "responses" : "chat/completions";
 }
@@ -436,8 +450,7 @@ export class LlmProxy {
       const response = await fetch(upstream, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120000), headers, body: JSON.stringify(outgoing) });
       status = response.status;
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`Upstream returned HTTP ${response.status}`);
+        throw new Error(await upstreamFailure(response));
       }
       const contentType = response.headers.get("content-type") ?? "application/json";
       if (convertingResponses) {
@@ -480,7 +493,9 @@ export class LlmProxy {
       finish();
     } catch (caught) {
       error = caught instanceof LlmProxyError ? caught.code : "UPSTREAM_ERROR";
-      const proxyError = caught instanceof LlmProxyError ? caught : new LlmProxyError("UPSTREAM_ERROR", "Upstream model request failed", 502);
+      const proxyError = caught instanceof LlmProxyError
+        ? caught
+        : new LlmProxyError("UPSTREAM_ERROR", caught instanceof Error ? caught.message : "Upstream model request failed", 502);
       status = proxyError.status;
       if (!res.headersSent) this.writeJson(res, status, { error: { code: proxyError.code, message: proxyError.message, type: "proxy_error" } });
       else res.end();

@@ -185,3 +185,27 @@ test("Responses conversion accepts message and text items without type", () => {
     { role: "tool", tool_call_id: "call_1", content: "done" },
   ]);
 });
+
+test("upstream validation errors preserve the provider response message", async () => {
+  const upstream = createServer((_req, res) => {
+    res.statusCode = 422;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: { message: "unsupported parameter: reasoning_effort" } }));
+  });
+  const port = await listen(upstream);
+  const settings = settingsSchema.parse({ providers: [{ id: "error", baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", models: [{ id: "m" }] }] });
+  const proxy = new LlmProxy({ host: "127.0.0.1" }, () => settings);
+  await proxy.start();
+  try {
+    const response = await fetch(`${proxy.providerBaseUrl("error")}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${proxy.runtimeToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", messages: [{ role: "user", content: "hello" }] }),
+    });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: { code: "UPSTREAM_ERROR", message: "Upstream returned HTTP 422: unsupported parameter: reasoning_effort", type: "proxy_error" } });
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
