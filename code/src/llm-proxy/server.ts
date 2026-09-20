@@ -96,9 +96,17 @@ function contentText(value: unknown, field: string): string {
   if (!Array.isArray(value)) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `${field} cannot be represented as Chat content`);
   return value.map((part) => {
     const item = object(part);
-    if (item.type === "input_text" || item.type === "output_text" || item.type === "text") return text(item.text, `${field}.text`);
+    if (item.type === "input_text" || item.type === "output_text" || item.type === "text" || (item.type === undefined && typeof item.text === "string")) return text(item.text, `${field}.text`);
     throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `${field} contains unsupported content type ${String(item.type)}`);
   }).join("");
+}
+
+function responseInputType(item: JsonObject): string | undefined {
+  if (typeof item.type === "string") return item.type;
+  if (item.role !== undefined && item.content !== undefined) return "message";
+  if (item.call_id !== undefined || (item.id !== undefined && item.output !== undefined)) return "function_call_output";
+  if (item.name !== undefined && item.arguments !== undefined) return "function_call";
+  return undefined;
 }
 
 function responseTools(value: unknown): unknown[] | undefined {
@@ -127,7 +135,7 @@ export function responsesToChat(input: JsonObject, history: JsonObject[] = []): 
   if (!Array.isArray(items)) throw new LlmProxyError("INVALID_REQUEST", "input must be a string or array");
   for (const raw of items) {
     const item = object(raw);
-    switch (item.type) {
+    switch (responseInputType(item)) {
       case "message": {
         const role = item.role === "developer" ? "system" : item.role;
         if (!["user", "assistant", "system"].includes(String(role))) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported message role ${String(role)}`);
@@ -135,7 +143,7 @@ export function responsesToChat(input: JsonObject, history: JsonObject[] = []): 
         break;
       }
       case "function_call_output":
-        messages.push({ role: "tool", tool_call_id: text(item.call_id, "function_call_output.call_id"), content: contentText(item.output, "function_call_output.output") });
+        messages.push({ role: "tool", tool_call_id: text(item.call_id ?? item.id, "function_call_output.call_id"), content: contentText(item.output, "function_call_output.output") });
         break;
       case "function_call":
         messages.push({ role: "assistant", content: null, tool_calls: [{ id: text(item.call_id, "function_call.call_id"), type: "function", function: { name: text(item.name, "function_call.name"), arguments: text(item.arguments, "function_call.arguments") } }] });

@@ -169,3 +169,19 @@ test("conversion helpers map Responses input and Chat tool calls", () => {
   const response = chatToResponse({ model: "m", choices: [{ message: { content: null, tool_calls: [{ id: "call_1", function: { name: "lookup", arguments: "{}" } }] } }], usage: {} });
   assert.equal((response.output as unknown[])[0] && (response.output as unknown[])[0] && ((response.output as unknown[])[0] as Record<string, unknown>).type, "function_call");
 });
+
+test("Responses conversion accepts message and text items without type", () => {
+  const body = responsesToChat({
+    model: "m",
+    input: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [{ text: "hi" }] },
+      { id: "call_1", output: "done" },
+    ],
+  });
+  assert.deepEqual(body.messages, [
+    { role: "user", content: "hello" },
+    { role: "assistant", content: "hi" },
+    { role: "tool", tool_call_id: "call_1", content: "done" },
+  ]);
+});
