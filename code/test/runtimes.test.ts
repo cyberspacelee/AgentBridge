@@ -223,7 +223,7 @@ test("Grok allows a 30 minute download while metadata stays bounded and cancella
   } finally { await manager.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("Pi, OpenCode and Codex use the configured registry in metadata, npm and integrity checks", async () => {
+test("managed runtimes use package bin metadata and the configured registry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agentbridge-npm-download-"));
   const npm = path.join(directory, "npm-fixture.mjs");
   await writeFile(npm, `
@@ -244,9 +244,15 @@ test("Pi, OpenCode and Codex use the configured registry in metadata, npm and in
     } else {
       assert.equal(process.argv[2], "ci");
       const name = Object.keys(dependencies)[0];
+      const binName = name === "@openai/codex" ? "codex" : name === "@qwen-code/qwen-code" ? "qwencode" : "pi";
+      if (!name.startsWith("opencode-")) {
+        const packageDirectory = path.join("node_modules", name);
+        await mkdir(packageDirectory, { recursive: true });
+        await writeFile(path.join(packageDirectory, "package.json"), JSON.stringify({ name, bin: { [binName]: "cli.js" } }));
+      }
       const command = name.startsWith("opencode-")
         ? path.join("node_modules", name, "bin", process.platform === "win32" ? "opencode.exe" : "opencode")
-        : path.join("node_modules", ".bin", (name === "@openai/codex" ? "codex" : "pi") + (process.platform === "win32" ? ".cmd" : ""));
+        : path.join("node_modules", ".bin", binName + (process.platform === "win32" ? ".cmd" : ""));
       await mkdir(path.dirname(command), { recursive: true });
       await writeFile(command, "fixture");
     }
@@ -268,7 +274,7 @@ test("Pi, OpenCode and Codex use the configured registry in metadata, npm and in
   try {
     for (const registry of ["https://registry.npmjs.org/", "https://registry.npmmirror.com/", "https://packages.example.com/repository/npm/"]) {
       config.npmRegistry = registry;
-      for (const id of ["pi", "opencode", "codex"] as const) {
+      for (const id of ["pi", "opencode", "codex", "qwen"] as const) {
         manager.action(id, "install"); await manager.idle(id);
         assert.equal(manager.view(id).error, null);
         assert.equal(manager.view(id).installedVersion, "1.2.3");

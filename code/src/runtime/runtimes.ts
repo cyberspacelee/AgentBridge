@@ -44,6 +44,17 @@ function opencodePackage() {
   // The baseline x64 build also works on machines without AVX2.
   return `opencode-${platform}-${process.arch}${process.arch === "x64" ? "-baseline" : ""}${musl ? "-musl" : ""}`;
 }
+async function installedNpmCommand(directory: string, packageName: string, id: AgentId) {
+  const packageFile = path.join(directory, "node_modules", packageName, "package.json");
+  const metadata = JSON.parse(await readFile(packageFile, "utf8")) as { name?: string; bin?: string | Record<string, string> };
+  const packageBase = packageName.slice(packageName.lastIndexOf("/") + 1);
+  const bins = typeof metadata.bin === "string" ? [packageBase] : Object.keys(metadata.bin ?? {});
+  const names = [...new Set([id, `${id}-code`, `${id}code`, packageBase, packageBase.replaceAll("-", ""), ...bins])];
+  const suffix = process.platform === "win32" ? ".cmd" : "";
+  const command = names.find((name) => existsSync(path.join(directory, "node_modules", ".bin", `${name}${suffix}`)));
+  if (!command) throw new Error(`${id}: installed package has no usable CLI entry (${bins.join(", ") || "none"})`);
+  return path.join("node_modules", ".bin", `${command}${suffix}`);
+}
 const installedSchema = z.object({ version: stableVersion, directory: z.string().uuid(), command: z.string().refine((value) => !path.isAbsolute(value) && !value.split(/[\\/]/).includes("..")), size: z.number(), source: z.string(), integrity: z.string() });
 const bindingSchema = z.object({ sessionId: z.string(), nativeSessionId: z.string(), processGeneration: z.number(), instanceId: z.string() });
 type RuntimeBinding = z.infer<typeof bindingSchema>;
@@ -418,9 +429,7 @@ export class RuntimeManager {
       if (!existsSync(path.join(directory, command))) throw new Error("Official OpenCode package is missing its platform binary");
       return command;
     }
-    const command = path.join("node_modules", ".bin", id);
-    if (!existsSync(path.join(directory, `${command}${process.platform === "win32" ? ".cmd" : ""}`))) throw new Error("Official package did not install a CLI for this platform");
-    return `${command}${process.platform === "win32" ? ".cmd" : ""}`;
+    return installedNpmCommand(directory, packageName, id);
   }
 
   private async ensureNodeToolchain(signal: AbortSignal) {

@@ -32,6 +32,7 @@ const inside = (root, target) => {
   const relative = path.relative(root, target);
   return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
 };
+const runtimeNames = (id) => id === "qwen" ? ["qwen", "qwencode", "qwen-code"] : [id];
 
 // Preserve relative links inside an asset; reject dependencies on the source machine.
 async function checkTree(root, folder = root) {
@@ -134,7 +135,7 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
     throw new Error("Exit the source AgentBridge instance before copying runtimes");
   for (const agent of agents.filter((item) => item.runtime.mode === "managed")) {
     const id = agent.id;
-    if (!["pi", "opencode", "codex", "grok", "qwen"].includes(id)) throw new Error("Unsupported runtime ID");
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Unsupported runtime ID: ${id}`);
     const target = path.join(directory, "runtimes", id);
     const targetFile = path.join(target, "manifest.json");
     const old = JSON.parse(await readOptional(targetFile) ?? "null");
@@ -145,8 +146,14 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
       log(`${id}: target runtime already registered; keeping it`);
       continue;
     }
-    const sourceFile = path.join(sourceRoot, id, "manifest.json");
-    const raw = await readFile(sourceFile, "utf8");
+    const sourceIds = runtimeNames(id);
+    let sourceId = "", raw = "";
+    for (const candidate of sourceIds) {
+      const candidateRaw = await readOptional(path.join(sourceRoot, candidate, "manifest.json"));
+      if (candidateRaw !== null) { sourceId = candidate; raw = candidateRaw; break; }
+    }
+    if (!sourceId) throw new Error(`${id}: runtime manifest is missing (accepted names: ${sourceIds.join(", ")})`);
+    const sourceFile = path.join(sourceRoot, sourceId, "manifest.json");
     const manifest = JSON.parse(raw);
     const current = manifest.current;
     if (manifest.schemaVersion !== 1 || !current || manifest.rollback || manifest.sourceRollback || manifest.operation || manifest.uninstallPending ||
@@ -156,7 +163,7 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
       throw new Error(`${id}: expected a complete, idle AgentBridge runtime manifest`);
     if ((process.platform === "win32") !== /\.(cmd|exe)$/i.test(current.command))
       throw new Error(`${id}: runtime belongs to a different operating system`);
-    const version = await realpath(path.join(sourceRoot, id, "versions", current.directory));
+    const version = await realpath(path.join(sourceRoot, sourceId, "versions", current.directory));
     if (!inside(sourceRoot, version)) throw new Error(`${id}: version directory escapes the runtime source`);
     await checkTree(version);
     const uuid = randomUUID();
@@ -244,12 +251,15 @@ async function main() {
   if (values.skills) for (const skill of settings.skills) skill.path = path.join(directory, "skills", skill.id);
   const selected = [];
   const hasRuntime = async (root, id) => {
-    const manifest = await readInput(path.join(root, id, "manifest.json")).catch((error) => {
-      if (error.code !== "ENOENT") throw error;
-      return null;
-    });
-    if (manifest && manifest.schemaVersion !== 1) throw new Error(`${id}: unsupported runtime manifest`);
-    return !!manifest?.current;
+    for (const name of runtimeNames(id)) {
+      const manifest = await readInput(path.join(root, name, "manifest.json")).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+        return null;
+      });
+      if (manifest && manifest.schemaVersion !== 1) throw new Error(`${id}: unsupported runtime manifest`);
+      if (manifest?.current) return true;
+    }
+    return false;
   };
   for (const agent of requested) {
     // A saved settings.json includes all Agents, even those never installed.

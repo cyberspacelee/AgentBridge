@@ -40,6 +40,32 @@ test("the shipped initialization example matches current settings and defaults o
   }
 });
 
+test("initialization accepts the Qwen Code runtime alias", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-qwen-runtime-"));
+  const source = path.join(directory, "source"), target = path.join(directory, "target");
+  const uuid = "11111111-1111-4111-8111-111111111111";
+  const command = process.platform === "win32" ? "qwencode.cmd" : "qwencode";
+  try {
+    const version = path.join(source, "qwencode", "versions", uuid);
+    await mkdir(version, { recursive: true });
+    await writeFile(path.join(version, command), "fixture");
+    await chmod(path.join(version, command), 0o755);
+    await writeFile(path.join(source, "qwencode/manifest.json"), JSON.stringify({
+      schemaVersion: 1,
+      current: { version: "1.2.3", directory: uuid, command, size: 7, source: "fixture", integrity: "fixture" },
+    }));
+    let checked = false;
+    await copyRuntimes(source, target, [{ id: "qwen", runtime: { mode: "managed" } }], async (executable, versionNumber) => {
+      checked = true;
+      assert.equal(await readFile(executable, "utf8"), "fixture");
+      assert.equal(versionNumber, "1.2.3");
+    });
+    const manifest = JSON.parse(await readFile(path.join(target, "runtimes/qwen/manifest.json"), "utf8"));
+    assert.equal(checked, true);
+    assert.equal(manifest.current.command, command);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("initialization CLI starts through linked paths, preserves network/listener settings and releases its lock", async () => {
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "bridge initialize ")));
   const resources = path.join(directory, "installed app/resources");
