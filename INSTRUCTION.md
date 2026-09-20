@@ -33,7 +33,7 @@ pnpm test:desktop
 
 #### PowerShell 一键安装与初始化
 
-脚本支持 Windows PowerShell 5.1 / PowerShell 7。部署 ZIP 已包含安装 EXE、[Initialize-AgentBridge.ps1](code/tools/Initialize-AgentBridge.ps1)、[initialize.mjs](code/tools/initialize.mjs)、配置示例和本说明；初始化工具也随 EXE 安装到 `resources/initialization/`。目标机不必提前安装 AgentBridge、Node、npm 或 pnpm。将自己的配置和资源放在解压目录：
+脚本支持 Windows PowerShell 5.1 / PowerShell 7。部署 ZIP 已包含安装 EXE、[Initialize-AgentBridge.ps1](code/tools/Initialize-AgentBridge.ps1)、[initialize.mjs](code/tools/initialize.mjs)、配置示例和本说明；初始化工具也随 EXE 安装到 `resources/initialization/`。目标机不必提前安装 AgentBridge、Node、npm 或 pnpm；若目标机没有满足要求的系统 Node，部署目录需附带 `node.exe` 和 `node_modules/npm`。将自己的配置和资源放在解压目录：
 
 ```text
 deploy/
@@ -42,6 +42,7 @@ deploy/
   initialize.mjs
   initialize.example.json
   INSTRUCTION.md
+  node.exe              # 可选：Node.js 22+；同时放置 node_modules/npm
   settings.json       # 已配置好的业务配置，schemaVersion: 1
   system.json         # 可选：系统配置，schemaVersion: 1
   runtimes.zip        # 可选：同操作系统、同 CPU 架构的 AgentBridge runtimes
@@ -54,7 +55,7 @@ deploy/
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Initialize-AgentBridge.ps1 -Start
 ```
 
-脚本自动识别同目录唯一的 `AgentBridge*.exe` 安装器（不包括 `agentbridge.exe`），以当前用户静默安装到 `%LOCALAPPDATA%\Programs\AgentBridge`，等待安装成功，再使用系统 Node.js/npm 初始化；如部署包仍包含 `resources\node`，会优先使用它。安装期间不启动工作台；指定目录已有 `agentbridge.exe` 时复用，不重装或升级。自动导入同目录 `settings.json`、可选 `system.json`、`skills.zip`/`skills/`、`runtimes.zip`/`runtimes/`；同类 ZIP 和目录同时存在时需显式指定。缺少 runtime 包时联网安装配置中指定的受管 CLI；提供 runtime 包时只使用本地包，不回退下载。
+脚本自动识别同目录唯一的 `AgentBridge*.exe` 安装器（不包括 `agentbridge.exe`），以当前用户静默安装到 `%LOCALAPPDATA%\Programs\AgentBridge`，等待安装成功，再优先使用 PATH 中满足要求的 Node.js 22+/npm；找不到时使用脚本旁的 `node.exe` 及其 `node_modules\npm`，也兼容安装目录中的 `resources\node`。安装期间不启动工作台；指定目录已有 `agentbridge.exe` 时复用，不重装或升级。自动导入同目录 `settings.json`、可选 `system.json`、`skills.zip`/`skills/`、`runtimes.zip`/`runtimes/`；同类 ZIP 和目录同时存在时需显式指定。缺少 runtime 包时联网安装配置中指定的受管 CLI；提供 runtime 包时只使用本地包，不回退下载。
 
 脚本将已登记的 Skill 及附件复制到业务数据目录并改写引用，再按 `settings.json` 的 `enabled` 值启用 Agent。`-Start` 只在全部成功后启动桌面应用；不加此参数时，完成后自行打开应用即可。部署 ZIP 不包含真实凭据、用户配置或办公 Skill，需要自行提供。已有应用必须先通过菜单/托盘退出；安装器失败、JSON/资源校验失败或初始化失败均返回非零退出码，不执行 `-Start`。
 

@@ -21,7 +21,7 @@ pnpm desktop:dev
 
 GitHub Actions 的 Desktop 工作流中，手动触发和推送 `v*` 版本 tag 都是发布流程：三个平台构建成功后必须创建 GitHub Release 并上传安装包及更新元数据，不提供跳过发布的开关。PR 只执行构建验证。发布 tag 必须与 `desktop/package.json` 中的版本一致。
 
-桌面基础包不包含 Node/npm、Pi、OpenCode、Codex、Grok、Qwen Code。在 Agent 的“安装与版本”页签按需安装官方最新版、检查更新或卸载；安装不启用，卸载保留模型配置、原生会话、任务历史和产物。网关使用 Electron 自带运行时，受管 CLI 使用按需下载的独立运行时；Windows 初始化脚本需要系统 Node.js/npm。托盘可用时关闭窗口继续后台运行；显式退出时可等待任务结束或停止任务。数据位于 Electron 用户数据目录的 `data/` 下，可通过 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
+桌面基础包不包含 Node/npm、Pi、OpenCode、Codex、Grok、Qwen Code。在 Agent 的“安装与版本”页签按需安装官方最新版、检查更新或卸载；安装不启用，卸载保留模型配置、原生会话、任务历史和产物。网关使用 Electron 自带运行时，受管 CLI 使用按需下载的独立运行时；Windows 初始化脚本优先使用满足要求的系统 Node.js/npm，也支持脚本旁的 `node.exe` 和 `node_modules/npm`。托盘可用时关闭窗口继续后台运行；显式退出时可等待任务结束或停止任务。数据位于 Electron 用户数据目录的 `data/` 下，可通过 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
 
 源码 Web 模式：
 

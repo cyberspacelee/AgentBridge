@@ -55,27 +55,31 @@ function ConvertTo-ExtendedPath([string] $AbsolutePath) {
 }
 
 function Find-NodeToolchain([string] $Resources) {
-    $bundledNode = Join-Path $Resources 'node\node.exe'
-    $bundledNpm = Join-Path $Resources 'node\node_modules\npm\bin\npm-cli.js'
-    if ((Test-Path -LiteralPath $bundledNode -PathType Leaf) -and (Test-Path -LiteralPath $bundledNpm -PathType Leaf)) {
-        return @{ Node = $bundledNode; Npm = $bundledNpm }
-    }
-    $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+    $systemNode = Get-Command node.exe -ErrorAction SilentlyContinue
+    $nodeCandidates = @(
+        $(if ($systemNode) { $systemNode.Source }),
+        (Join-Path $PSScriptRoot 'node.exe'),
+        (Join-Path $PSScriptRoot 'node\node.exe'),
+        (Join-Path $Resources 'node\node.exe')
+    )
     $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    $node = if ($nodeCommand) { $nodeCommand.Source } else { '' }
-    $npmCandidates = @()
-    if ($node) {
-        $nodeDirectory = Split-Path -Parent $node
-        $npmCandidates += Join-Path $nodeDirectory 'node_modules\npm\bin\npm-cli.js'
-        $npmCandidates += Join-Path (Split-Path -Parent $nodeDirectory) 'lib\node_modules\npm\bin\npm-cli.js'
+    foreach ($nodeCandidate in $nodeCandidates) {
+        if (-not $nodeCandidate -or -not (Test-Path -LiteralPath $nodeCandidate -PathType Leaf)) { continue }
+        try { $version = (& $nodeCandidate --version 2>$null | Select-Object -First 1) } catch { continue }
+        if ($version -notmatch '^v?(\d+)\.' -or [int] $matches[1] -lt 22) { continue }
+        $nodeDirectory = Split-Path -Parent $nodeCandidate
+        $npmCandidates = @(
+            (Join-Path $nodeDirectory 'node_modules\npm\bin\npm-cli.js'),
+            (Join-Path (Split-Path -Parent $nodeDirectory) 'lib\node_modules\npm\bin\npm-cli.js')
+        )
+        if ($npmCommand) { $npmCandidates += Join-Path (Split-Path -Parent $npmCommand.Source) 'node_modules\npm\bin\npm-cli.js' }
+        $npm = $npmCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+        if ($npm) {
+            Write-Host "Using Node.js $version: $nodeCandidate"
+            return @{ Node = $nodeCandidate; Npm = $npm }
+        }
     }
-    if ($npmCommand) {
-        $npmDirectory = Split-Path -Parent $npmCommand.Source
-        $npmCandidates += Join-Path $npmDirectory 'node_modules\npm\bin\npm-cli.js'
-    }
-    $npm = $npmCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-    if (-not $node -or -not $npm) { throw 'Missing Node.js/npm. Install Node.js 22+ or provide resources\node in the deployment bundle.' }
-    return @{ Node = $node; Npm = $npm }
+    throw 'Missing Node.js/npm. PATH Node.js 22+ is preferred; otherwise put node.exe and node_modules\npm beside this script.'
 }
 
 # Extract only regular files into a fresh directory; never trust ZIP entry paths.
