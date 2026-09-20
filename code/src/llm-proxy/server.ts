@@ -401,11 +401,14 @@ export class LlmProxy {
       clientApi = apiFromEndpoint(match[2]!)!;
       upstreamApi = provider.upstreamApi ?? provider.api;
       const configuredConversion = provider.conversion ?? "none";
-      const convertingResponses = configuredConversion === "responses-to-completions" && clientApi === "openai-responses" && upstreamApi === "openai-completions";
+      // A Responses client may target a Chat-only provider.  The client
+      // protocol is selected per Agent, so conversion must not depend on a
+      // provider-wide toggle being present in older settings.
+      const convertingResponses = clientApi === "openai-responses" && upstreamApi === "openai-completions";
       const directRequest = configuredConversion === "none" && clientApi === upstreamApi;
       const compatibleRequest = directRequest || convertingResponses || (configuredConversion === "responses-to-completions" && clientApi === "openai-completions" && upstreamApi === "openai-completions");
-      if (!compatibleRequest) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", "Unsupported client/upstream protocol route");
-      conversion = convertingResponses ? configuredConversion : "none";
+      if (!compatibleRequest) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported client/upstream protocol route: ${clientApi} -> ${upstreamApi}`);
+      conversion = convertingResponses ? "responses-to-completions" : "none";
       const input = await readBody(req);
       modelID = typeof input.model === "string" ? input.model : null;
       stream = input.stream === true;

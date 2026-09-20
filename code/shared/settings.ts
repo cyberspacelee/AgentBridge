@@ -202,8 +202,7 @@ export const settingsSchema = z
               upstreamApi === "openai-completions" &&
               provider.conversion === "responses-to-completions") ||
             (clientApi === "openai-responses" &&
-              upstreamApi === "openai-completions" &&
-              provider.conversion === "responses-to-completions"));
+              upstreamApi === "openai-completions"));
         if (!compatible)
           issue(
             ["agents", index, "models"],

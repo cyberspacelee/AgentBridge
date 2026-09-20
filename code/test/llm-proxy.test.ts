@@ -50,7 +50,9 @@ test("Responses requests convert to Chat, preserve tools, cache previous_respons
       apiKey: "upstream-secret",
       api: "openai-responses",
       upstreamApi: "openai-completions",
-      conversion: "responses-to-completions",
+      // Agent-level Responses selection must work with legacy providers that
+      // did not have the provider-wide conversion toggle enabled.
+      conversion: "none",
       request: { headers: { "X-Route": "blue" }, params: { temperature: 0 } },
       models: [{ id: "test-model" }],
     }],

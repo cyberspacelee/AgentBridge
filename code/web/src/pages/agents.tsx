@@ -1071,7 +1071,7 @@ function AgentEditor({
       const upstreamApi = p.upstreamApi ?? p.api
       return (clientApi === upstreamApi && p.conversion === "none") ||
         (clientApi === "openai-completions" && upstreamApi === "openai-completions" && p.conversion === "responses-to-completions") ||
-        (clientApi === "openai-responses" && upstreamApi === "openai-completions" && p.conversion === "responses-to-completions")
+        (clientApi === "openai-responses" && upstreamApi === "openai-completions")
     })
     .flatMap((p) =>
       p.models.map((m) => ({
