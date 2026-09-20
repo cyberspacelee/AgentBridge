@@ -69,6 +69,8 @@ test("Responses requests convert to Chat, preserve tools, cache previous_respons
         instructions: "Be brief",
         input: "hello",
         tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+        tool_choice: "required",
+        parallel_tool_calls: true,
         max_output_tokens: 32,
         stream: false,
       }),
@@ -86,7 +88,11 @@ test("Responses requests convert to Chat, preserve tools, cache previous_respons
     });
     assert.equal(second.status, 200);
     assert.equal((requests[0]!.messages as unknown[]).length, 2);
-    assert.equal((requests[1]!.messages as unknown[]).length, 4);
+    assert.equal((requests[0]!.messages as Record<string, unknown>[])[0]!.role, "system");
+    assert.equal((requests[1]!.messages as unknown[]).length, 3);
+    assert.equal((requests[1]!.messages as Record<string, unknown>[])[0]!.role, "user");
+    assert.equal(requests[0]!.tool_choice, "required");
+    assert.equal(requests[0]!.parallel_tool_calls, true);
     const chat = await fetch(`${proxy.providerBaseUrl("test")}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${proxy.runtimeToken}`, "Content-Type": "application/json" },
@@ -141,6 +147,38 @@ test("Responses to Chat streaming emits Responses events and rejects missing pro
   }
 });
 
+test("store false does not create reusable local Responses history", async () => {
+  const upstream = createServer((_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ id: "chat", model: "m", choices: [{ message: { role: "assistant", content: "ok" } }] }));
+  });
+  const port = await listen(upstream);
+  const settings = settingsSchema.parse({ providers: [{ id: "store", baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-responses", upstreamApi: "openai-completions", conversion: "responses-to-completions", models: [{ id: "m" }] }] });
+  const proxy = new LlmProxy({ host: "127.0.0.1" }, () => settings);
+  await proxy.start();
+  try {
+    const url = `${proxy.providerBaseUrl("store")}/responses`;
+    const first = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${proxy.runtimeToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", input: "one", store: false }),
+    });
+    assert.equal(first.status, 200);
+    const id = String((await first.json() as Record<string, unknown>).id);
+    const second = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${proxy.runtimeToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", previous_response_id: id, input: "two" }),
+    });
+    assert.equal(second.status, 400);
+    const error = (await second.json() as Record<string, unknown>).error as Record<string, unknown>;
+    assert.equal(error.code, "PROTOCOL_CONVERSION_UNSUPPORTED");
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
 test("streaming tool calls are represented as Responses function-call events", async () => {
   const upstream = createServer(async (_req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
@@ -181,6 +219,69 @@ test("conversion helpers map Responses input and Chat tool calls", () => {
   const toolCall = responsesToChat({ model: "m", input: [{ type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" }] });
   assert.deepEqual(toolCall.messages, [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] }]);
   assert.deepEqual(responsesToChat({ model: "m", input: "done" }, [{ role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function" }] }]).messages[0], { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] });
+});
+
+test("Responses instructions and developer messages become one leading system message", () => {
+  const body = responsesToChat({
+    model: "m",
+    instructions: "top-level",
+    input: [
+      { type: "message", role: "user", content: "before" },
+      { type: "message", role: "developer", content: "developer rules" },
+      { type: "message", role: "user", content: "after" },
+    ],
+  }, [
+    { role: "system", content: "old instructions" },
+    { role: "user", content: "previous" },
+    { role: "assistant", content: "answer" },
+  ]);
+  assert.deepEqual(body.messages, [
+    { role: "system", content: "top-level\n\ndeveloper rules" },
+    { role: "user", content: "previous" },
+    { role: "assistant", content: "answer" },
+    { role: "user", content: "before" },
+    { role: "user", content: "after" },
+  ]);
+});
+
+test("Responses function calls are grouped into one Chat assistant tool-call message", () => {
+  const body = responsesToChat({
+    model: "m",
+    input: [
+      { type: "function_call", call_id: "call_1", name: "one", arguments: "{}" },
+      { type: "function_call", call_id: "call_2", name: "two", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "done" },
+    ],
+  });
+  assert.deepEqual(body.messages, [
+    { role: "assistant", tool_calls: [
+      { id: "call_1", type: "function", function: { name: "one", arguments: "{}" } },
+      { id: "call_2", type: "function", function: { name: "two", arguments: "{}" } },
+    ] },
+    { role: "tool", tool_call_id: "call_1", content: "done" },
+  ]);
+});
+
+test("Chat reasoning usage is returned as Responses reasoning token details", () => {
+  const response = chatToResponse({
+    model: "m",
+    choices: [{ message: { content: "ok", reasoning_content: "summary" } }],
+    usage: {
+      prompt_tokens: 4,
+      completion_tokens: 6,
+      completion_tokens_details: { reasoning_tokens: 3 },
+    },
+  });
+  assert.deepEqual(response.output, [
+    { type: "reasoning", id: (response.output as Record<string, unknown>[])[0]!.id, summary: [{ type: "summary_text", text: "summary" }] },
+    { type: "message", id: (response.output as Record<string, unknown>[])[1]!.id, status: "completed", role: "assistant", content: [{ type: "output_text", text: "ok", annotations: [] }] },
+  ]);
+  assert.deepEqual(response.usage, {
+    input_tokens: 4,
+    output_tokens: 6,
+    total_tokens: 10,
+    output_tokens_details: { reasoning_tokens: 3 },
+  });
 });
 
 test("Responses conversion accepts message and text items without type", () => {

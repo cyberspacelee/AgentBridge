@@ -138,22 +138,28 @@ function usageFromChat(value: unknown) {
     ? usage.prompt_tokens_details as JsonObject : {};
   const completionDetails = usage.completion_tokens_details && typeof usage.completion_tokens_details === "object"
     ? usage.completion_tokens_details as JsonObject : {};
+  const reasoning = optionalNumber(completionDetails.reasoning_tokens);
   return {
     input: prompt,
     output: completion,
     cacheRead: optionalNumber(details.cached_tokens),
-    cacheWrite: optionalNumber(completionDetails.reasoning_tokens),
+    cacheWrite: null,
+    ...(reasoning === null ? {} : { reasoning }),
     costUsd: null,
   };
 }
 function usageFromResponse(value: unknown) {
   const usage = value && typeof value === "object" ? value as JsonObject : {};
+  const details = usage.output_tokens_details && typeof usage.output_tokens_details === "object"
+    ? usage.output_tokens_details as JsonObject : {};
+  const reasoning = optionalNumber(details.reasoning_tokens);
   return {
     input: optionalNumber(usage.input_tokens),
     output: optionalNumber(usage.output_tokens),
     cacheRead: optionalNumber(usage.input_tokens_details && typeof usage.input_tokens_details === "object"
       ? (usage.input_tokens_details as JsonObject).cached_tokens : null),
     cacheWrite: null,
+    ...(reasoning === null ? {} : { reasoning }),
     costUsd: null,
   };
 }
@@ -203,43 +209,61 @@ function responseTools(value: unknown): unknown[] | undefined {
 }
 
 export function responsesToChat(input: JsonObject, history: JsonObject[] = []): ChatBody {
-  const messages: JsonObject[] = history.map((message) => {
+  const systemParts: string[] = [];
+  const messages: JsonObject[] = history.flatMap((message) => {
+    // Responses top-level instructions are request-scoped.  Older history
+    // entries may contain them, so drop system/developer messages before
+    // applying the current request's instruction block.
+    if (message.role === "system" || message.role === "developer") return [];
     if (message.role === "assistant" && message.content === null && message.tool_calls) {
       const { content: _content, ...toolMessage } = message;
-      return toolMessage;
+      return [toolMessage];
     }
-    return message;
+    return [message];
   });
-  if (typeof input.instructions === "string" && input.instructions.length > 0) messages.push({ role: "system", content: input.instructions });
+  if (typeof input.instructions === "string" && input.instructions.length > 0) systemParts.push(input.instructions);
   const items = typeof input.input === "string" ? [{ type: "message", role: "user", content: input.input }] : input.input;
   if (!Array.isArray(items)) throw new LlmProxyError("INVALID_REQUEST", "input must be a string or array");
+  const toolCalls: JsonObject[] = [];
+  const flushToolCalls = () => {
+    if (toolCalls.length) messages.push({ role: "assistant", tool_calls: toolCalls.splice(0) });
+  };
   for (const raw of items) {
     const item = object(raw);
     switch (responseInputType(item)) {
       case "message": {
-        const role = item.role === "developer" ? "system" : item.role;
-        if (!["user", "assistant", "system"].includes(String(role))) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported message role ${String(role)}`);
+        const role = item.role;
+        if (!["user", "assistant", "system", "developer"].includes(String(role))) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported message role ${String(role)}`);
         const content = contentText(item.content, "input.message.content");
-        if (content.length > 0) messages.push({ role, content });
+        if (role === "system" || role === "developer") {
+          if (content.length > 0) systemParts.push(content);
+        } else {
+          flushToolCalls();
+          if (content.length > 0) messages.push({ role, content });
+        }
         break;
       }
       case "function_call_output":
+        flushToolCalls();
         messages.push({ role: "tool", tool_call_id: text(item.call_id ?? item.id, "function_call_output.call_id"), content: contentText(item.output, "function_call_output.output") });
         break;
       case "function_call":
-        messages.push({ role: "assistant", tool_calls: [{ id: text(item.call_id, "function_call.call_id"), type: "function", function: { name: text(item.name, "function_call.name"), arguments: text(item.arguments, "function_call.arguments") } }] });
+        toolCalls.push({ id: text(item.call_id, "function_call.call_id"), type: "function", function: { name: text(item.name, "function_call.name"), arguments: text(item.arguments, "function_call.arguments") } });
         break;
       default:
         throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported input item type ${String(item.type)}`);
     }
   }
+  flushToolCalls();
   const result: ChatBody = {
     model: text(input.model, "model"),
-    messages,
+    messages: systemParts.length ? [{ role: "system", content: systemParts.join("\n\n") }, ...messages] : messages,
     ...(input.stream === true ? { stream: true } : { stream: false }),
   };
   const tools = responseTools(input.tools);
   if (tools) result.tools = tools;
+  if (input.tool_choice !== undefined) result.tool_choice = input.tool_choice;
+  if (input.parallel_tool_calls !== undefined) result.parallel_tool_calls = input.parallel_tool_calls;
   if (input.max_output_tokens !== undefined) result.max_tokens = input.max_output_tokens;
   if (input.temperature !== undefined) result.temperature = input.temperature;
   if (input.top_p !== undefined) result.top_p = input.top_p;
@@ -274,6 +298,7 @@ function responseOutputFromChat(body: JsonObject, responseId = `resp_${randomUUI
         output_tokens: chatUsage.output,
         total_tokens: chatUsage.input + chatUsage.output,
         ...(chatUsage.cacheRead === null ? {} : { input_tokens_details: { cached_tokens: chatUsage.cacheRead } }),
+        ...(typeof chatUsage.reasoning === "number" ? { output_tokens_details: { reasoning_tokens: chatUsage.reasoning } } : {}),
       }
     : undefined;
   return {
@@ -469,7 +494,7 @@ export class LlmProxy {
     return structuredClone(entry.messages);
   }
   private putHistory(id: string, messages: JsonObject[]) {
-    const copy = structuredClone(messages);
+    const copy = structuredClone(messages.filter((message) => message.role !== "system" && message.role !== "developer"));
     this.history.set(id, { messages: copy, bytes: Buffer.byteLength(JSON.stringify(copy)), expiresAt: Date.now() + 10 * 60 * 1000 });
     this.cleanupHistory();
     let total = 0;
@@ -564,10 +589,12 @@ export class LlmProxy {
           await convertChatStream(response.body, res, responseId, (converted) => {
             responseBody = converted;
             usage = usageFromResponse(converted.usage);
-            this.putHistory(responseId, [
-              ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
-              assistantMessageFromResponse(converted),
-            ]);
+            if (input.store !== false) {
+              this.putHistory(responseId, [
+                ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
+                assistantMessageFromResponse(converted),
+              ]);
+            }
           }, () => { if (ttftMs === null) ttftMs = Date.now() - started; });
           status = 200;
           finish();
@@ -577,10 +604,12 @@ export class LlmProxy {
         const converted = chatToResponse(body, responseId);
         responseBody = converted;
         usage = usageFromResponse(converted.usage);
-        this.putHistory(responseId, [
-          ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
-          assistantMessageFromResponse(converted),
-        ]);
+        if (input.store !== false) {
+          this.putHistory(responseId, [
+            ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
+            assistantMessageFromResponse(converted),
+          ]);
+        }
         status = 200;
         this.writeJson(res, status, converted);
         finish();
