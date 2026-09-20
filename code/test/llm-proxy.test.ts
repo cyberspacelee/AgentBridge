@@ -168,6 +168,9 @@ test("conversion helpers map Responses input and Chat tool calls", () => {
   ]);
   const response = chatToResponse({ model: "m", choices: [{ message: { content: null, tool_calls: [{ id: "call_1", function: { name: "lookup", arguments: "{}" } }] } }], usage: {} });
   assert.equal((response.output as unknown[])[0] && (response.output as unknown[])[0] && ((response.output as unknown[])[0] as Record<string, unknown>).type, "function_call");
+  const toolCall = responsesToChat({ model: "m", input: [{ type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" }] });
+  assert.deepEqual(toolCall.messages, [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] }]);
+  assert.deepEqual(responsesToChat({ model: "m", input: "done" }, [{ role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function" }] }]).messages[0], { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] });
 });
 
 test("Responses conversion accepts message and text items without type", () => {
@@ -194,7 +197,8 @@ test("upstream validation errors preserve the provider response message", async 
   });
   const port = await listen(upstream);
   const settings = settingsSchema.parse({ providers: [{ id: "error", baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", models: [{ id: "m" }] }] });
-  const proxy = new LlmProxy({ host: "127.0.0.1" }, () => settings);
+  const diagnostics: Record<string, unknown>[] = [];
+  const proxy = new LlmProxy({ host: "127.0.0.1" }, () => settings, undefined, (diagnostic) => diagnostics.push(diagnostic as unknown as Record<string, unknown>));
   await proxy.start();
   try {
     const response = await fetch(`${proxy.providerBaseUrl("error")}/chat/completions`, {
@@ -204,6 +208,9 @@ test("upstream validation errors preserve the provider response message", async 
     });
     assert.equal(response.status, 502);
     assert.deepEqual(await response.json(), { error: { code: "UPSTREAM_ERROR", message: "Upstream returned HTTP 422: unsupported parameter: reasoning_effort", type: "proxy_error" } });
+    assert.match(String(diagnostics[0]!.request), /"messages"/);
+    assert.match(String(diagnostics[0]!.response), /unsupported parameter/);
+    assert.equal(diagnostics[0]!.upstreamStatus, 422);
   } finally {
     await proxy.close();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));

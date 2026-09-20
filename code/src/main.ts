@@ -10,7 +10,7 @@ import { GrokAdapter } from "./engines/grok/adapter.js";
 import { createServer } from "./gateway/server.js";
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
-import { LlmProxy, registerLlmProxy, unregisterLlmProxy } from "./llm-proxy/server.js";
+import { LlmProxy, registerLlmProxy, unregisterLlmProxy, type LlmProxyDiagnostic } from "./llm-proxy/server.js";
 import { readSettings } from "./settings.js";
 import { disconnectHost, hostConnected, isUtilityProcess, onHostDisconnect, onHostMessage, sendHost } from "./host/control.js";
 export async function startGateway(config = readConfig()) {
@@ -36,6 +36,14 @@ export async function startGateway(config = readConfig()) {
         }),
       );
     }
+  }, (diagnostic: LlmProxyDiagnostic) => {
+    if (!runtime) return;
+    runtime.log(
+      diagnostic.status >= 400 ? "error" : "info",
+      "llm-proxy",
+      diagnostic.status >= 400 ? "LLM_REQUEST_FAILED" : "LLM_REQUEST_FINISHED",
+      JSON.stringify(diagnostic),
+    );
   });
   await proxy.start();
   registerLlmProxy(config, proxy);

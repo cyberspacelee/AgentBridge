@@ -35,6 +35,20 @@ export interface LlmUsageRecord {
   upstreamStatus?: number | null;
   occurredAt: string;
 }
+export interface LlmProxyDiagnostic {
+  providerID: string;
+  modelID: string | null;
+  clientApi: Api;
+  upstreamApi: Api;
+  conversion: string;
+  upstreamPath: string | null;
+  request: string | null;
+  response: string | null;
+  status: number;
+  upstreamStatus: number | null;
+  durationMs: number;
+  error: string | null;
+}
 
 export class LlmProxyError extends Error {
   constructor(
@@ -72,6 +86,25 @@ async function upstreamFailure(response: Response): Promise<string> {
     // Keep a short plain-text response for non-JSON OpenAI-compatible servers.
   }
   return `Upstream returned HTTP ${response.status}: ${detail.slice(0, 2000)}`;
+}
+function diagnosticValue(value: unknown, depth = 0): unknown {
+  if (depth > 5) return "[depth truncated]";
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => diagnosticValue(item, depth + 1));
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 100)) {
+    output[key] = /authorization|api[-_]?key|password|cookie|token/i.test(key)
+      ? "[redacted]"
+      : diagnosticValue(item, depth + 1);
+  }
+  return output;
+}
+function diagnosticText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  let text: string;
+  try { text = JSON.stringify(diagnosticValue(value)) ?? String(value); }
+  catch { text = String(value); }
+  return text.length <= 12000 ? text : `${text.slice(0, 6000)}...[truncated]...${text.slice(-6000)}`;
 }
 function endpoint(api: Api): "responses" | "chat/completions" {
   return api === "openai-responses" ? "responses" : "chat/completions";
@@ -145,7 +178,13 @@ function responseTools(value: unknown): unknown[] | undefined {
 }
 
 export function responsesToChat(input: JsonObject, history: JsonObject[] = []): ChatBody {
-  const messages: JsonObject[] = [...history];
+  const messages: JsonObject[] = history.map((message) => {
+    if (message.role === "assistant" && message.content === null && message.tool_calls) {
+      const { content: _content, ...toolMessage } = message;
+      return toolMessage;
+    }
+    return message;
+  });
   if (typeof input.instructions === "string") messages.push({ role: "system", content: input.instructions });
   const items = typeof input.input === "string" ? [{ type: "message", role: "user", content: input.input }] : input.input;
   if (!Array.isArray(items)) throw new LlmProxyError("INVALID_REQUEST", "input must be a string or array");
@@ -162,7 +201,7 @@ export function responsesToChat(input: JsonObject, history: JsonObject[] = []): 
         messages.push({ role: "tool", tool_call_id: text(item.call_id ?? item.id, "function_call_output.call_id"), content: contentText(item.output, "function_call_output.output") });
         break;
       case "function_call":
-        messages.push({ role: "assistant", content: null, tool_calls: [{ id: text(item.call_id, "function_call.call_id"), type: "function", function: { name: text(item.name, "function_call.name"), arguments: text(item.arguments, "function_call.arguments") } }] });
+        messages.push({ role: "assistant", tool_calls: [{ id: text(item.call_id, "function_call.call_id"), type: "function", function: { name: text(item.name, "function_call.name"), arguments: text(item.arguments, "function_call.arguments") } }] });
         break;
       default:
         throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported input item type ${String(item.type)}`);
@@ -238,7 +277,7 @@ function assistantMessageFromResponse(response: JsonObject): JsonObject {
   const content = message && Array.isArray(message.content)
     ? (message.content as unknown[]).map((part) => part && typeof part === "object" ? (part as JsonObject).text : "").filter((value): value is string => typeof value === "string").join("")
     : String(response.output_text ?? "");
-  return { role: "assistant", content: content || null, ...(calls.length ? { tool_calls: calls } : {}) };
+  return { role: "assistant", ...(content ? { content } : {}), ...(calls.length ? { tool_calls: calls } : {}) };
 }
 
 function appendSse(res: ServerResponse, event: string, data: JsonObject) {
@@ -350,6 +389,7 @@ export class LlmProxy {
     private readonly config: { llmProxy?: Config["llmProxy"] },
     private readonly getSettings: () => Settings,
     private readonly onRecord?: (record: LlmUsageRecord) => void,
+    private readonly onDiagnostic?: (diagnostic: LlmProxyDiagnostic) => void,
   ) {}
   private get listener() { return this.config.llmProxy ?? { host: "127.0.0.1", port: 0 }; }
   get baseUrl() { return proxyUrl(this.listener.host, this.port); }
@@ -407,7 +447,14 @@ export class LlmProxy {
     let usage: LlmUsageRecord["usage"] = null;
     let error: string | null = null;
     let errorDetail: string | null = null;
-    const finish = () => this.onRecord?.({ providerID, modelID, clientApi, upstreamApi, conversion, status, durationMs: Date.now() - started, ttftMs, stream, usage, error, errorDetail, upstreamStatus, occurredAt: new Date().toISOString() });
+    let requestBody: unknown = null;
+    let responseBody: unknown = null;
+    let upstreamPath: string | null = null;
+    const finish = () => {
+      const durationMs = Date.now() - started;
+      this.onRecord?.({ providerID, modelID, clientApi, upstreamApi, conversion, status, durationMs, ttftMs, stream, usage, error, errorDetail, upstreamStatus, occurredAt: new Date().toISOString() });
+      this.onDiagnostic?.({ providerID, modelID, clientApi, upstreamApi, conversion, upstreamPath, request: diagnosticText(requestBody), response: diagnosticText(responseBody), status, upstreamStatus, durationMs, error: errorDetail ?? error });
+    };
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const match = url.pathname.match(/^\/llm\/([^/]+)\/v1\/(responses|chat\/completions|models)$/);
@@ -436,6 +483,7 @@ export class LlmProxy {
       if (!compatibleRequest) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported client/upstream protocol route: ${clientApi} -> ${upstreamApi}`);
       conversion = convertingResponses ? "responses-to-completions" : "none";
       const input = await readBody(req);
+      requestBody = input;
       modelID = typeof input.model === "string" ? input.model : null;
       stream = input.stream === true;
       const model = provider.models.find((item) => item.id === modelID);
@@ -451,6 +499,7 @@ export class LlmProxy {
       for (const [key, value] of Object.entries(provider.request?.headers ?? {})) if (!["authorization", "host", "content-length", "transfer-encoding"].includes(key.toLowerCase())) headers[key] = String(value);
       if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
       const upstream = `${provider.baseUrl.replace(/\/$/, "")}/${endpoint(upstreamApi)}`;
+      upstreamPath = `/${endpoint(upstreamApi)}`;
       const response = await fetch(upstream, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120000), headers, body: JSON.stringify(outgoing) });
       status = response.status;
       upstreamStatus = response.status;
@@ -466,6 +515,7 @@ export class LlmProxy {
           res.setHeader("Cache-Control", "no-cache");
           if (!response.body) throw new Error("Upstream returned an empty stream");
           await convertChatStream(response.body, res, responseId, (converted) => {
+            responseBody = converted;
             usage = usageFromResponse(converted.usage);
             this.putHistory(responseId, [
               ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
@@ -478,6 +528,7 @@ export class LlmProxy {
         }
         const body = object(await response.json());
         const converted = chatToResponse(body, responseId);
+        responseBody = converted;
         usage = usageFromResponse(converted.usage);
         this.putHistory(responseId, [
           ...(Array.isArray(outgoing.messages) ? outgoing.messages as JsonObject[] : history),
@@ -489,6 +540,7 @@ export class LlmProxy {
         return;
       }
       const raw = contentType.includes("application/json") ? await response.clone().json().catch(() => null) as JsonObject | null : null;
+      responseBody = raw ?? { contentType, stream: true };
       res.statusCode = status;
       res.setHeader("Content-Type", contentType);
       if (response.body) Readable.fromWeb(response.body as never).pipe(res);
@@ -499,6 +551,7 @@ export class LlmProxy {
     } catch (caught) {
       error = caught instanceof LlmProxyError ? caught.code : "UPSTREAM_ERROR";
       errorDetail = caught instanceof Error ? caught.message : String(caught);
+      responseBody ??= { error: errorDetail };
       const proxyError = caught instanceof LlmProxyError
         ? caught
         : new LlmProxyError("UPSTREAM_ERROR", caught instanceof Error ? caught.message : "Upstream model request failed", 502);
