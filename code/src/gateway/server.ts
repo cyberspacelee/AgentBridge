@@ -57,6 +57,73 @@ const timeRange = z
     "Invalid time range",
   );
 
+type RolloutRecord = {
+  at: string;
+  order: number;
+  record: {
+    type: string;
+    eventType?: string;
+    data?: unknown;
+    [key: string]: unknown;
+  };
+};
+
+function compactRolloutRecords(records: RolloutRecord[]) {
+  const lastTextUpdate = new Map<string, number>();
+  for (const [index, item] of records.entries()) {
+    const record = item.record;
+    if (record.type !== "event" || record.eventType !== "message.part.updated") continue;
+    const data = record.data && typeof record.data === "object" ? record.data as Record<string, unknown> : null;
+    const part = data?.part && typeof data.part === "object" ? data.part as Record<string, unknown> : null;
+    const messageId = typeof data?.messageID === "string" ? data.messageID : "";
+    const partId = typeof part?.id === "string" ? part.id : "";
+    if (messageId && partId && (part?.type === "text" || part?.type === "reasoning"))
+      lastTextUpdate.set(`${messageId}:${partId}`, index);
+  }
+
+  const lastState = new Map<string, string>();
+  let coalescedEvents = 0;
+  const compacted = records.filter((item, index) => {
+    const record = item.record;
+    if (record.type !== "event") return true;
+    const data = record.data && typeof record.data === "object" ? record.data as Record<string, unknown> : null;
+    if (record.eventType === "message.updated") {
+      const messageId = typeof data?.id === "string" ? data.id : "";
+      if (!messageId) return true;
+      const key = `message:${messageId}`;
+      const state = JSON.stringify(data);
+      if (lastState.get(key) === state) {
+        coalescedEvents++;
+        return false;
+      }
+      lastState.set(key, state);
+      return true;
+    }
+    if (record.eventType !== "message.part.updated") return true;
+    const part = data?.part && typeof data.part === "object" ? data.part as Record<string, unknown> : null;
+    const messageId = typeof data?.messageID === "string" ? data.messageID : "";
+    const partId = typeof part?.id === "string" ? part.id : "";
+    if (!messageId || !partId) return true;
+    const key = `${messageId}:${partId}`;
+    if (part?.type === "text" || part?.type === "reasoning") {
+      if (lastTextUpdate.get(key) !== index) {
+        coalescedEvents++;
+        return false;
+      }
+      return true;
+    }
+    if (part?.type !== "tool") return true;
+    const state = JSON.stringify(part);
+    if (lastState.get(`part:${key}`) === state) {
+      coalescedEvents++;
+      return false;
+    }
+    lastState.set(`part:${key}`, state);
+    return true;
+  });
+  return { records: compacted, coalescedEvents };
+}
+
 export function localLogTimestamp(date = new Date()) {
   const offset = -date.getTimezoneOffset();
   const local = new Date(date.getTime() + offset * 60_000)
@@ -487,6 +554,7 @@ export function createServer(runtime: SessionRuntime) {
     ].sort(
       (a, b) => a.at.localeCompare(b.at) || a.order - b.order,
     );
+    const compacted = compactRolloutRecords(records);
     const messageSnapshots = runs.flatMap((run) =>
       store.messages(taskId, run.id).map((message) => ({ run, message })),
     );
@@ -512,7 +580,7 @@ export function createServer(runtime: SessionRuntime) {
         sessionId: taskId,
         data: session,
       }),
-      ...records.map(({ record }) => JSON.stringify(record)),
+      ...compacted.records.map(({ record }) => JSON.stringify(record)),
     ];
     for (const run of runs) {
       lines.push(
@@ -540,7 +608,9 @@ export function createServer(runtime: SessionRuntime) {
         complete: true,
         coverage: { eventFloor: Number(store.meta("floor") ?? 0) },
         counts: {
-          events: eventRows.length,
+          events: compacted.records.filter(({ record }) => record.type === "event" || record.type === "llm").length,
+          rawEvents: eventRows.length,
+          coalescedEvents: compacted.coalescedEvents,
           logs: logRows.length,
           runs: runs.length,
           messages: messageSnapshots.length,

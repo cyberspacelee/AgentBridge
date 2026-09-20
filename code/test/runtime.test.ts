@@ -989,6 +989,49 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
     assert.equal((await server.inject(`/api/tasks/${id}/rollout`)).statusCode, 409);
     const filename = path.join(f.directory, "report.md");
     await writeFile(filename, "original report");
+    const runId = f.store.list("runs")[0]!.id as string;
+    const textMessageId = randomUUID();
+    const textPartId = randomUUID();
+    const toolMessageId = randomUUID();
+    const toolPartId = randomUUID();
+    const statusMessageId = randomUUID();
+    f.store.transaction(() => {
+      for (const content of ["", "partial", "final text"])
+        f.store.emit({
+          type: "message.part.updated",
+          sessionId: id,
+          runId,
+          properties: {
+            sessionID: id,
+            messageID: textMessageId,
+            part: { id: textPartId, type: "text", content },
+          },
+        });
+      for (const part of [
+        { id: toolPartId, type: "tool", tool: "list", output: "", state: { status: "running" } },
+        { id: toolPartId, type: "tool", tool: "list", output: "", state: { status: "running" } },
+        { id: toolPartId, type: "tool", tool: "list", output: "done", state: { status: "completed" } },
+        { id: toolPartId, type: "tool", tool: "list", output: "done", state: { status: "completed" } },
+      ])
+        f.store.emit({
+          type: "message.part.updated",
+          sessionId: id,
+          runId,
+          properties: { sessionID: id, messageID: toolMessageId, part },
+        });
+      for (const info of [
+        { finish: null, completedAt: null },
+        { finish: null, completedAt: null },
+        { finish: "stop", completedAt: "2026-01-01T00:00:00.000Z" },
+        { finish: "stop", completedAt: "2026-01-01T00:00:00.000Z" },
+      ])
+        f.store.emit({
+          type: "message.updated",
+          sessionId: id,
+          runId,
+          properties: { id: statusMessageId, info },
+        });
+    });
     f.adapter.complete(id);
     assert.equal((await prompting).statusCode, 204);
     await until(
@@ -1015,14 +1058,21 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
     const rolloutRecords = rollout.body
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { type: string; data?: { id?: string } });
+      .map((line) => JSON.parse(line) as { type: string; eventType?: string; data?: any; counts?: any });
     assert.equal(rolloutRecords[0]!.type, "header");
     assert.equal(rolloutRecords.some((record) => record.type === "session"), true);
     assert.equal(rolloutRecords.some((record) => record.type === "run"), true);
     assert.equal(rolloutRecords.some((record) => record.type === "message"), true);
     assert.equal(rolloutRecords.some((record) => record.type === "artifact" && record.data?.id === artifact.id), true);
+    const compactedEvents = rolloutRecords.filter((record) => record.type === "event");
+    assert.equal(compactedEvents.filter((record) => record.eventType === "message.part.updated" && record.data?.messageID === textMessageId).length, 1);
+    assert.equal(compactedEvents.find((record) => record.eventType === "message.part.updated" && record.data?.messageID === textMessageId)?.data.part.content, "final text");
+    assert.equal(compactedEvents.filter((record) => record.eventType === "message.part.updated" && record.data?.messageID === toolMessageId).length, 2);
+    assert.equal(compactedEvents.filter((record) => record.eventType === "message.updated" && record.data?.id === statusMessageId).length, 2);
+    const footer = rolloutRecords.at(-1)!;
+    assert.equal(footer.counts.rawEvents - footer.counts.events, footer.counts.coalescedEvents);
+    assert.ok(footer.counts.coalescedEvents >= 5);
     assert.equal(rolloutRecords.at(-1)!.type, "footer");
-    const runId = f.store.list("runs")[0]!.id;
     const filteredRollout = await server.inject(`/api/tasks/${id}/rollout?runId=${runId}`);
     assert.equal(filteredRollout.statusCode, 200);
     assert.equal((await server.inject(`/api/tasks/${id}/rollout?runId=missing`)).statusCode, 404);
