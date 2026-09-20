@@ -124,6 +124,15 @@ async function streamPreview(body: ReadableStream<Uint8Array>, limit = 12000): P
   }
   return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
 }
+function pipeResponseBody(body: ReadableStream<Uint8Array>, res: ServerResponse) {
+  const stream = Readable.fromWeb(body as never);
+  stream.on("error", (cause) => {
+    if (!res.destroyed) res.destroy(cause instanceof Error ? cause : new Error(String(cause)));
+  });
+  res.on("error", () => stream.destroy());
+  res.on("close", () => stream.destroy());
+  stream.pipe(res);
+}
 function endpoint(api: Api): "responses" | "chat/completions" {
   return api === "openai-responses" ? "responses" : "chat/completions";
 }
@@ -458,7 +467,7 @@ export class LlmProxy {
   private readonly history = new Map<string, HistoryEntry>();
   private port = 0;
   constructor(
-    private readonly config: { llmProxy?: Config["llmProxy"] },
+    private readonly config: { llmProxy?: Config["llmProxy"]; limits?: Pick<Config["limits"], "runTimeoutMs"> },
     private readonly getSettings: () => Settings,
     private readonly onRecord?: (record: LlmUsageRecord) => void,
     private readonly onDiagnostic?: (diagnostic: LlmProxyDiagnostic) => void,
@@ -572,7 +581,13 @@ export class LlmProxy {
       if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
       const upstream = `${provider.baseUrl.replace(/\/$/, "")}/${endpoint(upstreamApi)}`;
       upstreamPath = `/${endpoint(upstreamApi)}`;
-      const response = await fetch(upstream, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120000), headers, body: JSON.stringify(outgoing) });
+      const response = await fetch(upstream, {
+        method: "POST",
+        redirect: "error",
+        signal: AbortSignal.timeout(this.config.limits?.runTimeoutMs ?? 30 * 60 * 1000),
+        headers,
+        body: JSON.stringify(outgoing),
+      });
       status = response.status;
       upstreamStatus = response.status;
       if (!response.ok) {
@@ -621,9 +636,9 @@ export class LlmProxy {
       res.setHeader("Content-Type", contentType);
       if (response.body) {
         const [clientBody, diagnosticBody] = response.body.tee();
-        Readable.fromWeb(clientBody as never).pipe(res);
+        pipeResponseBody(clientBody, res);
         responseBody = await streamPreview(diagnosticBody);
-      } else res.end();
+      } else if (!res.destroyed && !res.writableEnded) res.end();
       usage = raw ? usageFromResponse(raw.usage) : null;
       ttftMs = Date.now() - started;
       finish();
@@ -636,7 +651,7 @@ export class LlmProxy {
         : new LlmProxyError("UPSTREAM_ERROR", caught instanceof Error ? caught.message : "Upstream model request failed", 502);
       status = proxyError.status;
       if (!res.headersSent) this.writeJson(res, status, { error: { code: proxyError.code, message: proxyError.message, type: "proxy_error" } });
-      else res.end();
+      else if (!res.destroyed && !res.writableEnded) res.end();
       finish();
     }
   }

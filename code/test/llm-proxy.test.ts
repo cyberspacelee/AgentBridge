@@ -147,6 +147,33 @@ test("Responses to Chat streaming emits Responses events and rejects missing pro
   }
 });
 
+test("direct upstream stream failures do not crash the proxy", async () => {
+  const upstream = createServer((_req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.write("data: partial\\n\\n");
+    setTimeout(() => res.destroy(), 10);
+  });
+  const port = await listen(upstream);
+  const settings = settingsSchema.parse({ providers: [{ id: "broken-stream", baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", models: [{ id: "m" }] }] });
+  const proxy = new LlmProxy({ host: "127.0.0.1" }, () => settings);
+  await proxy.start();
+  try {
+    const response = await fetch(`${proxy.providerBaseUrl("broken-stream")}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${proxy.runtimeToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", stream: true, messages: [{ role: "user", content: "x" }] }),
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const models = await fetch(`${proxy.providerBaseUrl("broken-stream")}/models`, { headers: { Authorization: `Bearer ${proxy.runtimeToken}` } });
+    assert.equal(models.status, 200);
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
 test("store false does not create reusable local Responses history", async () => {
   const upstream = createServer((_req, res) => {
     res.setHeader("Content-Type", "application/json");
