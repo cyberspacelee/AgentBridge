@@ -389,27 +389,28 @@ export class CodexAdapter implements EngineAdapter {
     } else if (method === "item/started" || method === "item/completed") {
       const item = record(params.item),
         id = string(item.id),
-        type = string(item.type);
+        type = string(item.type),
+        normalizedType = type.replaceAll("_", "").toLowerCase();
       if (!id || type === "userMessage") return;
-      if (type === "reasoning") {
-        const content = Array.isArray(item.summary) ? item.summary.map(string).join("\n\n") : "";
+      if (normalizedType === "reasoning") {
+        const content = Array.isArray(item.summary) ? item.summary.map(string).join("\n\n") : string(item.text);
         const part = message.parts.find((p) => p.id === id);
         if (part?.type === "reasoning" && content) part.content = content;
         else if (!part) message.parts.push({ id, type: "reasoning", content });
-      } else if (type === "agentMessage") {
+      } else if (normalizedType === "agentmessage") {
         const part = message.parts.find((p) => p.id === id);
         if (part?.type === "text" && typeof item.text === "string")
           part.content = item.text;
         else if (!part)
           message.parts.push({ id, type: "text", content: string(item.text) });
       } else if ([
-        "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
-        "collabAgentToolCall", "webSearch", "imageView", "imageGeneration",
-        "sleep", "functionCallOutput",
-      ].includes(type)) {
-        const input = item.arguments ?? (typeof item.command === "string"
+        "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall",
+        "collabagenttoolcall", "websearch", "imageview", "imagegeneration",
+        "sleep", "functioncalloutput",
+      ].includes(normalizedType)) {
+        const input = item.arguments ?? item.input ?? (typeof item.command === "string"
           ? { command: item.command, cwd: item.cwd }
-          : item.changes ?? item);
+          : item.changes ?? item.changes_ ?? item);
         let part = message.parts.find((p) => p.id === id);
         if (!part) {
           part = {
@@ -426,25 +427,26 @@ export class CodexAdapter implements EngineAdapter {
           message.parts.push(part);
         }
         if (part.type === "tool") {
-          if (item.arguments !== undefined || item.command !== undefined || item.changes !== undefined) part.input = input;
-          const output = item.error ?? item.failure ?? item.aggregatedOutput ?? item.result ?? item.contentItems ?? item.output ??
-            (method === "item/completed" ? (part.output || (item.changes ?? item.agentsStates ?? item.results)) : undefined);
+          if (item.arguments !== undefined || item.input !== undefined || item.command !== undefined || item.changes !== undefined || item.changes_ !== undefined) part.input = input;
+          const output = item.error ?? item.failure ?? item.aggregatedOutput ?? item.aggregated_output ?? item.result ?? item.contentItems ?? item.content_items ?? item.output ??
+            (method === "item/completed" ? (part.output || (item.changes ?? item.agentsStates ?? item.agents_states ?? item.results)) : undefined);
           if (output !== undefined && output !== null)
             part.output = typeof output === "string" ? output : JSON.stringify(output);
           if (method === "item/completed") {
-            part.state.status = ["failed", "declined"].includes(string(item.status)) ||
+            part.state.status = ["failed", "declined", "error", "interrupted", "cancelled"].includes(string(item.status)) ||
               item.success === false || !!item.error || !!item.failure ||
-              (typeof item.exitCode === "number" && item.exitCode !== 0)
+              (typeof (item.exitCode ?? item.exit_code) === "number" && Number(item.exitCode ?? item.exit_code) !== 0)
               ? "failed"
               : "completed";
             part.finishedAt = new Date().toISOString();
-            if (typeof item.durationMs === "number" && item.durationMs >= 0)
-              part.startedAt = new Date(Date.parse(part.finishedAt) - item.durationMs).toISOString();
+            const durationMs = item.durationMs ?? item.duration_ms;
+            if (typeof durationMs === "number" && durationMs >= 0)
+              part.startedAt = new Date(Date.parse(part.finishedAt) - durationMs).toISOString();
           }
         }
       }
-    } else if (method === "item/commandExecution/outputDelta" || method === "item/fileChange/outputDelta") {
-      const part = message.parts.find((p) => p.id === params.itemId);
+    } else if (method === "item/commandExecution/outputDelta" || method === "item/fileChange/outputDelta" || method === "item/mcpToolCall/progress") {
+      const part = message.parts.find((p) => p.id === (params.itemId ?? params.item_id));
       if (part?.type === "tool") part.output += string(params.delta);
     } else if (method === "thread/tokenUsage/updated") {
       const usage = record(params.tokenUsage),

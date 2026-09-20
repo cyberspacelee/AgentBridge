@@ -364,16 +364,18 @@ async function convertChatStream(
       const fn = call.function && typeof call.function === "object" ? object(call.function) : {};
       const current = toolCalls.get(index) ?? { id: typeof call.id === "string" ? call.id : `call_${index}`, name: typeof fn.name === "string" ? fn.name : "", arguments: "" };
       if (typeof call.id === "string") current.id = call.id;
-      if (typeof fn.name === "string") current.name += fn.name;
+      // Chat Completions sends the function name as metadata, not a text delta.
+      // Some compatible servers repeat it on every chunk; retain the first value.
+      if (typeof fn.name === "string" && !current.name) current.name = fn.name;
+      if (!announcedTools.has(index)) {
+        announcedTools.add(index);
+        appendSse(res, "response.output_item.added", { type: "response.output_item.added", response_id: responseId, output_index: index, item: { type: "function_call", id: current.id, call_id: current.id, name: current.name, arguments: "", status: "in_progress" } });
+      }
       if (typeof fn.arguments === "string") {
         current.arguments += fn.arguments;
         appendSse(res, "response.function_call_arguments.delta", { type: "response.function_call_arguments.delta", response_id: responseId, item_id: current.id, output_index: index, delta: fn.arguments });
       }
       toolCalls.set(index, current);
-      if (!announcedTools.has(index)) {
-        announcedTools.add(index);
-        appendSse(res, "response.output_item.added", { type: "response.output_item.added", response_id: responseId, output_index: index, item: { type: "function_call", id: current.id, call_id: current.id, name: current.name, arguments: "", status: "in_progress" } });
-      }
     }
   };
   appendSse(res, "response.created", { type: "response.created", response: { id: responseId, object: "response", status: "in_progress", output: [] } });
@@ -392,7 +394,10 @@ async function convertChatStream(
     appendSse(res, "response.content_part.done", { type: "response.content_part.done", response_id: responseId, item_id: messageId, output_index: 0, content_index: 0, part: { type: "output_text", text: textOutput, annotations: [] } });
     appendSse(res, "response.output_item.done", { type: "response.output_item.done", response_id: responseId, output_index: 0, item: message });
   }
-  for (const [index, call] of toolCalls) appendSse(res, "response.output_item.done", { type: "response.output_item.done", response_id: responseId, output_index: index, item: { type: "function_call", id: call.id, call_id: call.id, name: call.name, arguments: call.arguments, status: "completed" } });
+  for (const [index, call] of toolCalls) {
+    appendSse(res, "response.function_call_arguments.done", { type: "response.function_call_arguments.done", response_id: responseId, item_id: call.id, output_index: index, arguments: call.arguments });
+    appendSse(res, "response.output_item.done", { type: "response.output_item.done", response_id: responseId, output_index: index, item: { type: "function_call", id: call.id, call_id: call.id, name: call.name, arguments: call.arguments, status: "completed" } });
+  }
   appendSse(res, "response.completed", { type: "response.completed", response });
   res.end();
   onDone(response);

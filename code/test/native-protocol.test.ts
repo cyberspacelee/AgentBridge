@@ -23,6 +23,8 @@ test("Codex renders only tool items and retains final inputs, errors and streame
   assert.equal(parts[0].state.status, "failed");
   assert.equal(Date.parse(parts[0].finishedAt) - Date.parse(parts[0].startedAt), 120);
   event("item/started", { item: { id: "mcp", type: "mcpToolCall", tool: "search", arguments: {} } });
+  event("item/mcpToolCall/progress", { itemId: "mcp", delta: "Searching..." });
+  assert.match(parts[1].output, /Searching/);
   event("item/completed", { item: { id: "mcp", type: "mcpToolCall", tool: "search", arguments: { query: "docs" }, status: "failed", error: { message: "Connection refused" } } });
   assert.deepEqual(parts[1].input, { query: "docs" });
   assert.match(parts[1].output, /Connection refused/);

@@ -145,6 +145,7 @@ test("streaming tool calls are represented as Responses function-call events", a
   const upstream = createServer(async (_req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.write(`data: ${JSON.stringify({ model: "m", choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "lookup", arguments: '{"q":"x"}' } }] } }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "lookup", arguments: "}" } }] } }] })}\n\n`);
     res.end("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
   });
   const port = await listen(upstream);
@@ -156,8 +157,12 @@ test("streaming tool calls are represented as Responses function-call events", a
     const body = await response.text();
     assert.match(body, /response\.output_item\.added/);
     assert.match(body, /response\.function_call_arguments\.delta/);
+    assert.match(body, /response\.function_call_arguments\.done/);
     assert.match(body, /response\.output_item\.done/);
     assert.match(body, /"type":"function_call"/);
+    assert.doesNotMatch(body, /lookuplookup/);
+    assert.ok(body.indexOf("response.output_item.added") < body.indexOf("response.function_call_arguments.delta"));
+    assert.ok(body.indexOf("response.function_call_arguments.delta") < body.indexOf("response.function_call_arguments.done"));
   } finally {
     await proxy.close();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
