@@ -31,6 +31,8 @@ export interface LlmUsageRecord {
     costUsd: number | null;
   } | null;
   error: string | null;
+  errorDetail?: string | null;
+  upstreamStatus?: number | null;
   occurredAt: string;
 }
 
@@ -400,10 +402,12 @@ export class LlmProxy {
     let conversion = "none";
     let stream = false;
     let status = 500;
+    let upstreamStatus: number | null = null;
     let ttftMs: number | null = null;
     let usage: LlmUsageRecord["usage"] = null;
     let error: string | null = null;
-    const finish = () => this.onRecord?.({ providerID, modelID, clientApi, upstreamApi, conversion, status, durationMs: Date.now() - started, ttftMs, stream, usage, error, occurredAt: new Date().toISOString() });
+    let errorDetail: string | null = null;
+    const finish = () => this.onRecord?.({ providerID, modelID, clientApi, upstreamApi, conversion, status, durationMs: Date.now() - started, ttftMs, stream, usage, error, errorDetail, upstreamStatus, occurredAt: new Date().toISOString() });
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const match = url.pathname.match(/^\/llm\/([^/]+)\/v1\/(responses|chat\/completions|models)$/);
@@ -449,6 +453,7 @@ export class LlmProxy {
       const upstream = `${provider.baseUrl.replace(/\/$/, "")}/${endpoint(upstreamApi)}`;
       const response = await fetch(upstream, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120000), headers, body: JSON.stringify(outgoing) });
       status = response.status;
+      upstreamStatus = response.status;
       if (!response.ok) {
         throw new Error(await upstreamFailure(response));
       }
@@ -493,6 +498,7 @@ export class LlmProxy {
       finish();
     } catch (caught) {
       error = caught instanceof LlmProxyError ? caught.code : "UPSTREAM_ERROR";
+      errorDetail = caught instanceof Error ? caught.message : String(caught);
       const proxyError = caught instanceof LlmProxyError
         ? caught
         : new LlmProxyError("UPSTREAM_ERROR", caught instanceof Error ? caught.message : "Upstream model request failed", 502);

@@ -15,8 +15,27 @@ import { readSettings } from "./settings.js";
 import { disconnectHost, hostConnected, isUtilityProcess, onHostDisconnect, onHostMessage, sendHost } from "./host/control.js";
 export async function startGateway(config = readConfig()) {
   const store = new Store(config.database, config.limits.maxEventBytes);
+  let runtime: SessionRuntime | undefined;
   const proxy = new LlmProxy(config, () => readSettings(config), (record) => {
     store.transaction(() => store.emit({ type: "llm.request.finished", properties: record }));
+    if (record.status >= 400 && runtime) {
+      runtime.log(
+        "error",
+        "llm-proxy",
+        record.error ?? "UPSTREAM_ERROR",
+        JSON.stringify({
+          providerID: record.providerID,
+          modelID: record.modelID,
+          clientApi: record.clientApi,
+          upstreamApi: record.upstreamApi,
+          conversion: record.conversion,
+          status: record.status,
+          upstreamStatus: record.upstreamStatus ?? null,
+          durationMs: record.durationMs,
+          error: record.errorDetail ?? null,
+        }),
+      );
+    }
   });
   await proxy.start();
   registerLlmProxy(config, proxy);
@@ -26,7 +45,7 @@ export async function startGateway(config = readConfig()) {
     new CodexAdapter(config),
     new GrokAdapter(config),
   ];
-  const runtime = new SessionRuntime(
+  runtime = new SessionRuntime(
     store,
     adapters.find((adapter) => adapter.id === config.engine)!,
     config,
