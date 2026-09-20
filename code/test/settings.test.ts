@@ -5,6 +5,7 @@ import {
   mkdir,
   writeFile,
   readFile,
+  lstat,
   rm,
   stat,
 } from "node:fs/promises";
@@ -21,11 +22,59 @@ import {
   agentRevision,
   configuredModels,
   nativeEnvironment,
+  nativeSessionDirectory,
+  nativeSessionEnvironment,
   opencodeEnvironment,
   piProviders,
   readSettings,
 } from "../src/settings.js";
 import { hiddenSecret, settingsSchema } from "../shared/settings.js";
+
+test("loads four-agent settings by adding the new Qwen default", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-settings-legacy-"));
+  try {
+    const config = readConfig([], { AGENT_DATA_DIR: directory });
+    const current = settingsSchema.parse({});
+    await writeFile(
+      path.join(directory, "settings.json"),
+      JSON.stringify({ ...current, agents: current.agents.slice(0, 4) }),
+    );
+    const settings = readSettings(config);
+    assert.deepEqual(settings.agents.map((agent) => agent.id), ["pi", "opencode", "codex", "grok", "qwen"]);
+    assert.equal(settings.agents.at(-1)?.enabled, false);
+    assert.deepEqual(settings.agents.at(-1)?.runtime, { mode: "managed" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed native skill replacement keeps the previous skill links", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-settings-skills-"));
+  const skill = path.join(directory, "office");
+  try {
+    await mkdir(skill);
+    await writeFile(path.join(skill, "SKILL.md"), "# Office\n");
+    const config = readConfig([], { AGENT_DATA_DIR: directory });
+    const manager = new SettingsManager(config);
+    const view = manager.view();
+    const qwen = view.settings.agents.find((agent) => agent.id === "qwen")!;
+    view.settings.skills.push({ id: "office", path: skill, enabled: true });
+    qwen.skillIds = ["office"];
+    manager.save({ settings: view.settings, revision: view.revision });
+    applyAgentConfiguration(config, "qwen");
+    const session = { id: "session", directory };
+    nativeSessionEnvironment(config, "qwen", session);
+    const link = path.join(nativeSessionDirectory(config, "qwen", session.id), "skills", "office");
+    assert.equal((await lstat(link)).isSymbolicLink(), true);
+    const sessionConfig = path.join(nativeSessionDirectory(config, "qwen", session.id), "settings.json");
+    await rm(sessionConfig);
+    await mkdir(sessionConfig);
+    assert.throws(() => nativeSessionEnvironment(config, "qwen", session));
+    assert.equal((await lstat(link)).isSymbolicLink(), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("compaction and model thinking persist, apply per agent, and restore native defaults", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-controls-"));

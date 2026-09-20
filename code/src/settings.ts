@@ -15,6 +15,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { z } from "zod";
 import {
   settingsSchema,
+  agentIds,
   providerSchema,
   skillSchema,
   mcpSchema,
@@ -45,12 +46,25 @@ export function readJson(file: string): Record<string, unknown> {
     );
   }
 }
+function normalizeSettings(value: Record<string, unknown>) {
+  const agents = value.agents;
+  const legacyIds = agentIds.slice(0, -1);
+  if (!Array.isArray(agents) || agents.length !== legacyIds.length) return value;
+  const ids = agents.map((agent) =>
+    agent && typeof agent === "object" && "id" in agent && typeof agent.id === "string"
+      ? agent.id
+      : undefined,
+  );
+  if (ids.some((id) => !id || !legacyIds.includes(id as (typeof legacyIds)[number]))) return value;
+  if (new Set(ids).size !== legacyIds.length) return value;
+  return { ...value, agents: [...agents, { id: "qwen", runtime: { mode: "managed" } }] };
+}
 export function readSettings(config: Config): Settings {
   const file = path.join(config.dataDirectory, "settings.json");
   if (existsSync(file)) {
     const value = readJson(file);
     if (value.schemaVersion !== 1) throw new GatewayError("CONFIGURATION_ERROR", "不支持历史配置。请使用新的数据目录重新配置；不提供迁移。", 400);
-    return settingsSchema.parse(value);
+    return settingsSchema.parse(normalizeSettings(value));
   }
   const settings = settingsSchema.parse({ defaultAgent: config.engine });
   for (const agent of settings.agents) agent.runtime = config.managedRuntimes ? { mode: "managed" } : { mode: "external", command: config[agent.id].command };
@@ -378,6 +392,34 @@ export function nativeSessionDirectory(
     );
   return path.join(agentDirectory(config, id), "sessions", sessionId);
 }
+function replaceNativeSkills(home: string, skills: { id: string; path: string }[]) {
+  const target = path.join(home, "skills");
+  const staging = path.join(home, `.skills-${randomUUID()}`);
+  const backup = path.join(home, `.skills-backup-${randomUUID()}`);
+  let moved = false;
+  mkdirSync(staging, { recursive: true, mode: 0o700 });
+  try {
+    for (const skill of skills)
+      symlinkSync(
+        skill.path,
+        path.join(staging, skill.id),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    if (existsSync(target)) {
+      renameSync(target, backup);
+      moved = true;
+    }
+    renameSync(staging, target);
+    if (moved) rmSync(backup, { recursive: true, force: true });
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    if (moved) {
+      rmSync(target, { recursive: true, force: true });
+      renameSync(backup, target);
+    }
+    throw error;
+  }
+}
 export function nativeSessionEnvironment(
   config: Config,
   id: "codex" | "grok" | "qwen",
@@ -433,31 +475,13 @@ export function nativeSessionEnvironment(
     ? readJson(agentConfigFile(config, id))
     : parseToml(readFileSync(agentConfigFile(config, id), "utf8"));
   if (id === "codex") {
-    const skills = path.join(home, "skills");
-    rmSync(skills, { recursive: true, force: true });
-    mkdirSync(skills, { recursive: true, mode: 0o700 });
-    for (const skill of engineSettings(config, id).skills)
-      symlinkSync(
-        skill.path,
-        path.join(skills, skill.id),
-        process.platform === "win32" ? "junction" : "dir",
-      );
     native.skills = { config: [] };
-  } else if (id === "qwen") {
-    const skills = path.join(home, "skills");
-    rmSync(skills, { recursive: true, force: true });
-    mkdirSync(skills, { recursive: true, mode: 0o700 });
-    for (const skill of engineSettings(config, id).skills)
-      symlinkSync(
-        skill.path,
-        path.join(skills, skill.id),
-        process.platform === "win32" ? "junction" : "dir",
-      );
   }
   atomicWrite(
     path.join(home, id === "qwen" ? "settings.json" : "config.toml"),
     id === "qwen" ? JSON.stringify(native, null, 2) : stringifyToml(native),
   );
+  if (id === "codex" || id === "qwen") replaceNativeSkills(home, engineSettings(config, id).skills);
   return {
     ...nativeEnvironment(config, id),
     ...(id === "codex"
