@@ -60,6 +60,7 @@ test("compaction and model thinking persist, apply per agent, and restore native
       assert.deepEqual(grok.session, enabled ? { auto_compact_threshold_percent: 85 } : undefined);
       assert.deepEqual(grok.model["bridge/model"].reasoning_efforts, enabled ? [{ id: "none", value: "none", label: "Off", default: true }] : undefined);
       assert.equal(codex.model_auto_compact_token_limit, enabled ? 27200 : undefined);
+      assert.equal((codex.model_providers as Record<string, any>).bridge.wire_api, "responses");
       assert.equal(readSettings(config).providers[0]!.models[0]!.thinking, enabled ? "off" : "default");
     }
     assert.equal(settingsSchema.parse({}).agents[0]!.contextCompaction, "default");

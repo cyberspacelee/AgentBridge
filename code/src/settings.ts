@@ -562,7 +562,9 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
                     name: p.id,
                     base_url: providerBaseUrl(config, p),
                     env_key: `AGENT_BRIDGE_KEY_${p.id}`,
-                    wire_api: (agent.modelApi ?? scoped.providers[0]?.api) === "openai-responses" ? "responses" : "chat",
+                    // Current Codex releases accept Responses only. Chat-only upstreams
+                    // require the configured loopback proxy conversion route.
+                    wire_api: "responses",
                     requires_openai_auth: false,
                   },
                 ]),

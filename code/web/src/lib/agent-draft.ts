@@ -9,6 +9,7 @@ export const agentNames: Record<string, string> = {
 }
 
 const editable = [
+  "modelApi",
   "models",
   "defaultModel",
   "contextCompaction",
