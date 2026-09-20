@@ -986,6 +986,7 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
       payload: { parts: [{ type: "text", text: "work" }] },
     });
     await until(() => f.adapter.executions.has(id));
+    assert.equal((await server.inject(`/api/tasks/${id}/rollout`)).statusCode, 409);
     const filename = path.join(f.directory, "report.md");
     await writeFile(filename, "original report");
     f.adapter.complete(id);
@@ -1007,6 +1008,24 @@ test("HTTP contract, SSE completion, metrics and graceful stream shutdown", asyn
     assert.equal(overview.usage.input, null);
     await until(() => f.store.list("artifacts").length > 0);
     const artifact = f.store.list("artifacts")[0]!;
+    const rollout = await server.inject(`/api/tasks/${id}/rollout`);
+    assert.equal(rollout.statusCode, 200);
+    assert.match(rollout.headers["content-type"]!, /application\/x-ndjson/);
+    assert.match(rollout.headers["content-disposition"]!, /task_.*\.jsonl/);
+    const rolloutRecords = rollout.body
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; data?: { id?: string } });
+    assert.equal(rolloutRecords[0]!.type, "header");
+    assert.equal(rolloutRecords.some((record) => record.type === "session"), true);
+    assert.equal(rolloutRecords.some((record) => record.type === "run"), true);
+    assert.equal(rolloutRecords.some((record) => record.type === "message"), true);
+    assert.equal(rolloutRecords.some((record) => record.type === "artifact" && record.data?.id === artifact.id), true);
+    assert.equal(rolloutRecords.at(-1)!.type, "footer");
+    const runId = f.store.list("runs")[0]!.id;
+    const filteredRollout = await server.inject(`/api/tasks/${id}/rollout?runId=${runId}`);
+    assert.equal(filteredRollout.statusCode, 200);
+    assert.equal((await server.inject(`/api/tasks/${id}/rollout?runId=missing`)).statusCode, 404);
     const download = `/api/artifacts/${artifact.id}/content`;
     assert.equal((await server.inject(download)).body, "original report");
     await writeFile(filename, "modified report");

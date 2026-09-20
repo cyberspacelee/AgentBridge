@@ -218,6 +218,12 @@ operation("post", "/api/tasks", "createTask", "任务与执行", "创建会话�
 operation("post", "/api/tasks/{id}/runs", "submitRun", "任务与执行", "向已有会话追加一轮", ref("AcceptedRun"), { input: ref("SubmitRun"), status: 202, errors: [404, 409, 410, 429], example: { ...promptExample, submissionId: "turn-002" }, result: { ...acceptedExample, submissionId: "turn-002", runId: "run_002" }, description: "路径 id 为已有 sessionId/taskId。同会话各轮串行执行；立即返回 runId，推荐在人工交互客户端中使用。每一新轮使用新 submissionId。" });
 operation("get", "/api/tasks", "listTasks", "任务与执行", "分页查询任务", page("TaskSummary"), { parameters: [...pagination, parameter("q", { type: "string", maxLength: 300, default: "" }, "标题或 ID 的不区分大小写子串。"), parameter("status", { ...enumeration(...runStates, "not_started", "waiting_input", "unavailable", "deleting", ""), default: "" }, "精确匹配状态；空字符串表示全部。")], errors: [409], description: "按创建时间和 ID 降序。保留 nextCursor 与原筛选；游标不匹配筛选返回 400，锚点已删除返回 409。" });
 operation("get", "/api/tasks/{id}", "getTask", "任务与执行", "读取任务详情", object({ snapshot: ref("Snapshot"), detail: ref("TaskDetail") }), { errors: [404] });
+operation("get", "/api/tasks/{id}/rollout", "exportTaskRollout", "任务与执行", "导出任务全链路 JSONL", { type: "string", format: "binary" }, {
+  parameters: [parameter("runId", str, "可选；指定时只导出该轮，否则导出任务全部轮次。")],
+  errors: [404, 409],
+  mediaType: "application/x-ndjson",
+  description: "只读下载接口。返回 UTF-8 JSONL 文件，包含 session、run、业务事件、运行日志、消息、交互、产物和 LLM 观测记录；运行中任务返回 409。llm.request.finished 若无法关联到具体 run，会以 runId=null 导出。",
+});
 operation("get", "/api/tasks/{id}/runs", "listTaskRuns", "任务与执行", "分页读取会话执行记录", page("Run"), { parameters: pagination, errors: [404, 409] });
 operation("get", "/api/runs/{id}", "getRun", "任务与执行", "读取本轮结果", object({ snapshot: ref("Snapshot"), detail: object({ run: ref("Run"), messages: array(ref("Message")) }) }), { errors: [404], description: "轮询 detail.run.state；completed/failed/timed_out/cancelled 均为终态，仅 completed 成功。失败原因见 error，输出见 detail.messages。manual 等待审批时仍为非终态，应继续处理交互。" });
 operation("get", "/api/runs/{id}/messages", "listRunMessages", "任务与执行", "分页读取本轮消息", page("Message"), { parameters: pagination, errors: [404, 409] });

@@ -7,6 +7,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { open, stat, readFile } from "node:fs/promises";
+import { Readable } from "node:stream";
 import path from "node:path";
 import { z, ZodError } from "zod";
 import pino from "pino";
@@ -377,6 +378,185 @@ export function createServer(runtime: SessionRuntime) {
     detail: runtime.detail(id(request.params)),
     snapshot: store.snapshot(),
   }));
+  server.get("/api/tasks/:id/rollout", async (request, reply) => {
+    const taskId = id(request.params);
+    const query = z
+      .object({ runId: z.string().min(1).max(300).optional() })
+      .parse(request.query);
+    const session = runtime.session(taskId);
+    const allRuns = runtime.runs(taskId);
+    const runs = query.runId
+      ? allRuns.filter((run) => run.id === query.runId)
+      : allRuns;
+    if (query.runId && !runs.length)
+      throw new GatewayError("NOT_FOUND", "Run not found", 404);
+    if (runs.some((run) => !isTerminal(run.state)))
+      throw new GatewayError(
+        "CONFLICT",
+        "Rollout is not ready while a run is active",
+        409,
+      );
+
+    const runIds = runs.map((run) => run.id);
+    const traceIds = new Map(runs.map((run) => [run.id, run.traceId]));
+    const runPlaceholders = runIds.map(() => "?").join(",");
+    const range = runs.reduce(
+      (result, run) => ({
+        from: result.from && result.from < run.acceptedAt ? result.from : run.acceptedAt,
+        to: result.to && result.to > (run.finishedAt ?? run.acceptedAt) ? result.to : (run.finishedAt ?? run.acceptedAt),
+      }),
+      { from: "", to: "" },
+    );
+    const eventRows = store.db
+      .prepare(
+        `SELECT seq,revision,instanceId,occurredAt,type,sessionId,runId,properties
+         FROM events
+         WHERE (sessionId=? ${query.runId ? `AND runId IN (${runPlaceholders})` : ""})
+            OR (type='llm.request.finished' AND occurredAt>=? AND occurredAt<=?)
+         ORDER BY seq`,
+      )
+      .all(
+        taskId,
+        ...(query.runId ? runIds : []),
+        range.from || session.createdAt,
+        range.to || session.updatedAt,
+      ) as {
+      seq: number;
+      revision: number;
+      instanceId: string;
+      occurredAt: string;
+      type: string;
+      sessionId: string | null;
+      runId: string | null;
+      properties: string;
+    }[];
+    const logRows = store.db
+      .prepare(
+        `SELECT id,occurredAt,level,stage,code,message,sessionId,runId,traceId
+         FROM runtime_logs
+         WHERE sessionId=? ${runIds.length ? `OR runId IN (${runPlaceholders})` : ""}
+         ORDER BY id`,
+      )
+      .all(taskId, ...runIds) as Record<string, unknown>[];
+    const records = [
+      ...eventRows.map((event) => ({
+        at: event.occurredAt,
+        order: event.seq,
+        record:
+          event.type === "llm.request.finished"
+            ? {
+                schema: "agentbridge.rollout.v1",
+                type: "llm",
+                sequence: event.seq,
+                at: event.occurredAt,
+                sessionId: event.sessionId,
+                runId: event.runId,
+                traceId: event.runId ? traceIds.get(event.runId) ?? null : null,
+                correlation: event.runId ? "linked" : "unlinked",
+                data: JSON.parse(event.properties),
+              }
+            : {
+                schema: "agentbridge.rollout.v1",
+                type: "event",
+                sequence: event.seq,
+                at: event.occurredAt,
+                sessionId: event.sessionId,
+                runId: event.runId,
+                traceId: event.runId ? traceIds.get(event.runId) ?? null : null,
+                eventId: `${store.storeId}:${event.seq}`,
+                revision: event.revision,
+                instanceId: event.instanceId,
+                eventType: event.type,
+                data: JSON.parse(event.properties),
+              },
+      })),
+      ...logRows.map((log) => ({
+        at: String(log.occurredAt),
+        order: 1_000_000_000 + Number(log.id),
+        record: {
+          schema: "agentbridge.rollout.v1",
+          type: "log",
+          sequence: Number(log.id),
+          at: String(log.occurredAt),
+          sessionId: log.sessionId ?? taskId,
+          runId: log.runId ?? null,
+          traceId: log.traceId ?? (typeof log.runId === "string" ? traceIds.get(log.runId) ?? null : null),
+          data: log,
+        },
+      })),
+    ].sort(
+      (a, b) => a.at.localeCompare(b.at) || a.order - b.order,
+    );
+    const messageSnapshots = runs.flatMap((run) =>
+      store.messages(taskId, run.id).map((message) => ({ run, message })),
+    );
+    const interactionSnapshots = runs.flatMap((run) =>
+      store.list("interactions", "runId=?", [run.id]).map((interaction) => ({ run, interaction })),
+    );
+    const artifactSnapshots = runs.flatMap((run) =>
+      store.list("artifacts", "runId=?", [run.id]).map((artifact) => ({ run, artifact })),
+    );
+    const snapshot = store.snapshot();
+    const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const lines: string[] = [
+      JSON.stringify({
+        schema: "agentbridge.rollout.v1",
+        type: "header",
+        taskId,
+        capturedAt: snapshot.capturedAt,
+        snapshot,
+      }),
+      JSON.stringify({
+        schema: "agentbridge.rollout.v1",
+        type: "session",
+        sessionId: taskId,
+        data: session,
+      }),
+      ...records.map(({ record }) => JSON.stringify(record)),
+    ];
+    for (const run of runs) {
+      lines.push(
+        JSON.stringify({
+          schema: "agentbridge.rollout.v1",
+          type: "run",
+          sessionId: taskId,
+          runId: run.id,
+          data: run,
+        }),
+      );
+    }
+    for (const { run, message } of messageSnapshots)
+      lines.push(JSON.stringify({ schema: "agentbridge.rollout.v1", type: "message", sessionId: taskId, runId: run.id, traceId: run.traceId, data: message }));
+    for (const { run, interaction } of interactionSnapshots)
+      lines.push(JSON.stringify({ schema: "agentbridge.rollout.v1", type: "interaction", sessionId: taskId, runId: run.id, traceId: run.traceId, data: interaction }));
+    for (const { run, artifact } of artifactSnapshots)
+      lines.push(JSON.stringify({ schema: "agentbridge.rollout.v1", type: "artifact", sessionId: taskId, runId: run.id, traceId: run.traceId, contentUrl: `/api/artifacts/${artifact.id}/content`, data: artifact }));
+    lines.push(
+      JSON.stringify({
+        schema: "agentbridge.rollout.v1",
+        type: "footer",
+        taskId,
+        capturedAt: snapshot.capturedAt,
+        complete: true,
+        coverage: { eventFloor: Number(store.meta("floor") ?? 0) },
+        counts: {
+          events: eventRows.length,
+          logs: logRows.length,
+          runs: runs.length,
+          messages: messageSnapshots.length,
+          interactions: interactionSnapshots.length,
+          artifacts: artifactSnapshots.length,
+        },
+      }),
+    );
+    reply
+      .type("application/x-ndjson; charset=utf-8")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="task_${safeId}.jsonl"`,
+      );
+    return reply.send(Readable.from(lines.map((line) => `${line}\n`)));
+  });
   server.get("/api/tasks/:id/runs", async (request) => {
     const sessionId = id(request.params);
     runtime.session(sessionId);

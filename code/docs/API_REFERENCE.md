@@ -1,6 +1,6 @@
 # AgentBridge API — API Reference
 
-版本：0.1.38 · OpenAPI 3.1.0
+版本：0.1.39 · OpenAPI 3.1.0
 Base URL 为当前网关地址。无需 Authorization/Cookie；仅供受信任客户端，同源与目录访问约束仍生效。JSON 请求使用 Content-Type: application/json，默认最大 1 MiB。响应头 X-Request-ID 用于追踪。字段标记 required 为必填；null 与省略不同。[Markdown 文档（供 Agent 使用）](/api/docs.md) · [完整会话示例](/api/examples/session.md)。
 获取地址：`GET /api/docs.md`（本文）、`GET /api/openapi.json`（机器定义）、`GET /api/docs`（网页）、`GET /api/examples/session.md`（完整会话示例）。
 Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参数的操作明确标注“无”，不要构造额外请求体。请求表的“必填”针对所在对象；父对象可选不代表其内部必填字段可省略。响应表的“必返”表示字段存在，null 表示值可能为空。命名类型在文末数据模型中展开。
@@ -26,6 +26,7 @@ Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参
 | POST | /api/tasks/{id}/runs | [向已有会话追加一轮](#submitrun) |
 | GET | /api/tasks/{id}/runs | [分页读取会话执行记录](#listtaskruns) |
 | GET | /api/tasks/{id} | [读取任务详情](#gettask) |
+| GET | /api/tasks/{id}/rollout | [导出任务全链路 JSONL](#exporttaskrollout) |
 | GET | /api/runs/{id} | [读取本轮结果](#getrun) |
 | GET | /api/runs/{id}/messages | [分页读取本轮消息](#listrunmessages) |
 | GET | /api/submissions/{id} | [查询幂等提交结果](#getsubmission) |
@@ -923,6 +924,29 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | --- | --- | --- | --- | --- |
 | snapshot | Snapshot | 是 |  | — |
 | detail | TaskDetail | 是 |  | — |
+
+
+### exporttaskrollout
+
+**GET /api/tasks/{id}/rollout — 导出任务全链路 JSONL**
+
+只读下载接口。返回 UTF-8 JSONL 文件，包含 session、run、业务事件、运行日志、消息、交互、产物和 LLM 观测记录；运行中任务返回 409。llm.request.finished 若无法关联到具体 run，会以 runId=null 导出。
+
+| 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| id | path | string | 是 | minLength=1；maxLength=300 | 资源 ID；使用创建/列表接口返回的值。 |
+| runId | query | string | 否 |  | 可选；指定时只导出该轮，否则导出任务全部轮次。 |
+
+请求体：无。
+
+| HTTP 状态码 | Content-Type | 响应类型 | 说明 |
+| --- | --- | --- | --- |
+| 200 | application/x-ndjson | string | 成功 |
+| 400 | application/json | Error | 请求格式、字段、参数或业务约束无效 |
+| 403 | application/json | Error | Host/Origin 或路径、模型等访问约束不允许 |
+| 404 | application/json | Error | 资源不存在 |
+| 409 | application/json | Error | 修订/操作冲突、过期回复、执行取消；检查当前状态后重试 |
+| 500 | application/json | Error | 内部操作失败 |
 
 
 ### getrun
