@@ -106,6 +106,24 @@ function diagnosticText(value: unknown): string | null {
   catch { text = String(value); }
   return text.length <= 12000 ? text : `${text.slice(0, 6000)}...[truncated]...${text.slice(-6000)}`;
 }
+async function streamPreview(body: ReadableStream<Uint8Array>, limit = 12000): Promise<string> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value;
+      const remaining = limit - size;
+      chunks.push(chunk.byteLength <= remaining ? chunk : chunk.slice(0, remaining));
+      size += Math.min(chunk.byteLength, remaining);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
 function endpoint(api: Api): "responses" | "chat/completions" {
   return api === "openai-responses" ? "responses" : "chat/completions";
 }
@@ -543,8 +561,11 @@ export class LlmProxy {
       responseBody = raw ?? { contentType, stream: true };
       res.statusCode = status;
       res.setHeader("Content-Type", contentType);
-      if (response.body) Readable.fromWeb(response.body as never).pipe(res);
-      else res.end();
+      if (response.body) {
+        const [clientBody, diagnosticBody] = response.body.tee();
+        Readable.fromWeb(clientBody as never).pipe(res);
+        responseBody = await streamPreview(diagnosticBody);
+      } else res.end();
       usage = raw ? usageFromResponse(raw.usage) : null;
       ttftMs = Date.now() - started;
       finish();
