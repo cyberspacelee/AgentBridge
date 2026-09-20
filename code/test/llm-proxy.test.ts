@@ -189,6 +189,17 @@ test("Responses conversion accepts message and text items without type", () => {
   ]);
 });
 
+test("Responses conversion drops empty system messages", () => {
+  const body = responsesToChat({
+    model: "m",
+    input: [
+      { role: "system", content: [{ type: "input_text", text: "" }] },
+      { role: "user", content: "hello" },
+    ],
+  });
+  assert.deepEqual(body.messages, [{ role: "user", content: "hello" }]);
+});
+
 test("upstream validation errors preserve the provider response message", async () => {
   const upstream = createServer((_req, res) => {
     res.statusCode = 422;

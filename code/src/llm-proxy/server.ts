@@ -203,7 +203,7 @@ export function responsesToChat(input: JsonObject, history: JsonObject[] = []): 
     }
     return message;
   });
-  if (typeof input.instructions === "string") messages.push({ role: "system", content: input.instructions });
+  if (typeof input.instructions === "string" && input.instructions.length > 0) messages.push({ role: "system", content: input.instructions });
   const items = typeof input.input === "string" ? [{ type: "message", role: "user", content: input.input }] : input.input;
   if (!Array.isArray(items)) throw new LlmProxyError("INVALID_REQUEST", "input must be a string or array");
   for (const raw of items) {
@@ -212,7 +212,8 @@ export function responsesToChat(input: JsonObject, history: JsonObject[] = []): 
       case "message": {
         const role = item.role === "developer" ? "system" : item.role;
         if (!["user", "assistant", "system"].includes(String(role))) throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported message role ${String(role)}`);
-        messages.push({ role, content: contentText(item.content, "input.message.content") });
+        const content = contentText(item.content, "input.message.content");
+        if (content.length > 0) messages.push({ role, content });
         break;
       }
       case "function_call_output":
