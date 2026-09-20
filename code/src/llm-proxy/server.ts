@@ -542,7 +542,8 @@ export class LlmProxy {
       if (!match) throw new LlmProxyError("INVALID_REQUEST", "Unknown LLM proxy route", 404);
       if (req.headers.authorization !== `Bearer ${this.token}`) throw new LlmProxyError("PROXY_AUTHENTICATION_FAILED", "Invalid LLM proxy token", 401);
       providerID = decodeURIComponent(match[1]!);
-      const provider = this.getSettings().providers.find((item) => item.id === providerID);
+      const settings = this.getSettings();
+      const provider = settings.providers.find((item) => item.id === providerID);
       if (!provider || !provider.enabled) throw new LlmProxyError("PROVIDER_NOT_FOUND", "Provider is not enabled", 404);
       if (match[2] === "models") {
         if (req.method !== "GET") throw new LlmProxyError("INVALID_REQUEST", "Models endpoint only accepts GET", 405);
@@ -584,7 +585,7 @@ export class LlmProxy {
       const response = await fetch(upstream, {
         method: "POST",
         redirect: "error",
-        signal: AbortSignal.timeout(this.config.limits?.runTimeoutMs ?? 30 * 60 * 1000),
+        signal: AbortSignal.timeout(settings.runTimeoutMs ?? this.config.limits?.runTimeoutMs ?? 30 * 60 * 1000),
         headers,
         body: JSON.stringify(outgoing),
       });
