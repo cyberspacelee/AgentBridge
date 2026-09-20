@@ -136,7 +136,7 @@ for (const name of ["CreateSession", "Prompt", "CreateTask", "SubmitRun"]) {
 (schemas.NetworkInput!.properties as Record<string, Schema>).proxyPassword = described(
   (schemas.NetworkInput!.properties as Record<string, Schema>).proxyPassword!, "省略保留现有密码，空字符串清除；响应不回显。",
 );
-schemas.SettingsInput!.description = "整份替换，不是 PATCH。资源 ID 必须唯一，四个 Agent 各出现一次，引用必须存在；启用 Agent 需要可用默认模型。密钥传回 ******** 保留旧值，空字符串清除。保存后通过 Agent apply 生效。";
+schemas.SettingsInput!.description = "整份替换，不是 PATCH。资源 ID 必须唯一，五个 Agent 各出现一次，引用必须存在；启用 Agent 需要可用默认模型。密钥传回 ******** 保留旧值，空字符串清除。保存后通过 Agent apply 生效。";
 schemas.Settings!.description = "已应用默认值的保存配置；API Key、MCP environment/headers 中非空密钥以 ******** 掩码返回。";
 schemas.PermissionReply!.description = "once 单次批准、always 按原生引擎作用范围批准、reject 拒绝；重复或过期回复返回 409。message 可选，最长 10000 字符。";
 schemas.QuestionReply!.description = "answers 按 questions 顺序逐题回答，每题对应字符串数组；选项回答用 label。multiple=false 仅允许一项，allowCustom=false 不允许选项外文本。";
@@ -253,7 +253,7 @@ operation("post", "/api/system/lifecycle", "changeLifecycle", "系统", "重启�
 operation("get", "/api/system/directories", "listDirectories", "系统", "浏览工作目录", ref("DirectoryView"), { parameters: [parameter("directory", { type: "string", maxLength: 4096 }, "主机绝对路径；省略列出允许的根目录。")], description: "只返回可见目录；最多 500 条、最多扫描 5000 个子项，达到上限时 truncated=true。parent 为 null 表示不能再向上浏览。" });
 operation("post", "/api/system/certificates", "uploadCertificate", "系统", "保存 PEM CA 证书", object({ path: str }), { input: object({ pem: { type: "string", minLength: 1, maxLength: 2097152 } }), description: "pem 为有效的 CA 证书，最多 2 MiB；本接口 JSON 请求体上限 3 MiB。返回网关主机上的保存路径，可用于 caFile。" });
 operation("get", "/api/settings", "getSettings", "Agent 与资源", "读取资源配置", ref("SettingsView"));
-operation("put", "/api/settings", "saveSettings", "Agent 与资源", "替换资源配置", ref("SettingsView"), { input: object({ settings: ref("SettingsInput"), revision: str }), errors: [409], description: "完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。Agent 资源配置保存后对相关 Agent 执行 apply；runTimeoutMs 为 60000–86400000 毫秒，保存后立即用于四个 Agent 的新任务，无需 apply 或重启，优先于 AGENT_LIMITS.runTimeoutMs。省略时使用环境变量或默认 1800000 毫秒。" });
+operation("put", "/api/settings", "saveSettings", "Agent 与资源", "替换资源配置", ref("SettingsView"), { input: object({ settings: ref("SettingsInput"), revision: str }), errors: [409], description: "完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。Agent 资源配置保存后对相关 Agent 执行 apply；runTimeoutMs 为 60000–86400000 毫秒，保存后立即用于五个 Agent 的新任务，无需 apply 或重启，优先于 AGENT_LIMITS.runTimeoutMs。省略时使用环境变量或默认 1800000 毫秒。" });
 operation("get", "/api/agents", "listAgents", "Agent 与资源", "读取 Agent 状态", object({ agents: array(ref("AgentView")) }));
 operation("post", "/api/agents/{id}/actions", "actOnAgent", "Agent 与资源", "启用、停用、停止或应用 Agent 配置", ref("AgentView"), { input: json(agentActionSchema), parameters: [agentParameter], status: 202, errors: [409, 502, 504], description: "disable/apply 等待活动执行；stop 强制停止。202 后轮询 /api/agents 的 operation/error/health。" });
 operation("get", "/api/engines/{id}/models", "listModels", "Agent 与资源", "查询 Agent 可用模型", object({ models: array(ref("ModelOption")) }), { parameters: [agentParameter], errors: [404, 503, 504] });

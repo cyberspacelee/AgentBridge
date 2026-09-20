@@ -98,7 +98,7 @@ try {
   assert.match((await fetch(`${origin}/api/docs`)).headers.get("content-type"), /text\/html/);
   assert.ok((await (await fetch(`${origin}/api/openapi.json`)).json()).paths["/session/{id}/prompt_async"]);
   const runtime = await page.evaluate(async () => (await fetch("/api/runtimes")).json());
-  assert.equal(runtime.runtimes.length, 4);
+  assert.equal(runtime.runtimes.length, 5);
   assert.ok(runtime.runtimes.every((item) => item.managed && item.installedVersion === null));
   if (executable) {
     const resources = await realpath(path.resolve(path.dirname(executable), process.platform === "darwin" ? "../Resources" : "resources"));

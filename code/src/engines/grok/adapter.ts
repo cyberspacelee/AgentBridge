@@ -45,8 +45,9 @@ interface NativeSession {
     cancelled: boolean;
   };
 }
+export type AcpAgentId = "grok" | "qwen";
 export class GrokAdapter implements EngineAdapter {
-  readonly id = "grok";
+  readonly id: AcpAgentId;
   private sessions = new Map<string, NativeSession>();
   private interactions = new Map<
     string,
@@ -65,9 +66,17 @@ export class GrokAdapter implements EngineAdapter {
     processes: 0,
     restarts: 0,
   };
-  constructor(private config: Config) {}
+  constructor(private config: Config, id: AcpAgentId = "grok") {
+    this.id = id;
+  }
+  private get label() {
+    return this.id === "qwen" ? "Qwen Code" : "Grok";
+  }
+  private modelId(model: { providerID: string; modelID: string }) {
+    return this.id === "qwen" ? model.modelID : `${model.providerID}/${model.modelID}`;
+  }
   capabilities() {
-    return { permissions: true, questions: true, recovery: true };
+    return { permissions: true, questions: this.id === "grok", recovery: true };
   }
   health() {
     return {
@@ -87,8 +96,8 @@ export class GrokAdapter implements EngineAdapter {
     env = nativeEnvironment(this.config, this.id),
   ) {
     const rpc = new RpcProcess(
-      this.config.grok.command,
-      ["--no-auto-update", "agent", "stdio"],
+      this.config[this.id].command,
+      this.id === "grok" ? ["--no-auto-update", "agent", "stdio"] : ["--acp"],
       cwd,
       env,
       true,
@@ -104,7 +113,7 @@ export class GrokAdapter implements EngineAdapter {
         this.config.limits.startupTimeoutMs,
       );
       if (init.protocolVersion !== 1)
-        throw engineError("Unsupported Grok ACP protocol version");
+        throw engineError(`Unsupported ${this.label} ACP protocol version`);
       this.state.version = string(record(init.agentInfo ?? {}).version) || null;
       return rpc;
     } catch (error) {
@@ -128,39 +137,21 @@ export class GrokAdapter implements EngineAdapter {
     const env = nativeSessionEnvironment(this.config, this.id, session);
     let rpc = await this.connect(session.directory, env);
     try {
-      const catalog = await rpc.request("_x.ai/skills/list", {
-        cwd: session.directory,
-      });
-      const parseSkills = (value: Record<string, unknown>) =>
-        list(record(value.result).skills).map((value) => {
-          const skill = record(value);
-          return { path: string(skill.path), enabled: skill.enabled !== false };
+      if (this.id === "grok") {
+        const catalog = await rpc.request("_x.ai/skills/list", {
+          cwd: session.directory,
         });
-      if (
-        restrictNativeSkills(
-          this.config,
-          this.id,
-          session.id,
-          parseSkills(catalog),
-        )
-      ) {
-        await rpc.stop();
-        rpc = await this.connect(session.directory, env);
-        if (
-          restrictNativeSkills(
-            this.config,
-            this.id,
-            session.id,
-            parseSkills(
-              await rpc.request("_x.ai/skills/list", {
-                cwd: session.directory,
-              }),
-            ),
-          )
-        )
-          throw engineError(
-            "Grok could not enforce the selected skill configuration",
-          );
+        const parseSkills = (value: Record<string, unknown>) =>
+          list(record(value.result).skills).map((value) => {
+            const skill = record(value);
+            return { path: string(skill.path), enabled: skill.enabled !== false };
+          });
+        if (restrictNativeSkills(this.config, this.id, session.id, parseSkills(catalog))) {
+          await rpc.stop();
+          rpc = await this.connect(session.directory, env);
+          if (restrictNativeSkills(this.config, this.id, session.id, parseSkills(await rpc.request("_x.ai/skills/list", { cwd: session.directory }))))
+            throw engineError(`${this.label} could not enforce the selected skill configuration`);
+        }
       }
       const result = await rpc.request(
         nativeId ? "session/load" : "session/new",
@@ -176,11 +167,11 @@ export class GrokAdapter implements EngineAdapter {
         !id ||
         (nativeId && result.sessionId && result.sessionId !== nativeId)
       )
-        throw engineError("Grok session recovery mismatch");
+        throw engineError(`${this.label} session recovery mismatch`);
       const model = agentConfiguration(this.config, this.id)!.defaultModel!;
       await rpc.request(
         "session/set_model",
-        { sessionId: id, modelId: `${model.providerID}/${model.modelID}` },
+        { sessionId: id, modelId: this.modelId(model) },
         this.config.limits.startupTimeoutMs,
       );
       const native: NativeSession = {
@@ -194,7 +185,7 @@ export class GrokAdapter implements EngineAdapter {
       rpc.onClose = (error) =>
         native.active?.reject(
           engineError(
-            "Grok process exited",
+            `${this.label} process exited`,
             error,
             diagnosticSecrets(this.config),
           ),
@@ -216,11 +207,11 @@ export class GrokAdapter implements EngineAdapter {
   async run(session: Session, run: Run, emit: (update: EngineUpdate) => void) {
     const native = this.sessions.get(session.id);
     if (!native || native.rpc.closed || native.active)
-      throw engineError("Grok session cannot start execution");
+      throw engineError(`${this.label} session cannot start execution`);
     if (run.model)
       await native.rpc.request("session/set_model", {
         sessionId: native.nativeId,
-        modelId: `${run.model.providerID}/${run.model.modelID}`,
+        modelId: this.modelId(run.model),
       });
     const message: Message = {
       id: randomUUID(),
@@ -267,7 +258,7 @@ export class GrokAdapter implements EngineAdapter {
           ? {
               error: {
                 code: "ENGINE_ERROR",
-                message: `Grok stopped: ${reason || "unknown"}`,
+                message: `${this.label} stopped: ${reason || "unknown"}`,
                 stage: "engine",
               },
             }
@@ -307,7 +298,7 @@ export class GrokAdapter implements EngineAdapter {
         native.rpc.reject(requestId, "No matching active execution");
         return;
       }
-      const question = method === "x.ai/ask_user_question";
+      const question = this.id === "grok" && method === "x.ai/ask_user_question";
       if (!question && method !== "session/request_permission") {
         native.rpc.reject(requestId, `Unsupported request: ${method}`);
         return;
@@ -322,8 +313,8 @@ export class GrokAdapter implements EngineAdapter {
           runId: active.run.id,
           kind: question ? "question" : "permission",
           title: question
-            ? "Grok clarification"
-            : string(record(params.toolCall ?? {}).title) || "Grok permission",
+            ? `${this.label} clarification`
+            : string(record(params.toolCall ?? {}).title) || `${this.label} permission`,
           permission: question ? "" : string(record(params.toolCall ?? {}).kind) || "tool.execute",
           patterns: question ? [] : list(record(params.toolCall ?? {}).locations).map((location) => string(record(location).path)).filter(Boolean),
           questions: question
@@ -373,7 +364,7 @@ export class GrokAdapter implements EngineAdapter {
       if (part.type === "text" || part.type === "reasoning") part.content += string(content.text);
     } else if (type === "tool_call" || type === "tool_call_update") {
       const id = string(update.toolCallId);
-      if (!id) throw engineError("Grok tool call is missing its ID");
+      if (!id) throw engineError(`${this.label} tool call is missing its ID`);
       let part = message.parts.find((p) => p.id === id);
       if (!part) {
         part = {
@@ -416,7 +407,7 @@ export class GrokAdapter implements EngineAdapter {
   }
   async reply(id: string, reply: InteractionReply) {
     const pending = this.interactions.get(id);
-    if (!pending?.native.active) throw engineError("Grok interaction expired");
+    if (!pending?.native.active) throw engineError(`${this.label} interaction expired`);
     let result: unknown;
     if (pending.method === "x.ai/ask_user_question" && "answers" in reply) {
       const answers: Record<string, string[]> = {},
@@ -451,13 +442,13 @@ export class GrokAdapter implements EngineAdapter {
           ? options.find((o) => o.kind === "allow_once")
           : undefined);
       if (!option && reply.reply !== "reject")
-        throw engineError("Grok did not offer this permission decision");
+        throw engineError(`${this.label} did not offer this permission decision`);
       result = {
         outcome: option
           ? { outcome: "selected", optionId: option.optionId }
           : { outcome: "cancelled" },
       };
-    } else throw engineError("Invalid Grok interaction reply");
+    } else throw engineError(`Invalid ${this.label} interaction reply`);
     pending.native.rpc.respond(pending.requestId, result);
     this.interactions.delete(id);
   }

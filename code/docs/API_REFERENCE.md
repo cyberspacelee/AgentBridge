@@ -1,6 +1,6 @@
 # AgentBridge API — API Reference
 
-版本：0.1.41 · OpenAPI 3.1.0
+版本：0.1.42 · OpenAPI 3.1.0
 Base URL 为当前网关地址。无需 Authorization/Cookie；仅供受信任客户端，同源与目录访问约束仍生效。JSON 请求使用 Content-Type: application/json，默认最大 1 MiB。响应头 X-Request-ID 用于追踪。字段标记 required 为必填；null 与省略不同。[Markdown 文档（供 Agent 使用）](/api/docs.md) · [完整会话示例](/api/examples/session.md)。
 获取地址：`GET /api/docs.md`（本文）、`GET /api/openapi.json`（机器定义）、`GET /api/docs`（网页）、`GET /api/examples/session.md`（完整会话示例）。
 Base URL 示例：`http://127.0.0.1:6217`；以下路径相对此地址。无参数的操作明确标注“无”，不要构造额外请求体。请求表的“必填”针对所在对象；父对象可选不代表其内部必填字段可省略。响应表的“必返”表示字段存在，null 表示值可能为空。命名类型在文末数据模型中展开。
@@ -188,7 +188,7 @@ curl -fsS -X DELETE "$BASE/session/$SID"
 
 ##### 任务期限配置
 
-四个 Agent 默认共用 30 分钟任务总时限。从提交开始计算，包含排队和人工等待；持续输出不续期。`deadlineAt` 随本轮持久化，修改设置不会影响已提交的任务。
+五个 Agent 默认共用 30 分钟任务总时限。从提交开始计算，包含排队和人工等待；持续输出不续期。`deadlineAt` 随本轮持久化，修改设置不会影响已提交的任务。
 
 在“系统信息 → 任务超时”输入 1–1440 的整数分钟数并保存。API 使用 `GET /api/settings` 取得配置与 revision，然后通过 `PUT /api/settings` 完整提交并设置 `settings.runTimeoutMs`（毫秒）。新提交立即生效，无需重启；`GET /api/runtime` 的 `limits.runTimeoutMs` 返回当前生效值。配置优先级为 settings.json 中的值、AGENT_LIMITS.runTimeoutMs、默认 1800000。
 
@@ -224,7 +224,7 @@ curl -fsS -X DELETE "$BASE/session/$SID"
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| engineId | string | 否 | enum=["pi","opencode","codex","grok"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
+| engineId | string | 否 | enum=["pi","opencode","codex","grok","qwen"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
 | directory | string | 是 | minLength=1；maxLength=4096 | 网关主机上已存在、可访问且符合目录白名单的绝对路径；不是客户端本机路径。 |
 | title | string | 否 | maxLength=200 | 会话标题。省略或空白时由首条消息生成（合并空白，截取前 80 字符）。 |
 | interactionPolicy | object | 否 | additionalProperties=false | 创建后固定。省略继承 Agent 已应用策略；manual 需要客户端通过审批/问题接口回复。 |
@@ -701,7 +701,7 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| engineId | string | 否 | enum=["pi","opencode","codex","grok"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
+| engineId | string | 否 | enum=["pi","opencode","codex","grok","qwen"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
 | directory | string | 是 | minLength=1；maxLength=4096 | 网关主机上已存在、可访问且符合目录白名单的绝对路径；不是客户端本机路径。 |
 | title | string | 否 | maxLength=200 | 会话标题。省略或空白时由首条消息生成（合并空白，截取前 80 字符）。 |
 | interactionPolicy | object | 否 | additionalProperties=false | 创建后固定。省略继承 Agent 已应用策略；manual 需要客户端通过审批/问题接口回复。 |
@@ -1157,7 +1157,7 @@ data: {"schemaVersion":1,"eventId":"evt_002","revision":2,"instanceId":"instance
 
 **PUT /api/settings — 替换资源配置**
 
-完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。Agent 资源配置保存后对相关 Agent 执行 apply；runTimeoutMs 为 60000–86400000 毫秒，保存后立即用于四个 Agent 的新任务，无需 apply 或重启，优先于 AGENT_LIMITS.runTimeoutMs。省略时使用环境变量或默认 1800000 毫秒。
+完整替换配置，revision 必须匹配 GET 结果；冲突返回 409。返回掩码密钥 ******** 可原样提交保留旧值。Agent 资源配置保存后对相关 Agent 执行 apply；runTimeoutMs 为 60000–86400000 毫秒，保存后立即用于五个 Agent 的新任务，无需 apply 或重启，优先于 AGENT_LIMITS.runTimeoutMs。省略时使用环境变量或默认 1800000 毫秒。
 
 路径/查询/额外请求头参数：无。
 
@@ -1213,7 +1213,7 @@ disable/apply 等待活动执行；stop 强制停止。202 后轮询 /api/agents
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| id | path | string | 是 | enum=["pi","opencode","codex","grok"] | Agent ID。 |
+| id | path | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | Agent ID。 |
 
 请求体：必填，Content-Type: application/json；类型：object。
 
@@ -1245,7 +1245,7 @@ disable/apply 等待活动执行；stop 强制停止。202 后轮询 /api/agents
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| id | path | string | 是 | enum=["pi","opencode","codex","grok"] | Agent ID。 |
+| id | path | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | Agent ID。 |
 
 请求体：无。
 
@@ -1310,7 +1310,7 @@ file 为主机上已存在的绝对 JSON/TOML 文件路径，大小不超过 1 M
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| id | path | string | 是 | enum=["pi","opencode","codex","grok"] | Agent ID。 |
+| id | path | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | Agent ID。 |
 
 请求体：必填，Content-Type: application/json；类型：object。
 
@@ -1398,7 +1398,7 @@ file 为主机上已存在的绝对 JSON/TOML 文件路径，大小不超过 1 M
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| id | path | string | 是 | enum=["pi","opencode","codex","grok"] | Agent ID。 |
+| id | path | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | Agent ID。 |
 
 请求体：必填，Content-Type: application/json；类型：object。
 
@@ -1433,7 +1433,7 @@ file 为主机上已存在的绝对 JSON/TOML 文件路径，大小不超过 1 M
 
 | 参数 | 位置 | 类型 | 必填 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| id | path | string | 是 | enum=["pi","opencode","codex","grok"] | Agent ID。 |
+| id | path | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | Agent ID。 |
 
 请求体：必填，Content-Type: application/json；类型：object。
 mode=external 时 command 必填；mode=managed 使用受管安装。
@@ -2202,7 +2202,7 @@ permission/question 分别控制审批与问题：manual 等待客户端回复�
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| engineId | string | 否 | enum=["pi","opencode","codex","grok"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
+| engineId | string | 否 | enum=["pi","opencode","codex","grok","qwen"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
 | directory | string | 是 | minLength=1；maxLength=4096 | 网关主机上已存在、可访问且符合目录白名单的绝对路径；不是客户端本机路径。 |
 | title | string | 否 | maxLength=200 | 会话标题。省略或空白时由首条消息生成（合并空白，截取前 80 字符）。 |
 | interactionPolicy | object | 否 | additionalProperties=false | 创建后固定。省略继承 Agent 已应用策略；manual 需要客户端通过审批/问题接口回复。 |
@@ -2233,7 +2233,7 @@ permission/question 分别控制审批与问题：manual 等待客户端回复�
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| engineId | string | 否 | enum=["pi","opencode","codex","grok"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
+| engineId | string | 否 | enum=["pi","opencode","codex","grok","qwen"] | 所用 Agent；省略使用当前默认 Agent。Agent 必须已启用且就绪，会话创建后不可更换。 |
 | directory | string | 是 | minLength=1；maxLength=4096 | 网关主机上已存在、可访问且符合目录白名单的绝对路径；不是客户端本机路径。 |
 | title | string | 否 | maxLength=200 | 会话标题。省略或空白时由首条消息生成（合并空白，截取前 80 字符）。 |
 | interactionPolicy | object | 否 | additionalProperties=false | 创建后固定。省略继承 Agent 已应用策略；manual 需要客户端通过审批/问题接口回复。 |
@@ -2289,16 +2289,16 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 
 ### SettingsInput
 
-整份替换，不是 PATCH。资源 ID 必须唯一，四个 Agent 各出现一次，引用必须存在；启用 Agent 需要可用默认模型。密钥传回 ******** 保留旧值，空字符串清除。保存后通过 Agent apply 生效。
+整份替换，不是 PATCH。资源 ID 必须唯一，五个 Agent 各出现一次，引用必须存在；启用 Agent 需要可用默认模型。密钥传回 ******** 保留旧值，空字符串清除。保存后通过 Agent apply 生效。
 
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | schemaVersion | number | 否 | default=1；const=1 | — |
-| defaultAgent | string | 否 | default="pi"；enum=["pi","opencode","codex","grok"] | — |
+| defaultAgent | string | 否 | default="pi"；enum=["pi","opencode","codex","grok","qwen"] | — |
 | runTimeoutMs | integer | 否 | minimum=60000；maximum=86400000 | — |
-| agents | Array<object> | 否 | default=[{"id":"pi","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"opencode","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"codex","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"grok","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}}]；minItems=4；maxItems=4 | — |
-| agents[].id | string | 是 | enum=["pi","opencode","codex","grok"] | — |
+| agents | Array<object> | 否 | default=[{"id":"pi","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"opencode","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"codex","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"grok","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"qwen","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}}]；minItems=5；maxItems=5 | — |
+| agents[].id | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | — |
 | agents[].enabled | boolean | 否 | default=false | — |
 | agents[].runtime | object | 是 | additionalProperties=false | — |
 | agents[].runtime.mode | string | 是 | enum=["managed","external"] | — |
@@ -2357,10 +2357,10 @@ answers 按 questions 顺序逐题回答，每题对应字符串数组；选项�
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | schemaVersion | number | 是 | default=1；const=1 | — |
-| defaultAgent | string | 是 | default="pi"；enum=["pi","opencode","codex","grok"] | — |
+| defaultAgent | string | 是 | default="pi"；enum=["pi","opencode","codex","grok","qwen"] | — |
 | runTimeoutMs | integer | 否 | minimum=60000；maximum=86400000 | — |
-| agents | Array<object> | 是 | default=[{"id":"pi","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"opencode","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"codex","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"grok","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}}]；minItems=4；maxItems=4 | — |
-| agents[].id | string | 是 | enum=["pi","opencode","codex","grok"] | — |
+| agents | Array<object> | 是 | default=[{"id":"pi","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"opencode","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"codex","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"grok","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}},{"id":"qwen","enabled":false,"runtime":{"mode":"managed"},"models":[],"defaultModel":null,"contextCompaction":"default","skillIds":[],"mcpIds":[],"interactionPolicy":{"permission":"auto","question":"auto"}}]；minItems=5；maxItems=5 | — |
+| agents[].id | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | — |
 | agents[].enabled | boolean | 是 | default=false | — |
 | agents[].runtime | object | 是 | additionalProperties=false | — |
 | agents[].runtime.mode | string | 是 | enum=["managed","external"] | — |
@@ -2809,7 +2809,7 @@ Token 用量与美元费用；null 表示未报告，不能当作 0。
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| id | string | 是 | enum=["pi","opencode","codex","grok"] | — |
+| id | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | — |
 | enabled | boolean | 是 |  | — |
 | health | EngineHealth | 是 |  | — |
 | directory | string | 是 |  | — |
@@ -2832,7 +2832,7 @@ Token 用量与美元费用；null 表示未报告，不能当作 0。
 
 | 字段 | 类型 | 必填/必返 | 约束与默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| id | string | 是 | enum=["pi","opencode","codex","grok"] | — |
+| id | string | 是 | enum=["pi","opencode","codex","grok","qwen"] | — |
 | managed | boolean | 是 |  | — |
 | executable | string \| null | 是 |  | — |
 | detection | string | 是 | enum=["unknown","checking","present","missing","failed"] | — |

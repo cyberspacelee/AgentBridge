@@ -46,7 +46,7 @@ Desktop 默认引擎来自 settings.defaultAgent；创建会话的 engineId 优�
 
 | 方法与路径 | 请求或查询 | 返回与行为 |
 | --- | --- | --- |
-| GET `/api/agents` | 无 | 四个 Agent 的启用、健康、已保存/已应用配置修订、能力、活动数量 |
+| GET `/api/agents` | 无 | 五个 Agent 的启用、健康、已保存/已应用配置修订、能力、活动数量 |
 | POST `/api/agents/{id}/actions` | action: enable / disable / stop / apply | 202；按 Agent 排他执行、状态通过 agents.updated 和查询观察 |
 | GET/PUT `/api/settings` | PUT: settings、revision | 读取脱敏配置；校验引用、乐观并发，保存不自动应用资源更改 |
 | POST `/api/providers/{id}/test` | modelID | 对已保存 effective route 发起一次受限模型请求，覆盖已配置协议转换 |

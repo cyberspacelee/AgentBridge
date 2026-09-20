@@ -152,7 +152,7 @@ test("managed gateway starts without Agent CLIs and releases its database after 
         const response = await fetch(`${ready.url}/api/runtimes`);
         assert.equal(response.status, 200);
         const { runtimes } = await response.json() as { runtimes: { installedVersion: string | null; managed: boolean }[] };
-        assert.equal(runtimes.length, 4);
+        assert.equal(runtimes.length, 5);
         assert.ok(runtimes.every((runtime) => runtime.managed && runtime.installedVersion === null));
         if (action === "disconnect") child.disconnect();
         else child.send({ type: action });

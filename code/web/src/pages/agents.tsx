@@ -1289,7 +1289,7 @@ function AgentEditor({
             />
             <p className="text-sm text-muted-foreground">
               默认使用 Agent 原生策略；启用后在上下文接近上限时自动压缩。
-              {agent.id === "grok" || agent.id === "codex"
+              {agent.id === "grok" || agent.id === "qwen" || agent.id === "codex"
                 ? "启用阈值为所配置上下文长度的 85%。"
                 : ""}
             </p>

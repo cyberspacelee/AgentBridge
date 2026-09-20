@@ -18,8 +18,9 @@ import { PiAdapter } from "../engines/pi/adapter.js";
 import { OpenCodeAdapter } from "../engines/opencode/adapter.js";
 import { CodexAdapter } from "../engines/codex/adapter.js";
 import { GrokAdapter } from "../engines/grok/adapter.js";
+import { QwenAdapter } from "../engines/qwen/adapter.js";
 
-const packages = { pi: "@earendil-works/pi-coding-agent", opencode: "opencode-ai", codex: "@openai/codex" } as const;
+const packages = { pi: "@earendil-works/pi-coding-agent", opencode: "opencode-ai", codex: "@openai/codex", qwen: "@qwen-code/qwen-code" } as const;
 const stableVersion = z.string().regex(/^\d+\.\d+\.\d+$/);
 const maxDownload = 512 * 1024 * 1024;
 const maxInstallation = 2 * 1024 * 1024 * 1024;
@@ -487,7 +488,7 @@ export class RuntimeManager {
     config[id].command = command;
     if (existsSync(path.join(this.config.dataDirectory, "settings.json"))) await cp(path.join(this.config.dataDirectory, "settings.json"), path.join(probeDirectory, "settings.json"));
     applyAgentConfiguration(config, id);
-    const adapters = { pi: PiAdapter, opencode: OpenCodeAdapter, codex: CodexAdapter, grok: GrokAdapter };
+    const adapters = { pi: PiAdapter, opencode: OpenCodeAdapter, codex: CodexAdapter, grok: GrokAdapter, qwen: QwenAdapter };
     const adapter = new adapters[id](config);
     const version = await this.command(command, ["--version"], probeDirectory, signal);
     if (version.match(/\d+\.\d+\.\d+/)?.[0] !== expectedVersion) throw new Error("CLI version does not match the downloaded release");

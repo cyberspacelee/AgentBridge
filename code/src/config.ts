@@ -117,6 +117,7 @@ export function readConfig(args = process.argv.slice(2), env = process.env) {
     },
     codex: { command: env.CODEX_COMMAND ?? "codex" },
     grok: { command: env.GROK_COMMAND ?? "grok" },
+    qwen: { command: env.QWEN_COMMAND ?? "qwen" },
   };
   if (config.allowedDirectories.some((p) => !path.isAbsolute(p)))
     throw new Error("AGENT_ALLOWED_DIRECTORIES must contain absolute paths");

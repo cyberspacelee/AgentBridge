@@ -21,7 +21,7 @@ pnpm desktop:dev
 
 GitHub Actions 的 Desktop 工作流中，手动触发和推送 `v*` 版本 tag 都是发布流程：三个平台构建成功后必须创建 GitHub Release 并上传安装包及更新元数据，不提供跳过发布的开关。PR 只执行构建验证。发布 tag 必须与 `desktop/package.json` 中的版本一致。
 
-桌面基础包不包含 Node/npm、Pi、OpenCode、Codex、Grok CLI。在 Agent 的“安装与版本”页签按需安装官方最新版、检查更新或卸载；安装不启用，卸载保留模型配置、原生会话、任务历史和产物。网关使用 Electron 自带运行时，受管 CLI 使用按需下载的独立运行时；Windows 初始化脚本需要系统 Node.js/npm。托盘可用时关闭窗口继续后台运行；显式退出时可等待任务结束或停止任务。数据位于 Electron 用户数据目录的 `data/` 下，可通过 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
+桌面基础包不包含 Node/npm、Pi、OpenCode、Codex、Grok、Qwen Code。在 Agent 的“安装与版本”页签按需安装官方最新版、检查更新或卸载；安装不启用，卸载保留模型配置、原生会话、任务历史和产物。网关使用 Electron 自带运行时，受管 CLI 使用按需下载的独立运行时；Windows 初始化脚本需要系统 Node.js/npm。托盘可用时关闭窗口继续后台运行；显式退出时可等待任务结束或停止任务。数据位于 Electron 用户数据目录的 `data/` 下，可通过 `AGENT_DESKTOP_DATA_DIR` 指定根目录。
 
 源码 Web 模式：
 
@@ -32,7 +32,7 @@ pnpm web:build
 pnpm start
 ```
 
-服务注册 Pi、OpenCode、Codex CLI 和 Grok Build。无模型配置时四个 Agent 均停用；在 `/agents` 添加兼容模型连接并按 Agent 分配、保存和启用。Desktop 使用 settings.json 中的默认 Agent；创建会话可用 engineId 覆盖。Web 命令行显式 `--engine` 覆盖本次进程的默认 Agent，不改写保存值，不复用个人 CLI 目录。
+服务注册 Pi、OpenCode、Codex CLI、Grok Build 和 Qwen Code。无模型配置时五个 Agent 均停用；在 `/agents` 添加兼容模型连接并按 Agent 分配、保存和启用。Desktop 使用 settings.json 中的默认 Agent；创建会话可用 engineId 覆盖。Web 命令行显式 `--engine` 覆盖本次进程的默认 Agent，不改写保存值，不复用个人 CLI 目录。
 
 访问 http://127.0.0.1:6217/tasks、http://127.0.0.1:6217/observability 和 http://127.0.0.1:6217/settings。支持当前目录 `.env`，变量见 [.env.example](.env.example)。开发分别运行 `pnpm dev --engine pi` 和 `pnpm web:dev`。
 
@@ -40,6 +40,6 @@ pnpm start
 
 `host/` 为两种入口共用的 Node 启动与网络管理，`desktop/` 只提供 Electron 系统集成。新实例均默认受管 CLI；每个 Agent 可检测并绑定外部命令。浏览器直接使用相同管理页面，无需配对。Web/Desktop 均可在“系统信息 → 网关服务”配置监听地址和端口。接口文档与自动评测脚本见 [网关 API](docs/GATEWAY_API.md)，运行后可通过 `/api/docs` 阅读标准 OpenAPI 文档，Agent 可读取 `/api/docs.md`（[完整 Markdown](docs/API_REFERENCE.md)），工具可导入 `/api/openapi.json`。详见[统一运行方案](../docs/design/WEB_DESKTOP.md)。历史配置与数据库不兼容，不提供迁移。
 
-四个内置 Agent 通过 /agents 独立管理，配置与个人 CLI 目录隔离。新增引擎实现 `EngineAdapter`，在 `src/main.ts` 注册，同步更新配置与共享契约中的引擎枚举以及前端选项。引擎原生事件只在适配器边界转换为共享 Message/Interaction；HTTP、SSE 和前端直接使用同一份契约。schemaVersion 与数据库版本均为 1，不提供历史别名、历史字段兼容或迁移。
+五个内置 Agent 通过 /agents 独立管理，配置与个人 CLI 目录隔离。新增引擎实现 `EngineAdapter`，在 `src/main.ts` 注册，同步更新配置与共享契约中的引擎枚举以及前端选项。引擎原生事件只在适配器边界转换为共享 Message/Interaction；HTTP、SSE 和前端直接使用同一份契约。schemaVersion 与数据库版本均为 1，不提供历史别名、历史字段兼容或迁移。
 
 `pnpm test` 检查网关；先执行 `pnpm web:build` 和 `pnpm exec playwright install chromium`，再通过 `pnpm test:browser` 检查桌面/手机流程。当前验证范围、截图及剩余限制见 [UI QA 报告](artifacts/ui/qa/README.md)。

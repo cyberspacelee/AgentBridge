@@ -9,11 +9,12 @@ import { randomUUID } from "node:crypto";
 import { readConfig } from "../src/config.js";
 import { CodexAdapter } from "../src/engines/codex/adapter.js";
 import { GrokAdapter } from "../src/engines/grok/adapter.js";
+import { QwenAdapter } from "../src/engines/qwen/adapter.js";
 import { SessionRuntime, within } from "../src/runtime/sessions.js";
 import { Store } from "../src/storage/sqlite.js";
 import { setTimeout as delay } from "node:timers/promises";
 
-for (const id of ["codex", "grok"] as const)
+for (const id of ["codex", "grok", "qwen"] as const)
   test(
     `${id} native protocol executes an OpenAI-compatible model and resumes durable conversation`,
     { skip: process.env.AGENT_NATIVE_RPC !== id, timeout: 90000 },
@@ -154,7 +155,11 @@ for (const id of ["codex", "grok"] as const)
         AGENT_LIMITS: JSON.stringify({ runTimeoutMs: 30000 }),
       });
       const adapter = () =>
-        id === "codex" ? new CodexAdapter(config) : new GrokAdapter(config);
+        id === "codex"
+          ? new CodexAdapter(config)
+          : id === "grok"
+            ? new GrokAdapter(config)
+            : new QwenAdapter(config);
       const selected = path.join(directory, "selected-skill"),
         rogue = path.join(directory, ".agents", "skills", "unselected-skill");
       for (const [location, name] of [

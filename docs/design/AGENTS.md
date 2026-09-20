@@ -4,7 +4,7 @@
 
 ## 范围与术语
 
-管理 Pi、OpenCode、Codex CLI、Grok Build 四个执行引擎，每种引擎一个受管 Agent。注册表固定，启用状态动态持久化。Task 是 Session 的展示视图；Run 是一次提交触发的执行，保留排队、超时、取消、用量和产物归属。不新增 Turn 实体；原生 turn/session/item 标识留在适配器。
+管理 Pi、OpenCode、Codex CLI、Grok Build、Qwen Code 五个执行引擎，每种引擎一个受管 Agent。注册表固定，启用状态动态持久化。Task 是 Session 的展示视图；Run 是一次提交触发的执行，保留排队、超时、取消、用量和产物归属。不新增 Turn 实体；原生 turn/session/item 标识留在适配器。
 
 ## 配置与所有权
 
@@ -12,7 +12,7 @@
 
 资源定义共享，启用引用归 Agent；没有 both、全局自动分发、用户原生配置目录编辑入口。保存时校验引用、重复项、默认模型归属与引擎协议支持。删除被引用资源须先解除引用。密钥脱敏返回，保持乐观并发 revision 校验。连接测试进行一次受限的真实模型请求，错误须脱敏。
 
-适配器单向生成 `agents/<id>/` 内的原生配置。Pi 使用 PI_CODING_AGENT_DIR，Codex/Grok 在 `agents/<id>/sessions/<sessionId>/` 分别设置独立 CODEX_HOME/GROK_HOME；OpenCode 指定受管配置并控制配置发现。环境覆盖只施加于对应子进程。保持任务 cwd 不变，不写用户原生配置和任务仓库。生成文件不是第二配置源；更新不删除原生会话、缓存或插件数据。
+适配器单向生成 `agents/<id>/` 内的原生配置。Pi 使用 PI_CODING_AGENT_DIR，Codex/Grok/Qwen Code 在 `agents/<id>/sessions/<sessionId>/` 分别设置独立 CODEX_HOME/GROK_HOME/QWEN_HOME 与 QWEN_RUNTIME_DIR；OpenCode 指定受管配置并控制配置发现。环境覆盖只施加于对应子进程。保持任务 cwd 不变，不写用户原生配置和任务仓库。生成文件不是第二配置源；更新不删除原生会话、缓存或插件数据。
 
 Skills 通过显式配置路径加载，MCP 只下发选中项。项目说明文件保留项目语义，项目/用户自动发现的工具资源必须受控；不支持覆盖时必须明确限制，不能报告关闭成功。平台管理配置与系统强制约束冲突时失败并显示原因。原生配置导入只解析已支持的模型、skill、MCP 字段，预览并经普通保存生效，不持续双向同步。
 
@@ -24,14 +24,14 @@ Skills 通过显式配置路径加载，MCP 只下发选中项。项目说明文
 
 ## 接入协议
 
-Pi 保留逐会话 RPC，OpenCode 保留 HTTP/SSE。Codex 使用 app-server stdio：initialize/initialized、thread/start/resume、turn/start/interrupt、item 通知及服务端审批/提问请求。Grok 使用 ACP stdio：initialize、session/new/load/prompt/cancel/update、request_permission；认证只使用自定义 API Key 配置，不调用登录认证接口。接入要求相应协议和扩展可用，缺失时明确失败。
+Pi 保留逐会话 RPC，OpenCode 保留 HTTP/SSE。Codex 使用 app-server stdio：initialize/initialized、thread/start/resume、turn/start/interrupt、item 通知及服务端审批/提问请求。Grok 和 Qwen Code 使用 ACP stdio：initialize、session/new/load/prompt/cancel/update、request_permission；Qwen Code 使用 OpenAI-compatible modelProviders 和 QWEN_HOME 隔离状态，不调用登录认证接口。接入要求相应协议和扩展可用，缺失时明确失败。
 
 消息、工具、交互、完成状态统一映射到既有契约。只有原生终态确认后才结束 Run；拒绝审批、取消和失败不同于完成。成本或 token 未提供则 null；管理连接不配置计费单价，不能把原生默认零价格视为真实费用。协议解析、进程退出、请求超时、迟到事件、会话恢复和交互回传均覆盖测试。
 
 ## API 与页面
 
 - `/api/settings`：共享资源、Agent 配置、修订与脱敏密钥。
-- `/api/agents`：四个 Agent 的启用、健康、模型、能力、执行数、配置应用状态与目录。
+- `/api/agents`：五个 Agent 的启用、健康、模型、能力、执行数、配置应用状态与目录。
 - `/api/agents/:id/actions`：enable、disable、stop、apply；操作状态可通过 Agent 列表与 SSE 更新观察。
 - `/api/providers/:id/test`：通过已保存 effective route 测试指定模型，覆盖已配置协议转换。
 - `/api/agents/:id/import`：预览本机指定配置文件中的受支持资源；不写原生文件。
@@ -43,7 +43,7 @@ Pi 保留逐会话 RPC，OpenCode 保留 HTTP/SSE。Codex 使用 app-server stdi
 
 ## 验收
 
-共享 schema、引用和密钥校验；四引擎生成配置与目录隔离；模型协议不匹配；真实连接测试成功/失败；Agent 启用、排队关闭、执行中关闭、强停、应用失败、重新启用与恢复；人工/自动审批与提问；多轮完整历史；桌面/移动、浅深色、键盘、错误和空状态。运行后端与前端类型检查、lint、构建、单元/集成/浏览器测试。真实模型和 Windows 环境的验证范围按实际证据记录，不将协议模拟测试写成真实模型验收。
+共享 schema、引用和密钥校验；五引擎生成配置与目录隔离；模型协议不匹配；真实连接测试成功/失败；Agent 启用、排队关闭、执行中关闭、强停、应用失败、重新启用与恢复；人工/自动审批与提问；多轮完整历史；桌面/移动、浅深色、键盘、错误和空状态。运行后端与前端类型检查、lint、构建、单元/集成/浏览器测试。真实模型和 Windows 环境的验证范围按实际证据记录，不将协议模拟测试写成真实模型验收。
 
 ## 网关契约统一（2026-09-08）
 

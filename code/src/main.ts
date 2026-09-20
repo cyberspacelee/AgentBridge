@@ -7,6 +7,7 @@ import { OpenCodeAdapter } from "./engines/opencode/adapter.js";
 import { PiAdapter } from "./engines/pi/adapter.js";
 import { CodexAdapter } from "./engines/codex/adapter.js";
 import { GrokAdapter } from "./engines/grok/adapter.js";
+import { QwenAdapter } from "./engines/qwen/adapter.js";
 import { createServer } from "./gateway/server.js";
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
@@ -52,6 +53,7 @@ export async function startGateway(config = readConfig()) {
     new PiAdapter(config),
     new CodexAdapter(config),
     new GrokAdapter(config),
+    new QwenAdapter(config),
   ];
   runtime = new SessionRuntime(
     store,

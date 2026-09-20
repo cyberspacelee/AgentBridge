@@ -6,7 +6,7 @@
 
 | 目标 | 对应实现 | 验证方式 |
 | --- | --- | --- |
-| 四个 Agent 独立管理 | Pi、OpenCode、Codex CLI、Grok Build 适配器，运行时动态启用/停用/立即停止/应用 | 生命周期集成测试、原生 CLI 验证、浏览器管理流程 |
+| 五个 Agent 独立管理 | Pi、OpenCode、Codex CLI、Grok Build、Qwen Code 适配器，运行时动态启用/停用/立即停止/应用 | 生命周期集成测试、原生 CLI 验证、浏览器管理流程 |
 | OpenAI 兼容模型 | 共享连接与模型列表，每 Agent 模型引用/默认值，Codex 限 Responses | schema、协议请求、本地供应商服务 |
 | 统一 LLM proxy | client/upstream 协议、显式 Responses → Chat 转换、请求 headers/params、请求级 usage 与观测 | ADR-13；待实现后执行真实兼容 provider、SSE、工具调用和上游断线验收 |
 | Skills/MCP 分配 | 共享定义、按 Agent 引用、已保存/已应用快照 | 配置生成、Pi MCP 原生启动、四 CLI Skill 发现隔离 |

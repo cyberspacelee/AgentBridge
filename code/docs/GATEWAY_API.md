@@ -112,7 +112,7 @@ curl -fsS -X DELETE "$BASE/session/$SID"
 
 ## 任务期限配置
 
-四个 Agent 默认共用 30 分钟任务总时限。从提交开始计算，包含排队和人工等待；持续输出不续期。`deadlineAt` 随本轮持久化，修改设置不会影响已提交的任务。
+五个 Agent 默认共用 30 分钟任务总时限。从提交开始计算，包含排队和人工等待；持续输出不续期。`deadlineAt` 随本轮持久化，修改设置不会影响已提交的任务。
 
 在“系统信息 → 任务超时”输入 1–1440 的整数分钟数并保存。API 使用 `GET /api/settings` 取得配置与 revision，然后通过 `PUT /api/settings` 完整提交并设置 `settings.runTimeoutMs`（毫秒）。新提交立即生效，无需重启；`GET /api/runtime` 的 `limits.runTimeoutMs` 返回当前生效值。配置优先级为 settings.json 中的值、AGENT_LIMITS.runTimeoutMs、默认 1800000。
 

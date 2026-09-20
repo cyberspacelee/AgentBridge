@@ -134,7 +134,7 @@ Electron 在 `127.0.0.1:0` 启动 utility process 网关，等待 control transp
 
 ## 实测与边界
 
-2026-09-19，Linux x64：基础包网关使用 Electron utility process，不再携带 `resources/node`；四个 Agent 初始均未安装，受管 npm toolchain 只在首次安装时下载。沙箱窗口、目录 IPC、主题与 SQLite 跨随机端口重启保留、SSE、托盘和退出均通过真实 Electron 测试。测试脚本为 `code/test/desktop-smoke.mjs`，截图位于 `code/artifacts/desktop/`。
+2026-09-19，Linux x64：基础包网关使用 Electron utility process，不再携带 `resources/node`；五个 Agent 初始均未安装，受管 npm toolchain 只在首次安装时下载。沙箱窗口、目录 IPC、主题与 SQLite 跨随机端口重启保留、SSE、托盘和退出均通过真实 Electron 测试。测试脚本为 `code/test/desktop-smoke.mjs`，截图位于 `code/artifacts/desktop/`。
 
 四个 CLI 均真实安装、执行版本命令与适配器协议握手、再卸载，未提交付费模型请求；[记录](../../code/artifacts/desktop/runtime-install-smoke.json)为本次下载到的版本，不是准入白名单。
 

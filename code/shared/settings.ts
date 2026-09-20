@@ -6,7 +6,7 @@ export const defaultAgent = "pi";
 export const defaultRunTimeoutMs = 30 * 60 * 1000;
 export const runTimeoutSetting = z.number().int().min(60000).max(24 * 60 * 60 * 1000);
 
-export const agentIds = ["pi", "opencode", "codex", "grok"] as const;
+export const agentIds = ["pi", "opencode", "codex", "grok", "qwen"] as const;
 export const agentIdSchema = z.enum(agentIds);
 export type AgentId = z.infer<typeof agentIdSchema>;
 export const llmApiSchema = z.enum(["openai-completions", "openai-responses"]);
@@ -154,7 +154,7 @@ export const settingsSchema = z
     runTimeoutMs: runTimeoutSetting.optional(),
     agents: z
       .array(agentSchema)
-      .length(4)
+      .length(agentIds.length)
       .default(() => agentIds.map((id) => agentSchema.parse({ id, runtime: { mode: "managed" } }))),
     providers: z.array(providerSchema).max(50).default([]),
     skills: z.array(skillSchema).max(200).default([]),
@@ -171,7 +171,7 @@ export const settingsSchema = z
         });
     const issue = (path: (string | number)[], message: string) =>
       context.addIssue({ code: "custom", path, message });
-    if (new Set(value.agents.map((agent) => agent.id)).size !== 4)
+    if (new Set(value.agents.map((agent) => agent.id)).size !== agentIds.length)
       issue(["agents"], "Each agent must occur exactly once");
     value.agents.forEach((agent, index) => {
       for (const [refs, resources] of [

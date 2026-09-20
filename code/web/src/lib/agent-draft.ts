@@ -6,6 +6,7 @@ export const agentNames: Record<string, string> = {
   opencode: "OpenCode",
   codex: "Codex CLI",
   grok: "Grok Build",
+  qwen: "Qwen Code",
 }
 
 const editable = [

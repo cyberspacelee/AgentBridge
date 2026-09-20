@@ -77,7 +77,9 @@ export function agentConfigFile(config: Config, id: string) {
       ? "settings.json"
       : id === "opencode"
         ? "opencode.json"
-        : "config.toml",
+        : id === "qwen"
+          ? "settings.json"
+          : "config.toml",
   );
 }
 export function piDirectory(config: Config) {
@@ -336,20 +338,25 @@ export function opencodeEnvironment(config: Config) {
     OPENCODE_ENABLE_QUESTION_TOOL: "true",
   };
 }
-export function nativeEnvironment(config: Config, id: "codex" | "grok") {
+export function nativeEnvironment(config: Config, id: "codex" | "grok" | "qwen") {
   const settings = engineSettings(config, id);
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env))
-    if (/^(CODEX_|GROK_|XAI_|OPENAI_|AGENT_BRIDGE_KEY_)/.test(key))
+    if (/^(CODEX_|GROK_|QWEN_|XAI_|OPENAI_|AGENT_BRIDGE_KEY_)/.test(key))
       delete env[key];
   return {
     ...env,
     ...(id === "codex"
       ? { CODEX_HOME: agentDirectory(config, id) }
-      : {
+      : id === "grok"
+        ? {
           GROK_HOME: agentDirectory(config, id),
           GROK_DISABLE_AUTOUPDATER: "1",
-        }),
+          }
+        : {
+            QWEN_HOME: agentDirectory(config, id),
+            QWEN_RUNTIME_DIR: path.join(agentDirectory(config, id), "runtime"),
+          }),
     ...Object.fromEntries(
       settings.providers.map((p) => [
         `AGENT_BRIDGE_KEY_${p.id}`,
@@ -360,7 +367,7 @@ export function nativeEnvironment(config: Config, id: "codex" | "grok") {
 }
 export function nativeSessionDirectory(
   config: Config,
-  id: "codex" | "grok",
+  id: "codex" | "grok" | "qwen",
   sessionId: string,
 ) {
   if (!/^[a-zA-Z0-9_-]+$/.test(sessionId))
@@ -373,7 +380,7 @@ export function nativeSessionDirectory(
 }
 export function nativeSessionEnvironment(
   config: Config,
-  id: "codex" | "grok",
+  id: "codex" | "grok" | "qwen",
   session: { id: string; directory: string },
 ) {
   // Native project settings can add executable resources despite a managed HOME.
@@ -384,11 +391,11 @@ export function nativeSessionEnvironment(
   ) {
     const file = path.join(
       directory,
-      id === "codex" ? ".codex" : ".grok",
-      "config.toml",
+      id === "codex" ? ".codex" : id === "grok" ? ".grok" : ".qwen",
+      id === "qwen" ? "settings.json" : "config.toml",
     );
     if (existsSync(file)) {
-      const values = parseToml(readFileSync(file, "utf8"));
+      const values = id === "qwen" ? readJson(file) : parseToml(readFileSync(file, "utf8"));
       if (Object.keys(values).length)
         throw new GatewayError(
           "CONFIGURATION_ERROR",
@@ -396,6 +403,18 @@ export function nativeSessionEnvironment(
           400,
         );
     }
+    if (id === "qwen" && existsSync(path.join(directory, ".qwen", ".env")))
+      throw new GatewayError(
+        "CONFIGURATION_ERROR",
+        `Project Qwen environment is unsupported in managed mode: ${path.join(directory, ".qwen", ".env")}`,
+        400,
+      );
+    if (id === "qwen" && existsSync(path.join(directory, ".qwen", "skills")))
+      throw new GatewayError(
+        "CONFIGURATION_ERROR",
+        `Project Qwen skills are unsupported in managed mode: ${path.join(directory, ".qwen", "skills")}`,
+        400,
+      );
     if (id === "grok" && existsSync(path.join(directory, ".mcp.json")))
       throw new GatewayError(
         "CONFIGURATION_ERROR",
@@ -410,7 +429,9 @@ export function nativeSessionEnvironment(
   }
   const home = nativeSessionDirectory(config, id, session.id);
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  const native = parseToml(readFileSync(agentConfigFile(config, id), "utf8"));
+  const native = id === "qwen"
+    ? readJson(agentConfigFile(config, id))
+    : parseToml(readFileSync(agentConfigFile(config, id), "utf8"));
   if (id === "codex") {
     const skills = path.join(home, "skills");
     rmSync(skills, { recursive: true, force: true });
@@ -422,11 +443,28 @@ export function nativeSessionEnvironment(
         process.platform === "win32" ? "junction" : "dir",
       );
     native.skills = { config: [] };
+  } else if (id === "qwen") {
+    const skills = path.join(home, "skills");
+    rmSync(skills, { recursive: true, force: true });
+    mkdirSync(skills, { recursive: true, mode: 0o700 });
+    for (const skill of engineSettings(config, id).skills)
+      symlinkSync(
+        skill.path,
+        path.join(skills, skill.id),
+        process.platform === "win32" ? "junction" : "dir",
+      );
   }
-  atomicWrite(path.join(home, "config.toml"), stringifyToml(native));
+  atomicWrite(
+    path.join(home, id === "qwen" ? "settings.json" : "config.toml"),
+    id === "qwen" ? JSON.stringify(native, null, 2) : stringifyToml(native),
+  );
   return {
     ...nativeEnvironment(config, id),
-    [id === "codex" ? "CODEX_HOME" : "GROK_HOME"]: home,
+    ...(id === "codex"
+      ? { CODEX_HOME: home }
+      : id === "grok"
+        ? { GROK_HOME: home }
+        : { QWEN_HOME: home, QWEN_RUNTIME_DIR: path.join(home, "runtime") }),
   };
 }
 export function restrictNativeSkills(
@@ -527,6 +565,52 @@ export function applyAgentConfiguration(config: Config, id: AgentId) {
       );
     } else if (id === "opencode")
       atomicWrite(file, opencodeEnvironment(config).OPENCODE_CONFIG_CONTENT);
+    else if (id === "qwen") {
+      const modelProviders = Object.fromEntries(
+        scoped.providers.map((p) => [
+          p.id,
+          p.models.map((m) => ({
+            id: m.id,
+            name: m.name || m.id,
+            envKey: `AGENT_BRIDGE_KEY_${p.id}`,
+            baseUrl: providerBaseUrl(config, p),
+            wireApi: p.api === "openai-responses" ? "responses" : "chat-completions",
+            ...(m.thinking === "off" ? { generationConfig: { reasoning: false } } : {}),
+          })),
+        ]),
+      );
+      atomicWrite(
+        file,
+        JSON.stringify(
+          {
+            modelProviders,
+            providerProtocol: Object.fromEntries(scoped.providers.map((p) => [p.id, "openai"])),
+            ...(agent.defaultModel
+              ? {
+                  model: {
+                    name: agent.defaultModel.modelID,
+                    baseUrl: providerBaseUrl(
+                      config,
+                      scoped.providers.find((p) => p.id === agent.defaultModel!.providerID)!,
+                    ),
+                  },
+                }
+              : {}),
+            security: { auth: { selectedType: "openai" } },
+            mcpServers: Object.fromEntries(
+              scoped.mcp.map((m) => [
+                m.id,
+                m.config.type === "local"
+                  ? { command: m.config.command[0], args: m.config.command.slice(1), env: m.config.environment }
+                  : { httpUrl: m.config.url, headers: m.config.headers },
+              ]),
+            ),
+          },
+          null,
+          2,
+        ),
+      );
+    }
     else {
       const mcp = Object.fromEntries(
         scoped.mcp.map((m) => [
@@ -861,6 +945,24 @@ export class SettingsManager {
                   ? "openai-responses"
                   : "openai-completions",
               models: [{ id: m.model, name: m.name }],
+            }),
+          );
+        });
+    } else if (id === "qwen") {
+      for (const [name, value] of Object.entries(records(native.modelProviders)))
+        attempt(name, () => {
+          const models = Array.isArray(value) ? value : [];
+          if (!models.length) throw new Error("models");
+          const first = object(models[0]);
+          providers.push(
+            providerSchema.parse({
+              id: name,
+              baseUrl: first.baseUrl,
+              api: first.wireApi === "responses" ? "openai-responses" : "openai-completions",
+              models: models.map((model) => {
+                const item = object(model);
+                return { id: item.id, name: item.name };
+              }),
             }),
           );
         });

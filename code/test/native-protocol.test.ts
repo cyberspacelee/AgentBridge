@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readConfig } from "../src/config.js";
 import { CodexAdapter } from "../src/engines/codex/adapter.js";
 import { GrokAdapter } from "../src/engines/grok/adapter.js";
+import { QwenAdapter } from "../src/engines/qwen/adapter.js";
 import type { EngineUpdate } from "../src/engines/adapter.js";
 import type { Session, Run } from "../shared/contracts.js";
 
@@ -40,11 +41,15 @@ test("Codex renders only tool items and retains final inputs, errors and streame
 });
 
 // Exercise the wire translations independently of the installed CLI and model output.
-for (const id of ["codex", "grok"] as const)
+for (const id of ["codex", "grok", "qwen"] as const)
   test(`${id} translates tools, approvals, questions, usage and cancellation`, async () => {
     const config = readConfig([], {});
     const adapter =
-      id === "codex" ? new CodexAdapter(config) : new GrokAdapter(config);
+      id === "codex"
+        ? new CodexAdapter(config)
+        : id === "grok"
+          ? new GrokAdapter(config)
+          : new QwenAdapter(config);
     const session: Session = {
       id: randomUUID(),
       title: "Protocol",
@@ -206,43 +211,45 @@ for (const id of ["codex", "grok"] as const)
           ? { decision: "decline" }
           : { outcome: { outcome: "selected", optionId: "deny" } },
     });
-    event(
-      id === "codex" ? "item/tool/requestUserInput" : "_x.ai/ask_user_question",
-      {
-        ...address,
-        questions: [
-          {
-            id: "question-id",
-            question: "Choose format",
-            isOther: true,
-            multi_select: false,
-            options: [{ label: "Markdown", description: "Portable text" }],
-          },
-        ],
-      },
-      "question",
-    );
-    const question = updates.at(-1)!;
-    assert.equal(question.type, "interaction");
-    if (question.type !== "interaction") throw new Error("Expected question");
-    assert.equal(question.interaction.questions[0]?.allowCustom, true);
-    assert.equal(question.interaction.sessionID, session.id);
-    assert.deepEqual(question.interaction.questions[0]?.options, [{ label: "Markdown", description: "Portable text" }]);
-    await adapter.reply(question.interaction.id, { answers: [["Plain text"]] });
-    assert.deepEqual(replies.at(-1), {
-      id: "question",
-      result:
-        id === "codex"
-          ? { answers: { "question-id": { answers: ["Plain text"] } } }
-          : {
-              outcome: "accepted",
-              answers: { "Choose format": ["Other"] },
-              annotations: { "Choose format": { notes: "Plain text" } },
+    if (id !== "qwen") {
+      event(
+        id === "codex" ? "item/tool/requestUserInput" : "_x.ai/ask_user_question",
+        {
+          ...address,
+          questions: [
+            {
+              id: "question-id",
+              question: "Choose format",
+              isOther: true,
+              multi_select: false,
+              options: [{ label: "Markdown", description: "Portable text" }],
             },
-    });
-    await assert.rejects(
-      adapter.reply(question.interaction.id, { answers: [["duplicate"]] }),
-    );
+          ],
+        },
+        "question",
+      );
+      const question = updates.at(-1)!;
+      assert.equal(question.type, "interaction");
+      if (question.type !== "interaction") throw new Error("Expected question");
+      assert.equal(question.interaction.questions[0]?.allowCustom, true);
+      assert.equal(question.interaction.sessionID, session.id);
+      assert.deepEqual(question.interaction.questions[0]?.options, [{ label: "Markdown", description: "Portable text" }]);
+      await adapter.reply(question.interaction.id, { answers: [["Plain text"]] });
+      assert.deepEqual(replies.at(-1), {
+        id: "question",
+        result:
+          id === "codex"
+            ? { answers: { "question-id": { answers: ["Plain text"] } } }
+            : {
+                outcome: "accepted",
+                answers: { "Choose format": ["Other"] },
+                annotations: { "Choose format": { notes: "Plain text" } },
+              },
+      });
+      await assert.rejects(
+        adapter.reply(question.interaction.id, { answers: [["duplicate"]] }),
+      );
+    }
     event("unsupported/request", address, "unsupported");
     assert.equal(rejected.length, 1);
     if (id === "codex") {

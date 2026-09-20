@@ -25,6 +25,6 @@ test("limits reject fractional, non-finite and out-of-range values", () => {
 });
 
 test("every engine defaults to a 30 minute gateway deadline", () => {
-  for (const engine of ["pi", "opencode", "codex", "grok"])
+  for (const engine of ["pi", "opencode", "codex", "grok", "qwen"])
     assert.equal(readConfig(["--engine", engine], {}).limits.runTimeoutMs, 1800000);
 });

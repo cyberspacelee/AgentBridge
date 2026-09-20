@@ -68,7 +68,7 @@ test("compaction and model thinking persist, apply per agent, and restore native
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("unified configuration isolates four native directories, snapshots applied resources and preserves secrets", async () => {
+test("unified configuration isolates five native directories, snapshots applied resources and preserves secrets", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "bridge-settings-"));
   try {
     const config = readConfig([], { AGENT_DATA_DIR: directory }),
@@ -125,7 +125,7 @@ test("unified configuration isolates four native directories, snapshots applied 
     );
     manager.save({ revision: saved.revision, settings: saved.settings });
     assert.equal(readSettings(config).providers[0]!.apiKey, "!literal$key");
-    for (const id of ["pi", "opencode", "codex", "grok"] as const) {
+    for (const id of ["pi", "opencode", "codex", "grok", "qwen"] as const) {
       const version = applyAgentConfiguration(config, id);
       assert.equal(version, agentRevision(config, id));
       assert.equal(configuredModels(config, id).length, 1);
@@ -144,6 +144,7 @@ test("unified configuration isolates four native directories, snapshots applied 
     const codex = parse(
       await readFile(agentConfigFile(config, "codex"), "utf8"),
     );
+    const qwen = JSON.parse(await readFile(agentConfigFile(config, "qwen"), "utf8"));
     assert.equal(codex.model_provider, "bridge");
     assert.equal(
       nativeEnvironment(config, "codex").CODEX_HOME,
@@ -153,6 +154,15 @@ test("unified configuration isolates four native directories, snapshots applied 
       nativeEnvironment(config, "grok").GROK_HOME,
       agentDirectory(config, "grok"),
     );
+    assert.equal(nativeEnvironment(config, "qwen").QWEN_HOME, agentDirectory(config, "qwen"));
+    assert.equal(nativeEnvironment(config, "qwen").QWEN_RUNTIME_DIR, path.join(agentDirectory(config, "qwen"), "runtime"));
+    assert.equal(qwen.model.name, "model");
+    assert.equal(qwen.model.baseUrl, "http://localhost:9999/v1");
+    assert.equal(qwen.modelProviders.bridge[0].baseUrl, "http://localhost:9999/v1");
+    assert.equal(qwen.modelProviders.bridge[0].envKey, "AGENT_BRIDGE_KEY_bridge");
+    assert.equal(qwen.modelProviders.bridge[0].wireApi, "responses");
+    assert.equal(qwen.security.auth.selectedType, "openai");
+    assert.equal(qwen.mcpServers.office.command, "node");
     const next = structuredClone(saved.settings);
     next.providers[0]!.apiKey = "changed";
     next.agents

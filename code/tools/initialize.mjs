@@ -134,7 +134,7 @@ export async function copyRuntimes(source, directory, agents, verify, log = cons
     throw new Error("Exit the source AgentBridge instance before copying runtimes");
   for (const agent of agents.filter((item) => item.runtime.mode === "managed")) {
     const id = agent.id;
-    if (!["pi", "opencode", "codex", "grok"].includes(id)) throw new Error("Unsupported runtime ID");
+    if (!["pi", "opencode", "codex", "grok", "qwen"].includes(id)) throw new Error("Unsupported runtime ID");
     const target = path.join(directory, "runtimes", id);
     const targetFile = path.join(target, "manifest.json");
     const old = JSON.parse(await readOptional(targetFile) ?? "null");
@@ -252,7 +252,7 @@ async function main() {
     return !!manifest?.current;
   };
   for (const agent of requested) {
-    // A saved settings.json includes all four Agents, even those never installed.
+    // A saved settings.json includes all Agents, even those never installed.
     if (!runtimesPath || agent.enabled || (agent.runtime.mode === "managed" &&
         (await hasRuntime(runtimesPath, agent.id) || await hasRuntime(path.join(directory, "runtimes"), agent.id)))) selected.push(agent);
   }

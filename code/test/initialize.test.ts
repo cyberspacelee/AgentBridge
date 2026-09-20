@@ -256,7 +256,7 @@ test("initialization expands secrets safely, resolves skill paths, rejects confl
     const { settings, selected } = await readProfile(filename, settingsSchema, agentIds);
     assert.equal(settings.providers[0].apiKey, process.env[envKey]);
     assert.equal(settings.skills[0].path, path.join(directory, "skills/office"));
-    assert.equal(settings.agents.length, 4);
+    assert.equal(settings.agents.length, 5);
     assert.deepEqual(selected.map((agent: { id: string }) => agent.id), ["pi"]);
     assertCompatible(settingsSchema.parse({}), settings);
     assertCompatible({ ...settings, agents: settings.agents.map((agent: object) => ({ ...agent, enabled: false })) }, settings);
