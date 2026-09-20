@@ -200,6 +200,19 @@ test("Responses conversion drops empty system messages", () => {
   assert.deepEqual(body.messages, [{ role: "user", content: "hello" }]);
 });
 
+test("Responses namespace tools flatten for Chat Completions", () => {
+  const body = responsesToChat({
+    model: "m",
+    input: "hello",
+    tools: [{
+      type: "namespace",
+      name: "mcp__server",
+      tools: [{ type: "function", name: "lookup", description: "Find data", parameters: { type: "object" } }],
+    }],
+  });
+  assert.deepEqual(body.tools, [{ type: "function", function: { name: "mcp__server__lookup", description: "Find data", parameters: { type: "object" } } }]);
+});
+
 test("upstream validation errors preserve the provider response message", async () => {
   const upstream = createServer((_req, res) => {
     res.statusCode = 422;

@@ -179,20 +179,27 @@ function responseInputType(item: JsonObject): string | undefined {
 function responseTools(value: unknown): unknown[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new LlmProxyError("INVALID_REQUEST", "tools must be an array");
-  return value.map((tool) => {
+  const flatten = (tool: unknown, namespace?: string): unknown[] => {
     const item = object(tool);
+    if (item.type === "namespace") {
+      const name = text(item.name, "tools.namespace.name");
+      if (!Array.isArray(item.tools)) throw new LlmProxyError("INVALID_REQUEST", "tools.namespace.tools must be an array");
+      return item.tools.flatMap((nested) => flatten(nested, name));
+    }
     if (item.type !== "function") throw new LlmProxyError("PROTOCOL_CONVERSION_UNSUPPORTED", `Unsupported tool type ${String(item.type)}`);
     const fn = item.function && typeof item.function === "object" ? object(item.function) : item;
-    return {
+    const name = text(fn.name, "tools.function.name");
+    return [{
       type: "function",
       function: {
-        name: text(fn.name, "tools.function.name"),
+        name: namespace ? `${namespace}__${name}` : name,
         ...(typeof fn.description === "string" ? { description: fn.description } : {}),
         parameters: fn.parameters ?? fn.input_schema ?? { type: "object", properties: {} },
         ...(typeof fn.strict === "boolean" ? { strict: fn.strict } : {}),
       },
-    };
-  });
+    }];
+  };
+  return value.flatMap((tool) => flatten(tool));
 }
 
 export function responsesToChat(input: JsonObject, history: JsonObject[] = []): ChatBody {
