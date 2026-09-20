@@ -254,12 +254,12 @@ export function responsesToChat(input: JsonObject, history: JsonObject[] = []): 
   return result;
 }
 
-function responseOutputFromChat(body: JsonObject, responseId = `resp_${randomUUID().replaceAll("-", "")}`): JsonObject {
+function responseOutputFromChat(body: JsonObject, responseId = `resp_${randomUUID().replaceAll("-", "")}`, messageId = `msg_${randomUUID().replaceAll("-", "")}`): JsonObject {
   const choice = Array.isArray(body.choices) && body.choices[0] && typeof body.choices[0] === "object" ? body.choices[0] as JsonObject : {};
   const message = choice.message && typeof choice.message === "object" ? choice.message as JsonObject : {};
   const output: JsonObject[] = [];
   const content = typeof message.content === "string" ? message.content : "";
-  if (content) output.push({ type: "message", id: `msg_${randomUUID().replaceAll("-", "")}`, status: "completed", role: "assistant", content: [{ type: "output_text", text: content, annotations: [] }] });
+  if (content) output.push({ type: "message", id: messageId, status: "completed", role: "assistant", content: [{ type: "output_text", text: content, annotations: [] }] });
   const reasoning = typeof message.reasoning_content === "string" ? message.reasoning_content : "";
   if (reasoning) output.unshift({ type: "reasoning", id: `rs_${randomUUID().replaceAll("-", "")}`, summary: [{ type: "summary_text", text: reasoning }] });
   if (Array.isArray(message.tool_calls)) for (const raw of message.tool_calls) {
@@ -325,8 +325,16 @@ async function convertChatStream(
   let model = "unknown";
   let usage: JsonObject | undefined;
   let finishReason: unknown;
+  const messageId = `msg_${randomUUID().replaceAll("-", "")}`;
+  let messageStarted = false;
   const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
   const announcedTools = new Set<number>();
+  const startMessage = () => {
+    if (messageStarted) return;
+    messageStarted = true;
+    appendSse(res, "response.output_item.added", { type: "response.output_item.added", response_id: responseId, output_index: 0, item: { type: "message", id: messageId, status: "in_progress", role: "assistant", content: [] } });
+    appendSse(res, "response.content_part.added", { type: "response.content_part.added", response_id: responseId, item_id: messageId, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } });
+  };
   const emitLine = (line: string) => {
     if (!line.startsWith("data:")) return;
     const raw = line.slice(5).trim();
@@ -340,8 +348,9 @@ async function convertChatStream(
     const delta = choice.delta && typeof choice.delta === "object" ? choice.delta as JsonObject : {};
     if (typeof delta.content === "string") {
       onFirstToken();
+      startMessage();
       textOutput += delta.content;
-      appendSse(res, "response.output_text.delta", { type: "response.output_text.delta", response_id: responseId, output_index: 0, content_index: 0, delta: delta.content });
+      appendSse(res, "response.output_text.delta", { type: "response.output_text.delta", response_id: responseId, item_id: messageId, output_index: 0, content_index: 0, delta: delta.content });
     }
     if (typeof delta.reasoning_content === "string") {
       onFirstToken();
@@ -375,8 +384,14 @@ async function convertChatStream(
     for (const line of lines) emitLine(line);
   }
   if (buffer) emitLine(buffer);
-  const response = responseOutputFromChat({ model, choices: [{ message: { content: textOutput, reasoning_content: reasoningOutput, tool_calls: [...toolCalls.values()].map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) } }], usage }, responseId);
+  const response = responseOutputFromChat({ model, choices: [{ message: { content: textOutput, reasoning_content: reasoningOutput, tool_calls: [...toolCalls.values()].map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) } }], usage }, responseId, messageId);
   response.status = finishReason === "length" ? "incomplete" : "completed";
+  if (messageStarted) {
+    const message = (response.output as JsonObject[]).find((item) => item.type === "message") ?? { type: "message", id: messageId, status: response.status, role: "assistant", content: [{ type: "output_text", text: textOutput, annotations: [] }] };
+    appendSse(res, "response.output_text.done", { type: "response.output_text.done", response_id: responseId, item_id: messageId, output_index: 0, content_index: 0, text: textOutput });
+    appendSse(res, "response.content_part.done", { type: "response.content_part.done", response_id: responseId, item_id: messageId, output_index: 0, content_index: 0, part: { type: "output_text", text: textOutput, annotations: [] } });
+    appendSse(res, "response.output_item.done", { type: "response.output_item.done", response_id: responseId, output_index: 0, item: message });
+  }
   for (const [index, call] of toolCalls) appendSse(res, "response.output_item.done", { type: "response.output_item.done", response_id: responseId, output_index: index, item: { type: "function_call", id: call.id, call_id: call.id, name: call.name, arguments: call.arguments, status: "completed" } });
   appendSse(res, "response.completed", { type: "response.completed", response });
   res.end();

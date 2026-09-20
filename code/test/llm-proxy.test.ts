@@ -127,7 +127,12 @@ test("Responses to Chat streaming emits Responses events and rejects missing pro
     assert.equal(response.status, 200);
     const stream = await response.text();
     assert.match(stream, /response\.created/);
+    assert.match(stream, /response\.output_item\.added/);
+    assert.match(stream, /response\.content_part\.added/);
     assert.match(stream, /response\.output_text\.delta/);
+    assert.match(stream, /"item_id":"msg_/);
+    assert.match(stream, /response\.output_text\.done/);
+    assert.match(stream, /response\.content_part\.done/);
     assert.match(stream, /response\.completed/);
     assert.match(stream, /"delta":"O"/);
   } finally {
